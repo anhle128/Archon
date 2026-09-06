@@ -1,0 +1,247 @@
+{
+  "feature": "Node Type Rooms (Legacy)",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Extract web ApprovalContext and Plannotator URL boundary",
+      "description": "As a web developer, I want a shared module for parsing run approval metadata and validating Plannotator review URLs, so that approval context is safely and consistently handled across the dashboard and workflow logs.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/lib/approval-context.ts defining WebApprovalContextType ('approval' | 'plannotator_gate' | 'child_workflow' | 'interactive_loop' | 'writeback') and WebApprovalContext interface.",
+        "Implement readApprovalContext(value: unknown): WebApprovalContext | null, validating required nodeId and message strings, optional enum types, optional childRunId/document strings, nullable/string reviewUrl, and optional approved/rejected/null resolved state.",
+        "Implement getPlannotatorReviewUrl(input: { status: string; approval: unknown }): string | null returning normalized HTTP(S) URL only when status is 'paused' and approval type is 'plannotator_gate'.",
+        "Create packages/web/src/lib/approval-context.test.ts testing literal fixtures for malformed metadata, omitted type backwards-compatibility, invalid enum values, non-paused runs, and unsafe/malformed URL protocols (e.g. javascript:).",
+        "Refactor packages/web/src/components/dashboard/WorkflowRunCard.tsx to remove its private URL helper and use getPlannotatorReviewUrl without changing dashboard behavior.",
+        "Tests pass via bun test src/lib/approval-context.test.ts src/components/dashboard/WorkflowRunCard.test.tsx in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:392-611 (Task 1). Refactor WorkflowRunCard.tsx:118-133 and line 193. Keep URL parsing strictly http: or https:.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Add pure node-room classification",
+      "description": "As a workflow operator, I want selected nodes classified into their proper room kinds, so that deterministic and control-flow nodes are never treated as agent chat.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/resolve-room-kind.ts exporting NodeBodyKind, RoomKind, RoomResolution, and resolveRoomKind(nodeId, definitionNodes, events, approval).",
+        "For authored DagNodes, inspect mutually exclusive body fields in exact priority: route_loop, loop_group, loop, plannotator_gate, approval, bash, script, workflow, command, prompt.",
+        "Recursively resolve qualified loop-group body IDs using dot-separated prefix matching (e.g. group.body, group.nested.check).",
+        "When definition lookup yields no match, evaluate fallbacks in order: matching child_workflow ApprovalContext -> workflow; matching approval/plannotator_gate/omitted ApprovalContext -> gate; node_routed event -> route_loop; latest typed bash/script event -> stdout; latest typed workflow event -> workflow; latest approval_requested event -> gate; otherwise agent with unknown nodeType.",
+        "Create packages/web/src/components/workflows/resolve-room-kind.test.ts asserting each authored mode, nested loop-group IDs, ApprovalContext fallbacks, and event fallbacks.",
+        "Do not call resolveNodeDisplay or import console detectVariant. Keep module free of React and mutable module state.",
+        "Tests pass via bun test src/components/workflows/resolve-room-kind.test.ts in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:613-846 (Task 2) and Authoritative Interfaces :154-208. Consume DagNode and WorkflowEventResponse from @/lib/api and readApprovalContext from US-001.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Add attempt-scoped room data selectors",
+      "description": "As a workflow viewer, I want room view models scoped strictly to the selected attempt, so that retries or reruns never display stale stdout, child IDs, or decisions.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/select-room-data.ts exporting StdoutView, GateChrome, ChildRunRef, RouteDecisionView, LoopGroupChrome, and their five corresponding selector functions.",
+        "selectNodeStdout isolates events starting from row.id (matching step_name) and uses last terminal event in that attempt; later node_failed suppresses earlier completion; handles empty string stdout with exitCode 0; validates truncation boolean and originalBytes integer.",
+        "selectGateChrome sets canDecide only when runStatus is 'paused', ApprovalContext belongs to selected node, gate type is compatible, and resolved is null/undefined; extracts reviewUrl via getPlannotatorReviewUrl only for matching node; sets showInactiveNotice when paused on another/incompatible gate.",
+        "selectChildRun selects paused child_workflow ApprovalContext only when run is paused and nodeId matches; otherwise uses last selected-attempt workflow completion (fan_out, child_run_id, node_output); later failure suppresses earlier completion.",
+        "selectRouteDecision matches route_iteration execution_seq exactly and stringifies only safe primitives (string, finite number, boolean), returning null on missing or malformed fields.",
+        "selectLoopGroupChrome preserves authored body order, builds qualifiedId (prefix + child.id), copies depends_on, groups positive safe-integer iterations using last-event-wins, and derives direct body status per iteration.",
+        "Create packages/web/src/components/workflows/select-room-data.test.ts covering all selector cases, attempt isolation, and proving array-order precedence over timestamp sorting.",
+        "Tests pass via bun test src/components/workflows/select-room-data.test.ts in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:848-1062 (Task 3) and Authoritative Interfaces :209-335. Uses LogRow, DagNode, WorkflowEventResponse, WorkflowRunStatus, readApprovalContext, and getPlannotatorReviewUrl.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Make selected-room shell accessible and add StdoutRoom",
+      "description": "As a user, I want every selected room state to have a labelled region and bash/script output displayed in a dedicated terminal well, so that logs are accessible and formatted cleanly.",
+      "acceptanceCriteria": [
+        "Modify packages/web/src/components/workflows/NodeRoom.tsx to export RoomPlaceholder and RoomRegion ({ nodeId, children }) where RoomRegion renders <section role=\"region\" aria-label={`${nodeId} room`}>.",
+        "Update NodeRoom so unselected state returns RoomPlaceholder with 'Select a node' and no region, while loading, error, empty, and loaded states are each wrapped in exactly one RoomRegion.",
+        "Modify packages/web/src/components/workflows/NodeRoom.test.tsx:70-203 to verify that selected loading, error, and empty states contain role=\"region\" with aria-label=\"review room\".",
+        "Create packages/web/src/components/workflows/StdoutRoom.tsx wrapped in RoomRegion, displaying Status: <status>, truncation notices ('Output truncated from N bytes' / 'Output truncated'), failed detail, preformatted stdout in a font-mono bg-surface-inset container when text is a string (including empty string), and 'Exit status: 0' when applicable.",
+        "When stdout.text is null, StdoutRoom displays RoomPlaceholder with exact text \"Node hasn't produced output\".",
+        "Create packages/web/src/components/workflows/StdoutRoom.test.tsx covering captured stdout, empty successful stdout vs null stdout, truncation notice, and failure detail without chat markdown.",
+        "Tests pass via bun test src/components/workflows/NodeRoom.test.tsx src/components/workflows/StdoutRoom.test.tsx in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:1064-1286 (Task 4). Export RoomRegion and RoomPlaceholder from NodeRoom.tsx for reuse across all room bodies.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Add declared GateRoom behavior",
+      "description": "As an operator, I want to review approval and Plannotator gates with inline Approve and Reject actions, so that paused workflow runs can be acted on directly from the Logs view.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/GateRoom.tsx wrapped in RoomRegion, taking nodeId, chrome: GateChrome, onApprove, onReject.",
+        "Render declared message, Plannotator document, and safe 'Open Plannotator' link (with target=\"_blank\" rel=\"noopener noreferrer\") when chrome.reviewUrl is non-null.",
+        "Render Approve button and ConfirmRunActionDialog Reject trigger button only when chrome.canDecide is true.",
+        "Render 'Gate is not the active pause' warning banner when chrome.showInactiveNotice is true.",
+        "Render decision banner ('Approved' or 'Rejected') when chrome.decision is set.",
+        "Own local actionPending and actionError states; disable buttons while action is executing; surface action failure message in a role=\"alert\" text-error element and re-enable controls.",
+        "Do not include AskHuman, awaiting, or waiting-on-you chrome.",
+        "Create packages/web/src/components/workflows/GateRoom.test.tsx verifying static markup and happy-dom button interactions, action error handling, and callback invocation.",
+        "Tests pass via NODE_ENV=development bun test src/components/workflows/GateRoom.test.tsx in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:1288-1495 (Task 5). Reuses ConfirmRunActionDialog from dashboard. Runs in happy-dom with NODE_ENV=development.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Add ChildWorkflowRoom",
+      "description": "As an operator, I want to view child workflow run status and navigate to the child run without inlining child transcripts into the parent room, so that hierarchy remains clear and performant.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/ChildWorkflowRoom.tsx wrapped in RoomRegion, accepting nodeId and child: ChildRunRef.",
+        "Render heading 'Child run'.",
+        "Render paused warning banner with child.message (or fallback 'Sub-run is paused awaiting review') when child.paused is true.",
+        "Render 'This node spawned multiple child runs' when child.fanOut is true.",
+        "Render an anchor link with text 'Open child run' and href='/legacy/workflows/runs/<encodedChildRunId>' when child.childRunId is non-null.",
+        "Render preformatted node output in a mono bg-surface-inset container when child.output is non-null.",
+        "Render RoomPlaceholder with \"Node hasn't produced output\" when there is no content (no childRunId, fanOut, output, or paused status).",
+        "Create packages/web/src/components/workflows/ChildWorkflowRoom.test.tsx covering child link, paused message, fan-out summary, and no-output empty state without rendering chat markdown.",
+        "Tests pass via bun test src/components/workflows/ChildWorkflowRoom.test.tsx in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:1497-1663 (Task 6). Use encodeURIComponent on childRunId. Never call transcript loader.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Add RouteControllerRoom",
+      "description": "As an operator, I want to inspect routing decisions for route loop nodes, so that I can understand iteration flow and decision outcomes.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/RouteControllerRoom.tsx wrapped in RoomRegion, accepting nodeId and decision: RouteDecisionView | null.",
+        "Render heading 'Routing decision'.",
+        "When decision is null, render RoomPlaceholder with exact text \"Node hasn't produced output\".",
+        "When decision is present, render a definition list (<dl>) containing rows for non-null fields: Outcome, Target, Condition, Condition result, Attempt, Execution, Negative count, Maximum iterations.",
+        "Condition and identifier values use font-mono styling.",
+        "Do not render chat markdown, route mutation controls, or an agent timeline.",
+        "Create packages/web/src/components/workflows/RouteControllerRoom.test.tsx testing literal fields, null decision empty state, and omission of undefined/null fields.",
+        "Tests pass via bun test src/components/workflows/RouteControllerRoom.test.tsx in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:1665-1803 (Task 7). Use definition list structure with 9rem label column.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Add LoopGroupRoom",
+      "description": "As an operator, I want to inspect loop group container topology and per-iteration status accordions, so that loop executions can be audited without heavy graph dependencies.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/LoopGroupRoom.tsx wrapped in RoomRegion, accepting nodeId and chrome: LoopGroupChrome.",
+        "Render heading 'Loop group' and section 'Body nodes' listing each body node ID with 'Start' (if no dependsOn) or 'After <deps>' (if dependsOn has elements).",
+        "Render <details> accordion elements for each iteration with summary text '×<iteration> <status>' (e.g. '×1 completed').",
+        "Set the open attribute only on the details element matching chrome.selectedIteration.",
+        "Inside each details body, render each qualified body node ID with its iteration status.",
+        "When iterations array is empty, render RoomPlaceholder with exact text \"Node hasn't produced output\" below the body topology.",
+        "Do not include SVG, graph libraries, or clickable nested graph nodes.",
+        "Create packages/web/src/components/workflows/LoopGroupRoom.test.tsx testing authored topology, open selected iteration, and empty iterations placeholder.",
+        "Tests pass via bun test src/components/workflows/LoopGroupRoom.test.tsx in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:1805-1975 (Task 8). No graph layout dependencies.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Add LegacyNodeRoom dispatcher and shared header",
+      "description": "As an operator, I want a single dispatcher for legacy node rooms with a shared header, so that selecting any node renders the correct room and suppresses transcript requests for non-agent nodes.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/LegacyNodeRoom.tsx implementing LegacyNodeRoomProps (runId, row, isLive, loadMessages, definitionNodes, definitionPending, events, runStatus, approval, onApprove, onReject).",
+        "When row is null, render RoomPlaceholder with exact text 'Select a node' and no region.",
+        "For selected rows, render a shared header with row.label, a type pill (Command, Prompt, Loop, Bash, Script, Approval, Plannotator gate, Workflow, Route loop, Loop group, Agent, or 'Loading' when waitingForDefinition), and status pill.",
+        "When definitionPending is true and resolution has only the unknown agent fallback, render RoomRegion with RoomPlaceholder 'Loading node room' without mounting NodeTranscriptPane or requesting messages.",
+        "Exhaustive switch by resolution.kind: 'agent' mounts NodeTranscriptPane; 'stdout' mounts StdoutRoom; 'gate' mounts GateRoom; 'workflow' mounts ChildWorkflowRoom; 'route_loop' mounts RouteControllerRoom; 'loop_group' mounts LoopGroupRoom.",
+        "Create packages/web/src/components/workflows/LegacyNodeRoom.test.tsx covering all room types, null row, definition-pending state, and proving loadMessages is called only for agent rooms.",
+        "Tests pass via NODE_ENV=development bun test src/components/workflows/LegacyNodeRoom.test.tsx src/components/workflows/NodeTranscriptPane.test.tsx src/components/workflows/NodeRoom.test.tsx in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:1977-2277 (Task 9). Only agent kind mounts NodeTranscriptPane. Use assertNever for exhaustive switch.",
+      "dependsOn": [
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Wire dispatcher into LegacyNodeLogs and WorkflowExecution",
+      "description": "As an operator, I want LegacyNodeLogs to render the LegacyNodeRoom dispatcher with run approval metadata and gate callbacks, so that the entire Logs view works end-to-end.",
+      "acceptanceCriteria": [
+        "Extend LegacyNodeLogsProps with definitionNodes, definitionPending, runStatus, approval, onApprove, onReject.",
+        "Replace direct NodeTranscriptPane mount in LegacyNodeLogs with LegacyNodeRoom, passing through the selected row and new props.",
+        "In WorkflowExecution.tsx, retain approval in WorkflowRunQueryData (data.run.metadata.approval ?? null) and create handleGateApprove and handleGateReject callbacks that call approveWorkflowRun / rejectWorkflowRun and invalidate workflowRun query without catching errors.",
+        "Pass definitionNodes, definitionPending, runStatus, approval, onApprove, onReject into LegacyNodeLogs in the Logs tab branch.",
+        "Keep activeView graph, source-control, chat, and sequential branches unchanged.",
+        "Update packages/web/src/components/workflows/LegacyNodeLogs.test.tsx with end-to-end selection tests across agent, bash, approval, child workflow, route, and loop-group rows.",
+        "Prove selecting bash or workflow does not call loadMessages, and changing runId clears selection.",
+        "Tests pass via NODE_ENV=development bun test src/components/workflows/LegacyNodeLogs.test.tsx src/components/workflows/LegacyNodeRoom.test.tsx and bun test src/components/workflows/WorkflowExecution.test.tsx, plus bun run type-check in packages/web."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:2279-2489 (Task 10). Do not catch in WorkflowExecution action handlers so GateRoom receives rejection.",
+      "dependsOn": [
+        "US-009"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Validate story and update sprint tracking",
+      "description": "As a release engineer, I want all focused tests, full validations, and sprint tracking verified, so that Story 5.2 is cleanly marked done.",
+      "acceptanceCriteria": [
+        "Run all selector, helper, static room, DOM room, and Logs integration tests in packages/web.",
+        "Run packages/web type-check with zero errors.",
+        "Run bun run lint --max-warnings 0 from the repository root with zero warnings.",
+        "Run bun run validate from the repository root with zero errors.",
+        "Update _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml lines 2, 37, and 48 changing 5-2-see-the-right-room-for-each-node-type-legacy to done and updating timestamps.",
+        "Verify git diff --check, bun run format:check, and bun run validate all exit zero after tracking edit."
+      ],
+      "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:2491-2570 (Task 11). Do not run bun test from repository root; use packages/web for tests and bun run validate from root.",
+      "dependsOn": [
+        "US-010"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
