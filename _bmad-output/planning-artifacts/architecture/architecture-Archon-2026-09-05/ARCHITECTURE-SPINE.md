@@ -7,7 +7,7 @@ paradigm: ports-and-adapters
 scope: Mid-turn AskHuman HITL + node-centric run view on legacy WorkflowExecution and /console (CAP-1–7; Permission envelope only)
 status: final
 created: 2026-09-05
-updated: 2026-09-05
+updated: 2026-09-06
 binds: [CAP-1, CAP-2, CAP-3, CAP-4, CAP-5, CAP-6, CAP-7]
 sources:
   - ../../../specs/spec-workflow-run-view-hitl/SPEC.md
@@ -96,7 +96,7 @@ flowchart TB
 
 - **Binds:** CAP-4, Claude/Pi `sendQuery`, `SendQueryOptions`
 - **Prevents:** Executor stuffing answers into the prompt while the provider also injects; one resume protocol for both SDKs; three session-id homes
-- **Rule:** Injection is **provider-owned**. Executor re-enters with a normal `sendQuery` plus `SendQueryOptions.resumeInteractions: Array<{ tool_use_id, payload, declined }>` (all **answered** rows for that node, store order) and does **not** put answers in the prompt. Claude maps the array to one new user message (no AskHuman re-issue). Pi maps each item to `ToolResultMessage` then `session.agent.continue()` (`pi-agent-core` `Agent.continue()` at `0.80.6`; not `AgentSession.continue()`). `provider_session_id` on the pending row is the resume session id; `workflow_node_sessions` is not a second SoT for this path. Same-process seamless resume may skip teardown but must persist pending and use the same `resumeInteractions` contract. SDK _how_ (Claude `tool_deferred` vs host abort; Pi reopen-after-dispose) is a required spike — it may amend this Rule, not fork it silently.
+- **Rule:** Injection is **provider-owned**. Executor re-enters with a normal `sendQuery` plus `SendQueryOptions.resumeInteractions: Array<{ tool_use_id, payload, declined }>` (all **answered** rows for that node, store order) and does **not** put answers in the prompt. Claude host-aborts after the custom `mcp__archon__AskHuman` callback persists the Ask, resumes the same provider session with `options.resume`, injects one provider-owned user message, and does not reissue AskHuman. Pi opens the persisted `SessionManager`, appends each matching `ToolResultMessage` through `SessionManager.appendMessage` before `createAgentSession`, constructs the new `AgentSession` from that manager, and calls `session.agent.continue()` (`pi-agent-core` `Agent.continue()` at `0.80.6`; not `AgentSession.continue()`). `provider_session_id` on the pending row is the resume session id; `workflow_node_sessions` is not a second SoT for this path. Same-process seamless resume may skip teardown but must persist pending and use the same `resumeInteractions` contract.
 
 ### AD-7 — Dedicated events, GET embed, split POST [ADOPTED]
 
@@ -133,18 +133,18 @@ flowchart TB
 | Auth               | Starter = `workflow_runs.user_id`; teammate views read-only                                                                                                                                                         |
 | Types              | Engine Zod in `packages/workflows/src/schemas/`; routes import it; web + console consume `api.generated.d.ts` types only                                                                                            |
 | Logging            | `workflow.ask_pending` / `workflow.ask_resolved` / `workflow.ask_resume_failed`; never log answer bodies                                                                                                            |
-| Claude SDK         | Intercept `AskHuman` tool invocation. Lockfile install is **0.3.209** until the AD-6 spike amends AD-6                                                                                                              |
+| Claude SDK         | Intercept `AskHuman` tool invocation. Exact manifest and lockfile version is **0.3.209**. The Story 6.1 isolated `0.3.261` comparison does not authorize a floating range.                                          |
 
 ## Stack
 
-| Name                                      | Version                                                           |
-| ----------------------------------------- | ----------------------------------------------------------------- |
-| Bun + TypeScript                          | workspace (`^1.3` / `^5.3`)                                       |
-| Hono + `@hono/zod-openapi`                | workspace (`^4.12.16` / `^1.4.0`)                                 |
-| React / Vite / Tailwind v4 / Zustand      | `@archon/web` (`^19` / `^6` / v4 / `^5.0.12`)                     |
-| `@anthropic-ai/claude-agent-sdk`          | **0.3.209** (lockfile exact until AD-6 spike; npm latest 0.3.261) |
-| `@earendil-works/pi-coding-agent`         | `^0.80.6` (lock 0.80.6; `continue()` via `session.agent`)         |
-| SQLite (`bun:sqlite`) / PostgreSQL (`pg`) | workspace default / `^8.11.0`                                     |
+| Name                                      | Version                                                                                        |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Bun + TypeScript                          | workspace (`^1.3` / `^5.3`)                                                                    |
+| Hono + `@hono/zod-openapi`                | workspace (`^4.12.16` / `^1.4.0`)                                                              |
+| React / Vite / Tailwind v4 / Zustand      | `@archon/web` (`^19` / `^6` / v4 / `^5.0.12`)                                                  |
+| `@anthropic-ai/claude-agent-sdk`          | **0.3.209** (exact; Story 6.1 isolated 0.3.261 comparison does not authorize a floating range) |
+| `@earendil-works/pi-coding-agent`         | `^0.80.6` (lock 0.80.6; `continue()` via `session.agent`)                                      |
+| SQLite (`bun:sqlite`) / PostgreSQL (`pg`) | workspace default / `^8.11.0`                                                                  |
 
 No new frontend dependency for the graph module.
 
@@ -208,13 +208,13 @@ erDiagram
 
 ## Deferred
 
-| Item                                             | Why it can wait                                                                                                                                      |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Per-node independent scheduling                  | AD-2 covers v1; revisit when a real run has long parallel branches that must progress past a sibling ask                                             |
-| Permission variant cards + live activation       | Envelope/`kind`/`call_id`/`{ intent }` are in-scope (AD-1, AD-7); **cards** wait for an activation source                                            |
-| Changing `NativeTool.handler` return type        | Branded throw + wrapper reject keeps `manage_run` on `Promise<string>`                                                                               |
-| CLI / chat / `manage_run` answer UX              | Same REST/store; surfaces after web                                                                                                                  |
-| New deploy / env / infra topology                | Feature rides the existing single-tenant install, SSE, and additive schema                                                                           |
-| Source-control viewer reuse inside the node room | Separate spine; do not import `/console`                                                                                                             |
-| Claude `tool_deferred` / PreToolUse `defer`      | Current SDK docs prescribe defer + tool re-issue; AD-6 keeps new-user-message until a spike proves otherwise and amends the Rule                     |
-| Pi reopen-after-dispose continue                 | `session.agent.continue()` is citable on `pi-agent-core` 0.80.6; durable resume after Archon's `dispose()` is unproven — spike before implementation |
+| Item                                             | Why it can wait                                                                                                                                                                                                                          |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Per-node independent scheduling                  | AD-2 covers v1; revisit when a real run has long parallel branches that must progress past a sibling ask                                                                                                                                 |
+| Permission variant cards + live activation       | Envelope/`kind`/`call_id`/`{ intent }` are in-scope (AD-1, AD-7); **cards** wait for an activation source                                                                                                                                |
+| Changing `NativeTool.handler` return type        | Branded throw + wrapper reject keeps `manage_run` on `Promise<string>`                                                                                                                                                                   |
+| CLI / chat / `manage_run` answer UX              | Same REST/store; surfaces after web                                                                                                                                                                                                      |
+| New deploy / env / infra topology                | Feature rides the existing single-tenant install, SSE, and additive schema                                                                                                                                                               |
+| Source-control viewer reuse inside the node room | Separate spine; do not import `/console`                                                                                                                                                                                                 |
+| Claude `tool_deferred` / PreToolUse `defer`      | Resolved by Story 6.1: exact `0.3.209` uses host abort, same-session `options.resume`, and one provider-owned user message with no AskHuman reissue. Isolated `0.3.261` defer is comparison evidence only and is not an active protocol. |
+| Pi reopen-after-dispose continue                 | Resolved by Story 6.1: `SessionManager.open`, `appendMessage(ToolResultMessage)`, `createAgentSession`, then `session.agent.continue()`.                                                                                                 |

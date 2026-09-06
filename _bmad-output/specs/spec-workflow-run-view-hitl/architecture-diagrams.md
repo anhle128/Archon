@@ -31,7 +31,8 @@ flowchart LR
 
 ## HITL lifecycle (CAP-4, CAP-5) — durable target
 
-Structured, agent-signaled block → inline card → typed response → only that node's turn resumes. Mechanism and verification status (same-process vs durable; Pi vs Claude): `hitl-contract.md` (Mechanism).
+Structured, agent-signaled block → inline card → typed response → only that node's turn resumes.
+`hitl-contract.md` defines payloads; Story 6.1 evidence defines the provider resume protocols.
 
 ```mermaid
 sequenceDiagram
@@ -51,7 +52,7 @@ sequenceDiagram
   else Permission
     Room->>Engine: confirm(call_id, intent)
   end
-  Engine->>Agent: re-drive turn — Pi: continue() (answer as tool_result) | Claude: resume as a new user message
+  Engine->>Agent: re-drive turn — Claude 0.3.209: host abort, same-session options.resume, one provider-owned user message, no AskHuman reissue | Pi 0.80.6: SessionManager.open then appendMessage(ToolResultMessage) then createAgentSession then session.agent.continue()
   Agent->>Engine: node resumes -> completion
   Note over Room: card stays in history as a record
 ```
@@ -64,8 +65,8 @@ One provider-agnostic contract; production mechanism differs per provider; unsup
 flowchart TD
   E["Provider-agnostic HITL contract<br/>(ask + permission forms)"]
   E --> P1{"Provider capability"}
-  P1 -- "Claude (native MCP tool)" --> N1["AskHuman in-process tool<br/>same-process VERIFIED · durable = new user message on resume<br/>VERIFIED Sonnet+Opus (no re-issue; synthetic result no interference)"]
-  P1 -- "Pi (tool + continue())" --> N2["AskHuman tool<br/>durable VERIFIED via continue() (cross-process restart)"]
+  P1 -- "Claude (native MCP tool)" --> N1["AskHuman in-process tool<br/>Story 6.1 Claude 0.3.209: host abort, same-session resume, one provider-owned user message, no AskHuman reissue"]
+  P1 -- "Pi (tool + continue())" --> N2["AskHuman tool<br/>Story 6.1 Pi 0.80.6: SessionManager.open then appendMessage(ToolResultMessage) then createAgentSession then session.agent.continue()"]
   P1 -- "Codex / Grok / OpenCode / Copilot<br/>(no in-process native-tool path)" --> O["v1: explicit 'unsupported' (fail loud)<br/>ACP/approval-gate fallback deferred"]
   P1 -- "no viable mechanism" --> F["Explicit 'unsupported' (fail loud, never hang)"]
   N1 --> R["Render: one pending_interaction envelope<br/>(Permission form dormant under auto-approve)"]
