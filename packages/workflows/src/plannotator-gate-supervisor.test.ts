@@ -1174,11 +1174,20 @@ mv "$7.tmp" "$7"`);
     mkdirSync(join(artifactsDir, 'plannotator-gates'), { recursive: true });
     writeFileSync(resultPath, '{"decision":"annotated","feedback":"stale"}');
 
-    await expect(runPlannotatorGateSupervisor(deps)).resolves.toEqual({
+    const result = await runPlannotatorGateSupervisor(deps);
+    expect(result).toEqual({
       kind: 'approved',
       output: '',
     });
     expect(existsSync(resultPath)).toBe(false);
+  });
+
+  test('rejects when the child exits without publishing a ready file', async () => {
+    const { deps } = setup(`rm -f "$PLANNOTATOR_READY_FILE"\nexit 7`, '');
+
+    await expect(runPlannotatorGateSupervisor(deps)).rejects.toThrow(
+      /exited before publishing its review URL/i
+    );
   });
 
   test('rejects invalid result JSON and removes it', async () => {
