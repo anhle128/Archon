@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Validate HTTP ref before checkout lookup
+- **Where**: `packages/server/src/routes/git/changes-handler.ts`, `diff-handler.ts`, `file-handler.ts`
+- **Pattern**: `c.req.query('ref') !== undefined` plus `isValidGitObjectId` rejects empty `ref=` and `HEAD` before `loadRunCheckout`. Now listing must call `changedFiles(path)` with one argument. Map `GitCommitRefError` / `GitFileError` `invalid_ref` to HTTP 400 `{ error: 'Invalid commit ref' }` and log `{ runId, errorType: 'invalid_ref' }` without the OID.
+- **Example**: `if (ref !== undefined && !isValidGitObjectId(ref)) return apiError(c, 400, 'Invalid commit ref');`
+
 ### Isolate commit fileDiff fixtures and spawn spies
 - **Where**: `packages/git/src/file-read.test.ts` `commit fileDiff`
 - **Pattern**: Bun runs tests concurrently. Give each commit fileDiff case its own repo under the describe temp root. When spying `child_process.spawn`, assert the `diff-tree` argv only — flattened calls can include concurrent Now `git diff HEAD` spawns.
@@ -72,5 +77,35 @@
 - `'live' | string` trips `@typescript-eslint/no-redundant-type-constituents`; keep the locked union with a one-line disable.
 - Spawn spies must target the `diff-tree` argv, not every concurrent git spawn.
 - Isolate each commit fileDiff test in its own repo under the describe temp root.
+
+---
+
+## 2026-09-07 — US-003: HTTP ref query parameter and commit file source
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/git/path-input.ts` — `isValidGitObjectId` (40/64 lowercase hex)
+- `packages/server/src/routes/git/changes-route.ts` — optional `ref` query; HTTP 400 Invalid commit ref
+- `packages/server/src/routes/git/changes-handler.ts` — validate ref before checkout; one-arg Now `changedFiles`; `{ commit }` for commit lists; GitCommitRefError → 400
+- `packages/server/src/routes/git/diff-route.ts` — optional `ref`; Now-or-commit summary
+- `packages/server/src/routes/git/diff-handler.ts` — `commit: ref` into `fileDiff`; classify `invalid_ref`
+- `packages/server/src/routes/git/file-handler.ts` — `source=worktree|head|FULL_OID`; GitCommitRefError/GitFileError invalid_ref → 400
+- `packages/server/src/routes/api.ts` — Now-or-commit comments on changes/diff
+- `packages/server/src/routes/api.git-changes.test.ts` — commit ref, empty ref, unreachable, CAP-6, file source tests
+
+**Acceptance criteria verified**:
+- [x] Add isValidGitObjectId(raw: string): boolean to packages/server/src/routes/git/path-input.ts matching 40 or 64 character lowercase hex.
+- [x] Update changes-route.ts to accept optional query param ref: z.string().optional() and document HTTP 400 Invalid commit ref.
+- [x] Update changes-handler.ts: if ref is provided and not isValidGitObjectId, return HTTP 400 { error: 'Invalid commit ref' }; pass { commit: ref } to changedFiles; catch GitCommitRefError and return HTTP 400 { error: 'Invalid commit ref' }; log git.changes_failed with errorType: 'invalid_ref'; keep CAP-6 and missing run handling.
+- [x] Update diff-route.ts to accept optional query param ref: z.string().optional() and document HTTP 400 Invalid commit ref.
+- [x] Update diff-handler.ts: if ref is provided and not isValidGitObjectId, return HTTP 400 { error: 'Invalid commit ref' }; pass commit: ref to fileDiff; map GitCommitRefError to HTTP 400 { error: 'Invalid commit ref' } with errorType: 'invalid_ref'.
+- [x] Update file-handler.ts: accept source query matching 'worktree', 'head', or isValidGitObjectId(source); map full object name to { kind: 'tree', treeIsh: source }; map invalid source to HTTP 400 Invalid file source; map GitCommitRefError to HTTP 400 Invalid commit ref.
+- [x] Update route comments in packages/server/src/routes/api.ts to describe changes and diff as Now-or-commit.
+- [x] Pass all isolated tests in packages/server/src/routes/api.git-changes.test.ts covering valid commit ref, invalid ref, unreachable commit, commit diff, and commit file reads.
+
+**Learnings**:
+- Empty `ref=` is `''`, not undefined — only an absent query parameter selects Now.
+- Now `changedFiles` must be invoked with one argument; a trailing `undefined` fails `mock.calls[0].length === 1`.
+- Do not log the commit OID on `invalid_ref` paths.
 
 ---
