@@ -131,8 +131,8 @@
         "US-002"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/experiments/console/components/graph/build-run-graph-input.ts, build-run-graph-input.test.ts, graph-viewport.ts, graph-viewport.test.ts."
     },
     {
       "id": "US-007",
@@ -153,8 +153,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/experiments/console/components/RunGraphPanel.tsx, RunGraphPanel.test.tsx, packages/web/src/experiments/console/routes/RunDetailPage.tsx."
     },
     {
       "id": "US-008",
@@ -173,8 +173,8 @@
         "US-003"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/src/experiments/console/components/NodeDivider.tsx, NodeDivider.test.tsx, RunStream.tsx, RunStream.test.tsx."
     },
     {
       "id": "US-009",
@@ -196,8 +196,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/experiments/console/components/ConsoleInspectPane.tsx, ConsoleInspectPane.test.tsx."
     },
     {
       "id": "US-010",
@@ -219,8 +219,8 @@
         "US-009"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/web/src/experiments/console/routes/RunDetailPage.tsx, RunDetailPage.test.tsx."
     },
     {
       "id": "US-011",
@@ -240,8 +240,8 @@
         "US-010"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/web/src/experiments/console/components/console-run-href.ts, console-run-href.test.ts, packages/web/src/experiments/console/console-isolation.test.ts, ConsoleWorkflowResultCard.tsx, WorkflowDock.tsx, README.md, eslint.config.mjs."
     },
     {
       "id": "US-012",
@@ -270,8 +270,8 @@
         "US-011"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 12. Console: 782 pass / 0 fail / 67 files. bun run validate green. Files: _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. Unblock commits: packages/workflows/src/dag-executor.test.ts, packages/workflows/src/loader.test.ts."
     }
   ]
 }

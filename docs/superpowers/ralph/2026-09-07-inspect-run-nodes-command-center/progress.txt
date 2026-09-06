@@ -1,5 +1,30 @@
 ## Codebase Patterns
 
+### Chat and dock deep-link through consoleRunHref
+- **Where**: `packages/web/src/experiments/console/components/console-run-href.ts`, `ConsoleWorkflowResultCard.tsx`, `WorkflowDock.tsx`
+- **Pattern**: Path ids use `encodeURIComponent`; the node query uses `URLSearchParams({ node })`. Null node omits the query. Running dock cards pass `run.currentNode ?? null`; paused cards pass `run.approval?.nodeId ?? run.currentNode ?? null`. Isolation tests compact whitespace so prettier wrapping still proves the call.
+- **Example**: `consoleRunHref(run.projectId, run.id, run.currentNode ?? null)` → `/console/p/proj%2Fa/r/run%201?node=review`
+
+### Run detail splits log filter from inspect URL selection
+- **Where**: `packages/web/src/experiments/console/routes/RunDetailPage.tsx`
+- **Pattern**: `streamNodeFilter` keeps storage key `archon.console.runNodeFilter` and default `all`. `InspectSelection` is initialized once per run id via `resolveInitialInspectSelection`. Later `?node=` applies only when the param *value* changes; deleting it must not reopen a closed room. Preserve unrelated search params through `URLSearchParams` + `navigate({ search }, { replace: true })`.
+- **Example**: `prevSearchNodeRef` records the last seen `node` query so closing the room cannot race a stale `?node=` back into selection.
+
+### Unmerged log rows are selectable siblings of usage expansion
+- **Where**: `packages/web/src/experiments/console/components/NodeDivider.tsx`, `RunStream.tsx`
+- **Pattern**: Identity/status is one full-width button (`aria-current` when selected) calling `onSelect(rowId, nodeId)`. Usage expansion is a sibling chevron with an explicit `aria-label` so no control is nested. `RunStream` keeps `selectedNodeId` as the All-nodes filter and `foldNodeRuns` message windows; when `logEntries` is supplied it replaces folded one-divider-per-node rows. Ledger usage is passed only when `entry.showNodeUsage` is true. Omit `logEntries` to keep the legacy folded dividers until the inspect pane wires the projector.
+- **Example**: `onSelectLogRow(entry.row.id, entry.row.nodeId)` with `hasLedgerUsage` only on the last chronological row per node
+
+### Console graph panel is a pure renderer over shared layout
+- **Where**: `packages/web/src/experiments/console/components/RunGraphPanel.tsx`
+- **Pattern**: Memoize `buildRunGraphInput(nodes, nodeStates)`. SVG routes and HTML cards share `translate(64px, 64px) scale(s)` with 180×80 cards. Dashed = `backEdge || kind === 'conditional'`; untaken stroke is `var(--border)`. Manual zoom clamps to `[0.25, 1.5]` in 0.1 steps; Fit uses `fitGraphScale` (max 1.0) and centers after rAF. Happy DOM tests stub `clientWidth`/`clientHeight` and use `instanceof` guards instead of `as` casts. `RunGraphPanel` must not fetch, fold events, or import Dagre; the page/pane supplies `nodes` and `nodeStates`.
+- **Example**: `onSelectNode(nodeId)` only — the panel never changes Log/Graph view.
+
+### Console DAG layout uses public run-graph layout plus inspect-status
+- **Where**: `packages/web/src/experiments/console/components/graph/build-run-graph-input.ts`, `graph-viewport.ts`
+- **Pattern**: Import only `layout` and types from `@/lib/run-graph` (constants are not public). Keep a console-local `['positive', 'negative', 'exhausted'] as const`. Projected `nodeStates` are the only live status; last duplicate id wins; `inspectStatus` maps `awaiting` to `running` before layout. Route edges emit exhausted→negative→positive; colliding targets append `:${outcome}`. `graphBounds` uses 180×80 plus 64px padding; `fitGraphScale` defaults 24px padding and clamps to `[0.25, 1]`.
+- **Example**: `layout({ nodes: graphNodes.map(n => ({ id: n.definition.id, nodeState: n.nodeState })), edges })`
+
 ### Console node rooms poll via useEntity, not React Query
 - **Where**: `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx`, `packages/web/src/experiments/console/test/install-happy-dom.ts`
 - **Pattern**: Key `useEntity` with `K.nodeMessages(run.id, nodeId)` only for agent rooms; every other kind uses a stable idle key plus `Promise.resolve({ messages: [] })` so `loadMessages` is never called. Hold fetches while `definitionPending` and resolution is the unknown-agent fallback. Poll with `globalThis.setInterval(..., 1000)` only when `isLive` and kind is `agent`; keep `refetch` in a ref so cache notifies do not reset the timer. Tests call `installHappyDom()` / `restoreHappyDom()`, inject `loadMessages`, spy `setInterval` without wall-clock, then `invalidate('run-node-messages')` after unmount because the cache retains subscriber-less values.
@@ -173,3 +198,177 @@
 
 ---
 
+## 2026-09-07 — US-006: Adapt the DAG to the Shared Run-Graph Layout
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/graph/build-run-graph-input.ts` — DAG + projected states → ConsoleGraphModel via `@/lib/run-graph` `layout`
+- `packages/web/src/experiments/console/components/graph/build-run-graph-input.test.ts` — dependencies, conditionals, route labels, back-edges, duplicate states, awaiting→running
+- `packages/web/src/experiments/console/components/graph/graph-viewport.ts` — graphBounds (180×80 + 64px padding) and fitGraphScale (0.25–1.0)
+- `packages/web/src/experiments/console/components/graph/graph-viewport.test.ts` — empty, one node, larger-than-viewport, smaller-than-viewport
+
+**Acceptance criteria verified**:
+- [x] Create build-run-graph-input.test.ts and graph-viewport.test.ts covering dependencies, conditional edges, route labels, loop back-edges, duplicate projected states, and viewport bounds/scale.
+- [x] Implement build-run-graph-input.ts exporting buildRunGraphInput(nodes, nodeStates): ConsoleGraphModel using layout from @/lib/run-graph.
+- [x] Use projected nodeStates as the only live status authority; normalize awaiting to running before passing to layout.
+- [x] Emit dependency, conditional, and route edges from typed DAG fields; append outcome to edge id when route targets collide; suppress duplicate dependency edges to route targets.
+- [x] Implement graph-viewport.ts with graphBounds(positions) and fitGraphScale(viewportWidth, viewportHeight, bounds, padding) using 180x80 node footprint and 64px canvas padding.
+- [x] Clamp fit scale to 0.25 <= scale <= 1.0, returning 1 for empty or non-positive dimensions.
+- [x] bun test src/experiments/console/components/graph/build-run-graph-input.test.ts src/experiments/console/components/graph/graph-viewport.test.ts passes from packages/web.
+
+**Learnings**:
+- `@/lib/run-graph` public index exports only `layout`; duplicate 180/80/64 locally instead of deep-importing constants.
+- Generated OpenAPI is type-only, so keep a console-local `['positive', 'negative', 'exhausted'] as const`.
+- Retry-loop first-rank nodes are centered, so do not assert `{ x: 0, y: 0 }` on the first node.
+- `inspectStatus` is the awaiting→running gate; running remains a taken layout path.
+
+---
+
+## 2026-09-07 — US-007: Replace the Console Graph Renderer
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/RunGraphPanel.tsx` — SVG/HTML renderer over `buildRunGraphInput` with zoom, pan, fit, arrows, and selection
+- `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx` — nodes, route labels, dashed back-edges, markers, aria-current, zoom/fit, error vs empty
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — supplies DAG nodes and projected states; panel no longer fetches
+
+**Acceptance criteria verified**:
+- [x] Create RunGraphPanel.test.tsx verifying nodes, route labels, dashed back-edges, arrow markers, selection aria-current, zoom/pan/fit controls, and definition error handling.
+- [x] Modify RunGraphPanel.tsx to implement RunGraphPanelProps { nodes, nodeStates, selectedNodeId, definitionPending, definitionError, onSelectNode }.
+- [x] Memoize buildRunGraphInput(nodes, nodeStates) and render SVG routes and HTML node cards inside canvas transform with 64px translation.
+- [x] Render node cards at shared positions with 180x80 dimensions, nodeBodyKind type glyph, label, id, inspect status, and selection ring.
+- [x] Clicking a node calls onSelectNode(nodeId) without changing view.
+- [x] Implement manual zoom clamped to 0.25 <= scale <= 1.5 in 0.1 increments and fit button using fitGraphScale.
+- [x] Remove internal useEntity, workflow skill queries, Dagre layout, and raw-event state derivation from RunGraphPanel.
+- [x] NODE_ENV=development bun test src/experiments/console/components/RunGraphPanel.test.tsx passes from packages/web.
+
+**Learnings**:
+- Happy DOM `clientWidth`/`clientHeight` are 0 unless stubbed; Fit tests must define those on the overflow scroller.
+- `non-nullable-type-assertion-style` wants `instanceof` narrowing in `*.test.tsx` rather than `as HTMLElement`.
+- Replacing RunGraphPanel props requires a caller update in RunDetailPage or `tsc --noEmit` fails.
+
+---
+
+
+## 2026-09-07 — US-008: Make Every Log Row Selectable
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/NodeDivider.tsx` — rowId/selected/onSelect, pending status, identity button + sibling usage chevron
+- `packages/web/src/experiments/console/components/NodeDivider.test.tsx` — selection, aria-current, pending, separate usage expansion
+- `packages/web/src/experiments/console/components/RunStream.tsx` — logEntries/selectedLogRowId/onSelectLogRow; unmerged dividers; usage only on showNodeUsage
+- `packages/web/src/experiments/console/components/RunStream.test.tsx` — five chronological dividers, node filter, usage once, row click
+
+**Acceptance criteria verified**:
+- [x] Update NodeDivider.test.tsx asserting row selection calls onSelect(rowId, nodeId), sets aria-current='true', and keeps usage-expansion control separately operable.
+- [x] Modify NodeDivider.tsx adding rowId, selected, and onSelect props; make identity/status region full-width button with aria-current; move usage expansion to adjacent chevron button without nested interactive elements.
+- [x] Update RunStream.test.tsx asserting ordinary, loop-iteration, and route-decision rows render as distinct dividers in chronological order, with cumulative usage only on showNodeUsage row.
+- [x] Modify RunStream.tsx accepting logEntries, selectedLogRowId, and onSelectLogRow; filter logEntries by row.nodeId when streamNodeFilter is not 'all'; retain message windows from foldNodeRuns.
+- [x] Preserve existing duration, cost, turns, stop reason, skip reason, and coverage behaviors.
+- [x] NODE_ENV=development bun test src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunStream.test.tsx passes from packages/web.
+
+**Learnings**:
+- Keep `logEntries` optional so RunDetailPage typechecks until US-010 wires the projector; omitted entries still render folded `NodeRun` dividers.
+- Identity and usage must be sibling buttons — a name-as-expand control nested inside a selection button fails the nested-interactive rule.
+- `showNodeUsage` is the only gate for ledger groups; earlier loop/route slices of the same node must not show cumulative cost.
+
+---
+
+## 2026-09-07 — US-009: Compose One Persistent Inspect Pane
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx` — split Log/Graph + one mounted ConsoleNodeRoom; definition via useEntity; selectedRow resolution
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx` — room identity across view switch, log/graph selection, filter vs inspect, definition loading/error fallback, layout classes
+
+**Acceptance criteria verified**:
+- [x] Create ConsoleInspectPane.test.tsx verifying view switching between log and graph retains the same mounted room DOM element and transcript loader call count.
+- [x] Implement ConsoleInspectPane.tsx adhering to ConsoleInspectPaneProps interface with view ('log' | 'graph'), loadDefinition, and loadMessages.
+- [x] Load definition nodes via useEntity(K.workflowDagNodes(projectCwd, run.workflow), ...); pass query error to Graph while room uses event fallback.
+- [x] Render Log or Graph in left pane and exactly one ConsoleNodeRoom as stable right sibling (flex-col lg:flex-row with 380px right column at large widths).
+- [x] Resolve selectedRow by selectedLogRowId and selectedNodeId, falling back to most recent row for selected node.
+- [x] Clicking either a log divider or graph node invokes onSelectNode callback.
+- [x] NODE_ENV=development bun test src/experiments/console/components/ConsoleInspectPane.test.tsx passes from packages/web.
+
+**Learnings**:
+- Capture the room with `[aria-label="<nodeId> room"]` (ConsoleNodeRoom `RoomRegion`) and toggle view via an inner harness so the pane instance is not replaced by `root.render`.
+- `*.test.tsx` cannot type-query a value namespace from `await import()`; import `ConsoleInspectPaneProps` statically.
+- Definition errors must use a distinct `projectCwd` cache key or the previous successful DAG load stays warm.
+
+---
+
+## 2026-09-07 — US-010: Integrate URL Selection Without Breaking Log Filtering
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — ConsoleRunDetail, streamNodeFilter vs InspectSelection, log projection memos, ConsoleInspectPane for Log/Graph, Artifacts full width
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` — ?node= deep-link, invalid fallback, view switch room identity, graph click URL, close removes only node, All nodes filter, artifacts restore, error/lifecycle
+
+**Acceptance criteria verified**:
+- [x] Update RunDetailPage.test.tsx testing ?node= deep-linking, invalid query fallback, view switching retaining room, closing room removing ?node=, and StreamToolbar 'All nodes' filtering without resetting room.
+- [x] Replace local RunDetailView with exported ConsoleRunDetail type in RunDetailPage.tsx.
+- [x] Rename filter state to streamNodeFilter, preserving its local-storage key and 'all' default; separate InspectSelection state.
+- [x] Derive inspectNodeStates, logRows, and logEntries with useMemo in exact order.
+- [x] Initialize selection once per run using resolveInitialInspectSelection; honor later ?node= changes with navigate({ search }, { replace: true }) without reopening on parameter removal.
+- [x] Log click sets nodeId and logRowId; Graph click sets nodeId and clears logRowId; room close clears both and removes ?node= from URL.
+- [x] StreamToolbar controls only streamNodeFilter; Artifacts view remains full width; ConsoleInspectPane renders for Log and Graph views.
+- [x] NODE_ENV=development bun test src/experiments/console/routes/RunDetailPage.test.tsx passes from packages/web.
+
+**Learnings**:
+- Closing the room must not treat the still-present `?node=` as a later URL selection; track the previous search node and ignore unchanged values. Removal of the param is not auto-select.
+- Mount `ConsoleInspectPane` only after `project.path` exists so the definition query does not fire on the idle key.
+- `conversation_platform_id: null` keeps tests from constructing EventSource; unique cache ids + afterEach invalidate prevent inspect-page leakage.
+
+---
+
+## 2026-09-07 — US-011: Deep-Link Timeline Status and Lock the Isolation Boundary
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/console-run-href.ts` — encode project/run/node into `/console/p/:projectId/r/:runId?node=`
+- `packages/web/src/experiments/console/components/console-run-href.test.ts` — reserved-character encoding and null node id
+- `packages/web/src/experiments/console/console-isolation.test.ts` — NFR4 imports, href wiring, no premature HITL identifiers
+- `packages/web/src/experiments/console/components/ConsoleWorkflowResultCard.tsx` — `consoleRunHref(run.projectId, run.id, run.currentNode ?? null)`
+- `packages/web/src/experiments/console/components/WorkflowDock.tsx` — running currentNode vs paused approval.nodeId
+- `packages/web/src/experiments/console/README.md` — Log-filter vs inspect-selection, run-graph exception, polling, Epic 6 handoff
+- `eslint.config.mjs` — NFR4 comment beside existing isolation rules
+
+**Acceptance criteria verified**:
+- [x] Create console-run-href.ts and test verifying /console/p/:projectId/r/:runId?node=:nodeId with URL-encoded parameters.
+- [x] Update ConsoleWorkflowResultCard.tsx to link run detail using consoleRunHref(run.projectId, run.id, run.currentNode ?? null).
+- [x] Update WorkflowDock.tsx to link running runs to run.currentNode and paused runs to run.approval?.nodeId ?? run.currentNode ?? null using consoleRunHref.
+- [x] Create console-isolation.test.ts recursively verifying production files under src/experiments/console have no imports from @/components, legacy stores, contexts, routes, hooks, @tanstack/react-query, or runtime @/lib/api, allowing only type imports from @/lib/api.generated and runtime imports from @/lib/run-graph.
+- [x] Verify console-isolation.test.ts asserts no pending_interactions, AskCard, ChatComposer, or user-facing 'Waiting on you' / 'awaiting' strings in inspect files.
+- [x] Update console README.md with Log-filter vs inspect-selection rules, run-graph exception, and Epic 6 handoff; update comment in eslint.config.mjs.
+- [x] bun test src/experiments/console/console-isolation.test.ts src/experiments/console/components/console-run-href.test.ts and NODE_ENV=development bun test src/experiments/console/ pass from packages/web.
+
+**Learnings**:
+- `run.projectId` is `string | null`; a JSX ternary does not narrow it inside an onClick closure — re-check `run.projectId === null` in the handler so the required `consoleRunHref(run.projectId, …)` call type-checks.
+- Console test files are ESLint-ignored; lint production files only (or pass `--no-warn-ignored`). Do not treat other existing `@/lib` runtime imports (builder, ide-uri) as isolation failures; NFR4 forbids legacy UI, React Query, and runtime `@/lib/api`.
+
+---
+
+## 2026-09-07 — US-012: Validate, Record Evidence, and Close the Epic
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — 5-5 and epic-5 marked done; epic-6 left in-progress
+- `packages/workflows/src/dag-executor.test.ts` — chore(unblock): native Ralph loop contract matches YAML (`alibaba-token-plan/deepseek-v4-pro` @ `max`)
+- `packages/workflows/src/loader.test.ts` — chore(unblock): same YAML contract in loader fixture
+
+**Acceptance criteria verified**:
+- [x] NODE_ENV=development bun test src/experiments/console/ from packages/web — 782 pass, 0 fail, 67 files
+- [x] bun run validate from repository root — bundled checks, type-check, lint --max-warnings 0, format:check, test:install, and bun run test all passed
+- [x] 5-5-inspect-a-run-as-nodes-on-command-center marked done
+- [x] epic-5 marked done after 5.1–5.5 all done; epic-6 unchanged (in-progress)
+- [x] bun run format:check and git diff --check passed
+- [x] git diff --stat on the tracker commit touched only sprint-status.yaml; feature commits stayed in planned console/inspect files plus the tracker
+
+**Learnings**:
+- `bun run validate` failed first on stale native Ralph loop contracts after YAML model/effort drift; fix the tests to the YAML, not the YAML to the tests.
+- dag-executor.test.ts and loader.test.ts both pin speckit-ralph-native-feature.yaml; update them together.
+
+BLOCKER US-012 | gate=bun run validate | cause=packages/workflows/src/dag-executor.test.ts:6934 expected xai-oauth/grok-4.5 received alibaba-token-plan/deepseek-v4-pro | action=chore(unblock) aligned test to YAML omp + alibaba-token-plan/deepseek-v4-pro @ max | 2026-09-07
+BLOCKER US-012 | gate=bun run validate | cause=packages/workflows/src/loader.test.ts:3813 expected effort high received max | action=chore(unblock) aligned loader fixture model/effort to the same YAML | 2026-09-07
+
+---
