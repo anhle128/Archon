@@ -1,0 +1,262 @@
+{
+  "feature": "Answer or Decline the Ask so the Node Can Continue",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Define AskHuman answer and provider contracts",
+      "description": "As a workflow developer, I want canonical schemas for AskHuman answers, resolution input/result, and provider resume interactions, so that engine, database, and provider layers share strict type contracts.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/schemas/pending-interaction.ts defines askAnswerItemSchema, askAnswerBodySchema, resolvePendingInteractionInputSchema, and resolvePendingInteractionResultSchema using z from @hono/zod-openapi and z.infer.",
+        "askAnswerBodySchema strictly accepts either { answers: Array<{ questionId: string; value: string | string[] }> } (min 1) or { decline: true }, rejecting empty answers, false decline, or mixed unions.",
+        "askHumanQuestionSchema is exported from packages/workflows/src/schemas/pending-interaction.ts and re-imported into packages/workflows/src/ask-human.ts without altering its accepted shape.",
+        "packages/providers/src/types.ts defines ResumeInteraction { tool_use_id: string; payload: unknown; declined: boolean } and adds optional resumeInteractions?: readonly ResumeInteraction[] to SendQueryOptions.",
+        "packages/workflows/src/schemas/pending-interaction.test.ts verifies all schema acceptance criteria, type inferences, and rejection of unknown keys or invalid shapes.",
+        "Focused test runs pass via bun test src/schemas/pending-interaction.test.ts and bun test src/ask-human.test.ts in packages/workflows, and bun x tsc --noEmit in packages/providers."
+      ],
+      "technicalNotes": "Follow plan Task 1 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:388-424) and Authoritative Contracts (lines 141-259). Modify packages/workflows/src/schemas/pending-interaction.ts, packages/workflows/src/schemas/pending-interaction.test.ts, packages/workflows/src/ask-human.ts, and packages/providers/src/types.ts.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Implement atomic answer CAS and shared resume primitive",
+      "description": "As an operator, I want Ask answers resolved and the run resumed atomically when no pending interactions remain, so that concurrent writes are safe and the run never hangs in paused.",
+      "acceptanceCriteria": [
+        "Create packages/core/src/db/workflow-resume-transition.ts exporting WorkflowTransactionQuery, ResumeEligibility ('standard' | 'paused-ask'), ORPHAN_RESUME_STALE_DAYS, resumableWorkflowStatusClause, workflowRunLockClause, and resumeWorkflowRunInTransaction.",
+        "Refactor packages/core/src/db/workflows.ts to delegate its resume SQL and status predicates to workflow-resume-transition.ts while preserving public resumeWorkflowRun behavior and existing integration tests.",
+        "Implement resolvePendingInteraction in packages/core/src/db/workflow-pending-interactions.ts using withTransaction, locking the run and pending interaction rows (FOR UPDATE on Postgres).",
+        "resolvePendingInteraction throws typed errors: PendingInteractionNotFoundError, PendingInteractionAlreadyResolvedError, PendingInteractionRunNotPausedError, and PendingInteractionValidationError.",
+        "Validate answers semantically against stored envelope questions (questionId match, single vs multi array, options match, allowOther whitespace check) and fail safely without logging prompt/answer sentinels.",
+        "Compare-and-swap the interaction row to 'answered', set answer, resolved_at, resolved_by, check remaining pending count, and execute resumeWorkflowRunInTransaction(..., 'paused-ask') only when remaining pending is zero.",
+        "Insert interaction_resolved event with step_name = node_id and non-sensitive data ({ node_id, tool_use_id, kind: 'ask', declined, resumed }) in the same transaction.",
+        "All unit and integration tests in packages/core/src/db/workflow-pending-interactions.test.ts, packages/core/src/db/workflows.test.ts, and packages/core/src/db/workflows.resume-cas.integration.test.ts pass."
+      ],
+      "technicalNotes": "Follow plan Task 2 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:426-488) and Transaction ownership section (lines 263-333). Create packages/core/src/db/workflow-resume-transition.ts; modify packages/core/src/db/workflow-pending-interactions.ts, packages/core/src/db/workflow-pending-interactions.test.ts, packages/core/src/db/workflows.ts, and packages/core/src/db/workflows.resume-cas.integration.test.ts.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Purge pending interactions on terminal transitions",
+      "description": "As an engine maintainer, I want cancelled and failed workflow transitions to purge any remaining pending interactions in the same transaction, so that dead runs leave no dangling pending state.",
+      "acceptanceCriteria": [
+        "packages/core/src/db/workflow-pending-interactions.ts exports purgePendingInteractionsInTransaction(query, workflowRunId, terminalStatus) which transitions only pending rows to 'purged', sets resolved_at, and writes an interaction_resolved audit event per purged row.",
+        "Purge audit events contain { node_id, tool_use_id, kind: 'ask', purged: true, resumed: false, terminal_status } and omit envelope/answer data.",
+        "cancelWorkflowRun, cancelRecoveryWorkflowRun, resolveAndCancelApprovalGate, failWorkflowRun, and failOrphanedRuns in packages/core/src/db/workflows.ts invoke purgePendingInteractionsInTransaction inside their winning status transition transaction.",
+        "No-op or non-winning status transitions do not purge rows or emit purge events.",
+        "completeWorkflowRun does not purge interactions.",
+        "Tests pass via bun test src/db/workflow-pending-interactions.test.ts, bun test src/db/workflows.test.ts, and bun test src/db/workflows.resume-cas.integration.test.ts in packages/core."
+      ],
+      "technicalNotes": "Follow plan Task 3 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:490-547) and Purge section (lines 335-360). Modify packages/core/src/db/workflow-pending-interactions.ts, packages/core/src/db/workflow-pending-interactions.test.ts, packages/core/src/db/workflows.ts, packages/core/src/db/workflows.test.ts, and packages/core/src/db/workflows.resume-cas.integration.test.ts.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Expose pending-interaction resolution store port and update doubles",
+      "description": "As a workflow engine architect, I want IWorkflowPendingInteractionStore to include resolvePendingInteraction, so that engine workflows can resolve interactions through a typed port without exposing internal purge primitives.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/store.ts updates IWorkflowPendingInteractionStore to add resolvePendingInteraction(input: ResolvePendingInteractionInput): Promise<ResolvePendingInteractionResult>.",
+        "packages/core/src/workflows/store-adapter.ts delegates resolvePendingInteraction to core DB resolvePendingInteraction.",
+        "packages/core/src/workflows/store-adapter.test.ts tests the delegation and verifies exact input/output passing.",
+        "All test doubles implementing IWorkflowStore across packages/workflows (ask-human.test.ts, dag-executor.test.ts, executor.test.ts, executor-preamble.test.ts, plannotator-gate-executor.test.ts, plannotator-gate-supervisor.test.ts, script-node-deps.test.ts, subrun.test.ts) implement typed resolvePendingInteraction stubs.",
+        "bun test src/workflows/store-adapter.test.ts in packages/core and bun x tsc --noEmit in packages/workflows pass without errors."
+      ],
+      "technicalNotes": "Follow plan Task 4 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:549-601). Modify packages/workflows/src/store.ts, packages/core/src/workflows/store-adapter.ts, packages/core/src/workflows/store-adapter.test.ts, and all listed workflow test files.",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Map AskHuman resolution as a refetch event",
+      "description": "As a web frontend developer, I want interaction_resolved emitted and mapped to workflow_status SSE refetch triggers without payload leakage, so that web clients refresh Ask state promptly.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/event-emitter.ts adds InteractionResolvedEvent { type: 'interaction_resolved'; runId: string; nodeId: string; resumed: boolean } to WorkflowEmitterEvent.",
+        "packages/server/src/adapters/web/workflow-bridge.ts maps live interaction_resolved events to workflow_status with status: event.resumed ? 'running' : 'paused'.",
+        "packages/server/src/adapters/web/workflow-bridge.ts adds interaction_resolved to DASHBOARD_SOURCE_EVENT_TYPES, mapping answered rows to running/paused and purged rows to failed/cancelled.",
+        "Neither live nor persisted SSE mappings leak toolUseId, envelope, answer, questions, options, or approval fields.",
+        "packages/adapters/src/chat/slack/workflow-bridge.ts explicitly handles case 'interaction_resolved': break without sending chat messages.",
+        "Tests pass via bun test src/event-emitter.test.ts in packages/workflows, bun test src/adapters/web/workflow-bridge.test.ts and bun test src/adapters/web/dashboard-event-poller.test.ts in packages/server, and bun test src/chat/slack/workflow-bridge.test.ts in packages/adapters."
+      ],
+      "technicalNotes": "Follow plan Task 5 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:603-670) and Live and persisted events section (lines 548-563). Modify packages/workflows/src/event-emitter.ts, event-emitter.test.ts; packages/server/src/adapters/web/workflow-bridge.ts, workflow-bridge.test.ts, dashboard-event-poller.test.ts; packages/adapters/src/chat/slack/workflow-bridge.ts, workflow-bridge.test.ts.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Own AskHuman answer and resume operations",
+      "description": "As an API developer, I want workflow-operations.ts to own starter authorization, answer persistence invocation, safe logging, and Ask-aware resume validation, so that business logic is centralized.",
+      "acceptanceCriteria": [
+        "packages/core/src/operations/workflow-operations.ts exports typed errors AskHumanRunNotFoundError, AskHumanAuthenticationRequiredError, AskHumanForbiddenError, and function answerAskHuman(input: AnswerAskHumanInput): Promise<AnswerAskHumanResult>.",
+        "answerAskHuman requires actorUserId, matches it strictly against run.user_id (no admin override, unowned run rejected), and calls resolvePendingInteraction.",
+        "Logs workflow.ask_resolved with workflowRunId, nodeId, toolUseId, declined, resumed only after commit, omitting answer/envelope payloads.",
+        "Emits live interaction_resolved event after commit.",
+        "resumeWorkflow rejects any run with a pending interaction.",
+        "resumeWorkflow accepts an already-running run if it has at least one answered Ask row and zero pending rows; rejects plain running runs.",
+        "Tests pass via bun test src/operations/workflow-operations.test.ts in packages/core."
+      ],
+      "technicalNotes": "Follow plan Task 6 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:672-730) and Authorization and operation result section (lines 362-402). Modify packages/core/src/operations/workflow-operations.ts and packages/core/src/operations/workflow-operations.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Register starter-only AskHuman answer route and auto-dispatch",
+      "description": "As an API consumer, I want POST /api/workflows/runs/{runId}/ask/{requestId}/answer registered with OpenAPI schemas, starter authentication, typed error handling, and web auto-dispatch, so that answers can be submitted via HTTP.",
+      "acceptanceCriteria": [
+        "packages/server/src/routes/schemas/workflow.schemas.ts defines askAnswerRequestSchema decorated with .openapi('AskAnswerBody').",
+        "packages/server/src/routes/api.ts registers POST /api/workflows/runs/{runId}/ask/{requestId}/answer using registerOpenApiRoute.",
+        "Route maps responses to 200 (workflowRunActionResponseSchema), 400 (invalid body / semantic validation), 401 (unauthenticated), 403 (actor != run.user_id), 404 (run/interaction not found), 409 (already resolved / run not paused), and 500.",
+        "When resumed is true and run has a web parent conversation, route calls tryAutoResumeAfterGate with action 'ask-answer', dispatching /workflow resume <runId> with actor id.",
+        "Non-web parent or intermediate answer (resumed: false) returns 200 without auto-dispatching.",
+        "Tests pass via bun test src/routes/api.workflow-runs.test.ts in packages/server."
+      ],
+      "technicalNotes": "Follow plan Task 7 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:732-805) and Authoritative Contracts (lines 135-172, 565-576). Modify packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, and packages/server/src/routes/api.workflow-runs.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Hydrate operation-resumed AskHuman runs without second CAS",
+      "description": "As an executor developer, I want inspectResumableRun and hydrateResumableRun to handle answered AskHuman runs cleanly without re-executing a resume CAS, so that resumed runs start executing immediately.",
+      "acceptanceCriteria": [
+        "inspectResumableRun in packages/workflows/src/executor.ts inspects pending interactions; treats runs with zero completed nodes but answered Ask rows as resumable.",
+        "inspectResumableRun and hydrateResumableRun reject runs with pending Ask rows with safe message: 'Answer or decline the Ask before resuming run <id>'.",
+        "hydrateResumableRun returns the candidate run directly as preCreatedRun without calling store.resumeWorkflowRun when candidate is already 'running' with answered Ask rows.",
+        "Existing failed, paused, and cancelled run resume behaviors remain intact.",
+        "Tests pass via bun test src/executor.test.ts in packages/workflows."
+      ],
+      "technicalNotes": "Follow plan Task 8 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:807-862) and Hydrate-when-running section (lines 404-418). Modify packages/workflows/src/executor.ts and packages/workflows/src/executor.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-004"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Re-enter AskHuman nodes with resume interactions",
+      "description": "As a workflow executor, I want executeDagWorkflow to feed answered interactions to unfinished nodes with provider_session_id precedence and isolated prompts, so that AI turns continue accurately.",
+      "acceptanceCriteria": [
+        "executeDagWorkflow loads pending interactions for the run; rejects if any pending row exists; verifies answered node_ids match static DAG step names.",
+        "runLayers maps answered Ask rows for stepNamePrefix + node.id into ResumeInteraction[] in store order (created_at ASC, id ASC); decline maps to 'declined' with declined: true.",
+        "provider_session_id from the Ask row overrides sequential and persist_session cursors.",
+        "Command and prompt nodes receive resumeInteractions on only their first stream pass; loop nodes receive resumeInteractions on only the first stream pass of the first resumed iteration.",
+        "Nodes with resumeInteractions force forkSession: false, use zero engine retries, and do not append answers to the prompt argument.",
+        "Resume failure writes node_failed with safe error 'Could not resume the AskHuman session', logs workflow.ask_resume_failed with ids only, and never leaks answer sentinels.",
+        "If the resumed turn calls AskHuman again, AskHumanAwaitingError pauses the run normally.",
+        "Tests pass via bun test src/dag-executor.test.ts in packages/workflows."
+      ],
+      "technicalNotes": "Follow plan Task 9 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:864-946) and Executor re-entry section (lines 420-462). Modify packages/workflows/src/dag-executor.ts and packages/workflows/src/dag-executor.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-004",
+        "US-008"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Continue Claude after AskHuman answers",
+      "description": "As an Anthropic provider maintainer, I want Claude to continue the session using a provider-owned resume prompt without forking, so that conversation state resumes seamlessly.",
+      "acceptanceCriteria": [
+        "packages/providers/src/claude/provider.ts exports buildClaudeAskResumePrompt(interactions) formatting answers or decline text and ending with continuation instruction.",
+        "When resumeInteractions is present, Claude requires resumeSessionId, sets options.resume, forces options.forkSession = false, and passes the generated resume prompt instead of the executor prompt.",
+        "Resume interaction failures bypass Claude subprocess retry loop, log safe error class without raw err/stderrContext, and map isError terminal result to ['Could not resume the AskHuman session'] while preserving usage/token/cost.",
+        "Non-Ask Claude queries retain existing prompt, fork, classification, and retry behavior.",
+        "Tests pass via bun test src/claude/provider.test.ts and bun test src/claude/askhuman-resume-spike.test.ts in packages/providers."
+      ],
+      "technicalNotes": "Follow plan Task 10 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:948-1002) and Claude mapping section (lines 464-494). Modify packages/providers/src/claude/provider.ts and packages/providers/src/claude/provider.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-009"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Continue Pi after AskHuman answers",
+      "description": "As a Pi provider maintainer, I want Pi to resolve existing sessions strictly, append durable ToolResultMessage records, and call session.agent.continue(), so that Pi agents resume without cold restarts.",
+      "acceptanceCriteria": [
+        "packages/providers/src/community/pi/session-resolver.ts adds { requireExisting?: boolean } option; when true and session missing/ENOENT/ENOTDIR, throws PiSessionResumeRequiredError without calling SessionManager.create.",
+        "packages/providers/src/community/pi/event-bridge.ts adds startMode: 'prompt' | 'continue' (default 'prompt'); 'continue' executes session.agent.continue() and never calls session.prompt.",
+        "packages/providers/src/community/pi/provider.ts sets requireExisting: true when resumeInteractions is non-empty; appends ToolResultMessage in order or verifies identical existing result; verifies transcript tail.",
+        "Invokes bridgeSession with startMode: 'continue'; sanitizes thrown errors and replaces isError terminal errors with ['Could not resume the AskHuman session'] without raw payload leakage.",
+        "Tests pass via bun test src/community/pi/session-resolver.test.ts, event-bridge.test.ts, provider.test.ts, and askhuman-resume.characterization.test.ts in packages/providers."
+      ],
+      "technicalNotes": "Follow plan Task 11 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:1004-1077) and Pi mapping section (lines 496-546). Modify session-resolver.ts, session-resolver.test.ts, event-bridge.ts, event-bridge.test.ts, provider.ts, and provider.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-009"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Regenerate API contract, full validation, and mark Story 6.3 done",
+      "description": "As a release engineer, I want the generated OpenAPI types refreshed, all project test suites and linters validated, and sprint status updated, so that Story 6.3 is fully verified and complete.",
+      "acceptanceCriteria": [
+        "packages/web/src/lib/api.generated.d.ts is regenerated against the running server and reflects POST /api/workflows/runs/{runId}/ask/{requestId}/answer and AskAnswerBody.",
+        "All package-isolated test suites pass in packages/workflows, packages/core, packages/server, packages/adapters, and packages/providers.",
+        "bun run validate exits 0 with no ESLint warnings and clean typechecks.",
+        "No migration files, database inventory discrepancies, or dependency lockfile versions are modified.",
+        "_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml marks 6-3-answer-or-decline-the-ask-so-the-node-can-continue as done."
+      ],
+      "technicalNotes": "Follow plan Task 12 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:1079-1150). Modify packages/web/src/lib/api.generated.d.ts and sprint-status.yaml.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008",
+        "US-009",
+        "US-010",
+        "US-011"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
