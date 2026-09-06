@@ -230,6 +230,26 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   listByCodebase: mock(() => Promise.resolve([])),
 }));
 
+// resumeWorkflow lists pending Ask rows. Omitting this mock leaves the real
+// SQLite helper in place ("unable to open database file").
+mock.module('@archon/core/db/workflow-pending-interactions', () => ({
+  listPendingInteractions: mock(() => Promise.resolve([])),
+  resolvePendingInteraction: mock(() =>
+    Promise.resolve({
+      interaction: {
+        id: 'pending-1',
+        workflow_run_id: 'run-1',
+        node_id: 'ask',
+        tool_use_id: 'tool-1',
+        kind: 'ask',
+        status: 'answered',
+      },
+      resumed: false,
+      remaining_pending: 0,
+    })
+  ),
+}));
+
 mock.module('@archon/core/db/messages', () => ({
   addMessage: mock(() => Promise.resolve()),
 }));
