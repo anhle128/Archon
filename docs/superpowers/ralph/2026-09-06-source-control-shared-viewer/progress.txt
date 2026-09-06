@@ -1,0 +1,160 @@
+## Codebase Patterns
+
+### Extract the raw-file wildcard from a fixed marker
+- **Where**: `packages/server/src/routes/git/file-handler.ts` `extractEncodedGitFilePath`
+- **Pattern**: Take the substring after the first `/git/file/` in `c.req.path`, then `decodeURIComponent` exactly once. Do not rebuild a prefix from the decoded `runId`.
+- **Example**: `c.req.path.slice(c.req.path.indexOf('/git/file/') + '/git/file/'.length)`
+
+### Classify git errors structurally in HTTP handlers
+- **Where**: `packages/server/src/routes/git/diff-handler.ts` `classifyGitReadError`
+- **Pattern**: `GitPathError` / `GitFileError` stay unpublished. Match `name` + `code` on a plain object. Map `invalid_path` → 400 `Invalid file path`, `file_not_found` → 404 `File not found`, else opaque 500.
+- **Example**: `candidate.name === 'GitFileError' && candidate.code === 'not_found'`
+
+### Recheck CAP-6 after ready-gate I/O rejection
+- **Where**: `packages/server/src/routes/git/changes-handler.ts`, `diff-handler.ts`, `file-handler.ts`
+- **Pattern**: If `changedFiles`/`fileDiff`/`fileAt` rejects after a ready gate, call `loadRunCheckout` once more. Empty → HTTP 200 CAP-6; otherwise keep the opaque 500. Diff and file CAP-6 bodies are `{ emptyReason }` only, with no ETag on the file route.
+- **Example**: delete the checkout inside the mock then reject → `{ emptyReason: 'no_checkout' }`
+
+### Transport path validation is independent of @archon/git
+- **Where**: `packages/server/src/routes/git/path-input.ts`
+- **Pattern**: `isValidGitFilePath` validates already-decoded HTTP input. Do not import `parseGitFilePath`. Reject before `loadRunCheckout` / git. Reuse in the raw-bytes route.
+- **Example**: `'../x'` is false; `':colon.ts'` is true
+
+### GitFileError and file I/O stay package-private
+- **Where**: `packages/git/src/file-read.ts`, `packages/git/src/index.ts`
+- **Pattern**: Export only `fileAt`, `fileDiff`, and their data types from `@archon/git`. Keep `GitFileError`, `parseUnifiedDiff`, `hasNulInFirst8k`, and `execFileBufferAsync` internal. Later HTTP stories classify `GitFileError` structurally via `name` + `code`.
+- **Example**: `throw new GitFileError('not_found')` with `this.name = 'GitFileError'`
+
+### Tree reads are ls-tree then cat-file blob
+- **Where**: `packages/git/src/file-read.ts` `fileAt`
+- **Pattern**: `git --literal-pathspecs ls-tree -z TREE -- PATH` then `git cat-file blob BLOB_OID` through `execFileBufferAsync` with unbounded `maxBuffer`. Never `HEAD:path`, `oid:path`, `exec`, or a shell string.
+- **Example**: argv `['-C', workingPath, '--literal-pathspecs', 'ls-tree', '-z', 'HEAD', '--', path]`
+
+### mock.module('@archon/git') must stub fileAt and fileDiff
+- **Where**: the 31 factories listed in plan Task 2
+- **Pattern**: `mock.module` merges omitted exports from the real module. Every existing `@archon/git` factory must stub the two public I/O exports or tests hit real git.
+- **Example**: `fileAt: mock(async () => ({ path: 'x.ts', bytes: new Uint8Array(), binary: false, contentHash: '0'.repeat(64) }))`
+
+### Uint8Array is zero-filled
+- **Where**: `packages/git/src/file-read.test.ts` `hasNulInFirst8k`
+- **Pattern**: `new Uint8Array(n)` is all NULs. Fill with non-zero before placing a late NUL when proving the 8KB window.
+- **Example**: `const late = new Uint8Array(9000).fill(1); late[8192] = 0;`
+
+### Internal GitPathError is package-private
+- **Where**: `packages/git/src/git-path.ts`
+- **Pattern**: `GitPathError`, `parseGitFilePath`, and `containLivePath` are internal `@archon/git` API. Do not export them from `packages/git/src/index.ts`. Later stories classify them structurally (`name` + `code`) because the classes stay internal.
+- **Example**: `throw new GitPathError('escape')` with `this.name = 'GitPathError'`
+
+### containLivePath does not catch realpath errors
+- **Where**: `packages/git/src/git-path.ts` `containLivePath`
+- **Pattern**: Let `realpath` ENOENT (and other filesystem errors) propagate. Callers must distinguish missing files from `GitPathError`. Never wrap `realpath` in try/catch here.
+- **Example**: missing `inside.ts` rejects as `Error:ENOENT`, not `GitPathError`
+
+### Path validation is decode-then-segment
+- **Where**: `packages/git/src/git-path.ts` `parseGitFilePath`
+- **Pattern**: Reject empty, NUL, POSIX `/`, Windows `\`-prefix and `C:\`/`C:/` drive, and any `..` segment after either-slash split. Keep colon, leading dash, glob, space, and newline filenames literal.
+- **Example**: `':colon.ts'` and `'-dash.ts'` return unchanged; `'a/../x'` throws `dotdot`
+
+---
+
+## 2026-09-06 — US-001: Confine live git file paths
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/git-path.ts` — GitPathError, parseGitFilePath, containLivePath
+- `packages/git/src/git-path.test.ts` — special-name, rejection, realpath, and symlink-escape tests
+
+**Acceptance criteria verified**:
+- [x] Create RED tests in packages/git/src/git-path.test.ts, then implement packages/git/src/git-path.ts and make the focused test pass.
+- [x] parseGitFilePath accepts literal relative colon, leading-dash, glob, space, newline, and ordinary paths.
+- [x] parseGitFilePath throws internal GitPathError codes for empty, NUL, POSIX absolute, Windows drive/UNC absolute, and any slash-or-backslash dot-dot segment.
+- [x] containLivePath realpaths the checkout and candidate, returns only a canonical candidate beneath the canonical checkout, and throws GitPathError { code: escape } for an outward symlink.
+- [x] Do not catch realpath missing-file errors in containLivePath; callers must be able to distinguish them.
+
+**Learnings**:
+- Plan Task 1 implementation shape is the source of truth; prettier collapsed some conditionals but behavior is unchanged.
+- Focused gate is `( cd packages/git && bun test src/git-path.test.ts )`. Never run bare root `bun test`.
+- Test files are ESLint-ignored; lint only `git-path.ts` (or use `--no-warn-ignored`).
+- `containLivePath` missing-file proof: ENOENT from `realpath`, not GitPathError.
+
+---
+
+## 2026-09-06 — US-002: Read files and Now diffs safely
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/exec.ts` — internal `execFileBufferAsync` with `encoding: 'buffer'`
+- `packages/git/src/file-read.ts` — `fileAt`, `fileDiff`, `parseUnifiedDiff`, `hasNulInFirst8k`, internal `GitFileError`
+- `packages/git/src/file-read.test.ts` — parser, NUL-window, and real-git file/diff tests
+- `packages/git/src/index.ts` — public `fileAt`/`fileDiff` and data types only
+- 31 existing `@archon/git` `mock.module` factories — `fileAt`/`fileDiff` stubs
+
+**Acceptance criteria verified**:
+- [x] Write RED parser and real-git tests, then add the internal binary exec wrapper and file-read module; git-path and file-read focused tests plus git and root type checks pass.
+- [x] fileAt returns bytes, NUL-in-first-8KB binary flag, and a changing 64-lowercase-hex SHA-256 hash for worktree and tree reads; a committed 1,048,577-byte NUL fixture returns every byte.
+- [x] Tree reads use argv git --literal-pathspecs ls-tree -z TREE -- PATH followed by git cat-file blob BLOB_OID; no shell, exec, HEAD:path, oid:path, or nonliteral special path behavior is introduced.
+- [x] Worktree reads preserve symlink blob semantics, realpath-constrain live targets, map missing files to internal GitFileError not_found, and distinguish invalid tree-ish as GitFileError invalid_ref.
+- [x] fileDiff yields discriminated line changes and exactly Now/live/M, cursor empty, truncated false results; binary inputs yield binary true with no hunks and parser tests cover literal +++ content and no invented trailing context.
+- [x] Export only fileAt, fileDiff, and their data types from @archon/git; keep errors, path helpers, parser, NUL helper, and buffer wrapper non-public.
+- [x] In the same change, update exactly the 31 existing @archon/git mock.module factories listed in plan Task 2 with fileAt and fileDiff stubs, and make the specified rg inventory equal 31.
+
+**Learnings**:
+- Plan Task 2 implementation shape is the source of truth; eslint required `HUNK_RE.exec` and optional chaining around ls-tree meta.
+- `new Uint8Array(n)` is zero-filled, so the late-NUL window test must `.fill(1)` first.
+- GREEN gate: `( cd packages/git && bun test src/git-path.test.ts )`, `( cd packages/git && bun test src/file-read.test.ts )`, `( cd packages/git && bun run type-check )`, `bun run type-check`.
+- Inventory: `test "$(rg -l "mock\\.module\\(['\"]@archon/git['\"]" packages | wc -l | tr -d ' ')" = "31"`.
+
+---
+
+## 2026-09-06 — US-003: Expose the Now diff API
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/git/run-checkout.ts` — extracted `loadRunCheckout`
+- `packages/server/src/routes/git/path-input.ts` — decoded HTTP path transport check
+- `packages/server/src/routes/git/changes-handler.ts` — reuse adapter + CAP-6 recheck after `changedFiles` reject
+- `packages/server/src/routes/schemas/git.schemas.ts` — discriminated hunk schemas with nonnegative starts
+- `packages/server/src/routes/git/diff-route.ts` — OpenAPI GET `/api/workflows/runs/{runId}/git/diff`
+- `packages/server/src/routes/git/diff-handler.ts` — CAP-6, path, fileDiff, structural error mapping
+- `packages/server/src/routes/api.ts` — `registerOpenApiRoute(gitDiffRoute, …)`
+- `packages/server/src/routes/api.git-changes.test.ts` — named `mockFileAt`/`mockFileDiff` plus RED/GREEN HTTP cases
+
+**Acceptance criteria verified**:
+- [x] Extend only the existing isolated api.git-changes HTTP test with RED diff cases, then make its diff, changes, checkout-gate, and server type-check commands pass.
+- [x] Extract loadRunCheckout into run-checkout.ts using the existing workflow_runs.working_path and resolveRunCheckout; changes-handler reuses it and retains its response/log contract, including a second gate check after changedFiles rejects.
+- [x] GET /api/workflows/runs/{runId}/git/diff has required path, optional opaque cursor, OpenAPI schemas/types for discriminated hunk changes and nonnegative hunk starts, and uses registerOpenApiRoute.
+- [x] Decoded invalid paths fail with the exact invalid-path 400 before checkout/git; literal colon/dash/glob paths reach fileDiff unchanged; cursor is neither parsed nor interpreted.
+- [x] The handler maps missing run, CAP-6, missing file, named path error, and opaque failure to the locked status/body; it rechecks the gate once after ready-gate fileDiff rejection and returns CAP-6 if the checkout vanished.
+- [x] Each entered request emits git.diff_started and exactly one terminal event; failure logs contain only runId and stable errorType, and responses/logs never leak requested paths or checkout paths.
+
+**Learnings**:
+- Plan Task 3 implementation shape is the source of truth.
+- GREEN gate: `( cd packages/server && bun test src/routes/api.git-changes.test.ts )`, `( cd packages/server && bun test src/routes/git/checkout-gate.test.ts )`, `( cd packages/server && bun run type-check )`.
+- US-004 should reuse `loadRunCheckout` and `isValidGitFilePath`, and duplicate `classifyGitReadError` locally (Rule of Three).
+- Diff CAP-6 JSON is `{ emptyReason }` only; the changes envelope still includes empty `files` and `revision`.
+
+---
+
+## 2026-09-06 — US-004: Serve raw changed-file bytes
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/git/file-handler.ts` — CAP-6-gated raw text/binary handler, marker-based wildcard decode, local GitPathError/GitFileError classifier
+- `packages/server/src/routes/api.ts` — `app.get` registration for `GET /api/workflows/runs/:runId/git/file/*` with the OpenAPI wildcard comment; no `requireWebUser`
+- `packages/server/src/routes/api.git-changes.test.ts` — RED/GREEN raw-route cases on the existing isolated mock graph
+
+**Acceptance criteria verified**:
+- [x] Add RED raw-route cases to the existing isolated api.git-changes test and make all git HTTP and checkout-gate tests plus server type-check pass.
+- [x] Register GET /api/workflows/runs/:runId/git/file/* with app.get and the plan's wildcard/OpenAPI explanatory comment; do not add requireWebUser.
+- [x] Extract the wildcard from the first /git/file/ marker, decode exactly once, validate before fileAt, and preserve encoded slash, colon, dash, glob, space, and newline paths while refusing traversal, absolutes, NUL, malformed encoding, and invalid/missing source.
+- [x] worktree maps to { kind: worktree } and head maps to { kind: tree, treeIsh: HEAD }; CAP-6 is JSON 200 with no ETag, missing run/file/path and opaque errors match the locked bodies, and a post-gate I/O rejection rechecks the gate once.
+- [x] Text returns actual bytes as text/plain; charset=utf-8 and binary returns non-empty actual bytes as application/octet-stream with attachment filename download; both use a quoted 64-hex ETag.
+- [x] Each entered request pairs git.file_started with exactly one completed/failed event using only the locked allowlisted fields and never leaks paths/messages.
+
+**Learnings**:
+- Plan Task 4 implementation shape is the source of truth; prettier collapsed the ternary Content-Type onto one line.
+- GREEN gate: `( cd packages/server && bun test src/routes/api.git-changes.test.ts )`, `( cd packages/server && bun test src/routes/git/checkout-gate.test.ts )`, `( cd packages/server && bun run type-check )`.
+- US-005 regenerates `api.generated.d.ts` from a running server; the raw wildcard must stay absent from OpenAPI.
+- Rule of Three still holds: keep the file-route classifier local even though it duplicates diff-handler.
+
+---

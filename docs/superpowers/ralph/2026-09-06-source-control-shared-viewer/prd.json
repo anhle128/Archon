@@ -15,8 +15,8 @@
       "technicalNotes": "Plan Task 1 (docs/superpowers/plans/2026-09-06-source-control-shared-viewer.md:167). Create git-path.ts and git-path.test.ts. Follow locked path rules at plan:31-35 and implementation/test shape at plan:176-322. This is internal package API only.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/git/src/git-path.ts, packages/git/src/git-path.test.ts."
     },
     {
       "id": "US-002",
@@ -32,10 +32,12 @@
         "In the same change, update exactly the 31 existing @archon/git mock.module factories listed in plan Task 2 with fileAt and fileDiff stubs, and make the specified rg inventory equal 31."
       ],
       "technicalNotes": "Plan Task 2 (plan:324-792); current exec wrapper is packages/git/src/exec.ts:67-78 and root exports start at packages/git/src/index.ts:1. Create file-read.ts/test.ts; update exec.ts/index.ts and the exact 31 test mocks. Use plan:101-157 for public contracts and plan:31-35 for security. Verify with the exact Task 2 commands, never bare root bun test.",
-      "dependsOn": ["US-001"],
+      "dependsOn": [
+        "US-001"
+      ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/git/src/exec.ts, packages/git/src/file-read.ts, packages/git/src/file-read.test.ts, packages/git/src/index.ts, and the 31 @archon/git mock.module factories."
     },
     {
       "id": "US-003",
@@ -50,10 +52,12 @@
         "Each entered request emits git.diff_started and exactly one terminal event; failure logs contain only runId and stable errorType, and responses/logs never leak requested paths or checkout paths."
       ],
       "technicalNotes": "Plan Task 3 (plan:793-1081). Existing inline checkout gate is packages/server/src/routes/git/changes-handler.ts:1-80; schemas are packages/server/src/routes/schemas/git.schemas.ts:1-32; existing registration is packages/server/src/routes/api.ts:4949-4951. Create run-checkout.ts, path-input.ts, diff-route.ts, diff-handler.ts; modify only planned server files. The GitPathError/GitFileError structural classifier is required because those classes stay internal.",
-      "dependsOn": ["US-002"],
+      "dependsOn": [
+        "US-002"
+      ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/server/src/routes/git/run-checkout.ts, path-input.ts, diff-route.ts, diff-handler.ts, changes-handler.ts, git.schemas.ts, api.ts, api.git-changes.test.ts."
     },
     {
       "id": "US-004",
@@ -68,10 +72,12 @@
         "Each entered request pairs git.file_started with exactly one completed/failed event using only the locked allowlisted fields and never leaks paths/messages."
       ],
       "technicalNotes": "Plan Task 4 (plan:1082-1206). Create packages/server/src/routes/git/file-handler.ts; modify api.ts and the existing api.git-changes.test.ts mock graph. Reuse US-003 loadRunCheckout/path-input and duplicate only the two local error classifier uses under Rule of Three.",
-      "dependsOn": ["US-003"],
+      "dependsOn": [
+        "US-003"
+      ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/server/src/routes/git/file-handler.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.git-changes.test.ts."
     },
     {
       "id": "US-005",
@@ -86,7 +92,10 @@
         "Extract assertApiResponseOk so fetchJSON and raw calls retain the existing status, path-only URL, and 200-character bounded non-2xx behavior."
       ],
       "technicalNotes": "Plan Task 5 (plan:1207-1397). Current shared fetch behavior is packages/web/src/lib/api.ts:64-75. Regenerate packages/web/src/lib/api.generated.d.ts with server port 3090; update api.ts and api.git-changes.test.ts only. JSON types are generated; raw wildcard types are intentionally hand-authored.",
-      "dependsOn": ["US-003", "US-004"],
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ],
       "priority": 5,
       "passes": false,
       "notes": ""
@@ -103,7 +112,9 @@
         "Focused adapter and highlighting tests plus web type-check pass."
       ],
       "technicalNotes": "Plan Task 6 (plan:1398-1641). Update packages/web/package.json and bun.lock; create git-hunk-adapter.ts/test.ts and syntax-highlight.tsx/test.ts under source-control. Use generated types from US-005. The global stylesheet already supplies github-dark-dimmed; do not add another theme.",
-      "dependsOn": ["US-005"],
+      "dependsOn": [
+        "US-005"
+      ],
       "priority": 6,
       "passes": false,
       "notes": ""
@@ -138,7 +149,10 @@
         "no_checkout and container have their distinct availability copy/Reload rule; errors retain the heading with Could not open this file. and no exception text. No branch renders Snapshot, write/History controls, Error:, unsupported, warning glyph, or console markup."
       ],
       "technicalNotes": "Plan Task 8 (plan:1748-1927). Create source-control-diff.css, file-viewer.tsx, and file-viewer.test.tsx. Use react-diff-view style/index.css plus local CSS, US-006's adapter/highlighter, and API types from US-005. Keep the component independent of SourceControlTab, TanStack Query, run IDs, and console modules.",
-      "dependsOn": ["US-005", "US-006"],
+      "dependsOn": [
+        "US-005",
+        "US-006"
+      ],
       "priority": 8,
       "passes": false,
       "notes": ""
@@ -153,11 +167,15 @@
         "loadViewerFile routes M to the diff client, A to worktree raw, D to HEAD raw, and binary M through one worktree raw probe for its content hash/download URL; CAP-6 becomes unavailable and other non-abort failures become the quiet error state.",
         "A monotonically increasing request ID and AbortController prevent late results; abort on reselection, Reload, Cancel, Close, Escape, accepting pending data, run change, and unmount. Cancel/Close/Escape clear selection and restore listbox focus as specified.",
         "Keep displayed selectedFile/viewerState separate from pending viewer data and existing displayed/pending list snapshots. A Reload uses a successful refetch result only, rereads a retained selected path without replacing visible content, compares pure viewer fingerprints, and exposes stale only after matching candidate list/viewer data is ready.",
-        "Accepting Changed on disk — Reload atomically swaps list and viewer candidates, closes when the accepted list cannot retain the selected path, and uses the candidate file object if status changes. Same list revision never proves selected content is unchanged.",
+        "Accepting Changed on disk \u2014 Reload atomically swaps list and viewer candidates, closes when the accepted list cannot retain the selected path, and uses the candidate file object if status changes. Same list revision never proves selected content is unchanged.",
         "Preserve the existing infinite-stale/no-retry/no-poll/no-focus/no-reconnect query options and the WorkflowExecution mount boundary; do not send workingPath or import/modify console files."
       ],
       "technicalNotes": "Plan Task 9 (plan:1928-2160). Current tab state/query boundary is packages/web/src/components/workflows/source-control/source-control-tab.tsx:13-59. Create source-control-split.tsx and use-stacked-viewport.ts; modify source-control-tab.tsx and the established integration test only. Reuse SourceControlPanel (US-007), FileViewer (US-008), and clients (US-005). Implement the plan's exact viewerFingerprint forms and candidate sequencing.",
-      "dependsOn": ["US-005", "US-007", "US-008"],
+      "dependsOn": [
+        "US-005",
+        "US-007",
+        "US-008"
+      ],
       "priority": 9,
       "passes": false,
       "notes": ""
@@ -169,12 +187,22 @@
       "acceptanceCriteria": [
         "Run every focused test in the intended isolated process, then bun --filter @archon/git test, bun --filter @archon/server test, bun --filter @archon/web test, bun run validate, and git diff --check; all pass with no warnings, unexpected network requests, or React act warnings.",
         "Inspect dev...HEAD scope and verify no forbidden console import or Shiki/Monaco/refractor use, exactly one react-diff-view 3.3.3 manifest entry, and no database/environment/process/write/History/polling additions.",
-        "Perform the specified legacy-screen manual check for M and A/D opening, 20–70% resize, sub-900 stacking, independent scrolling, 4.5:1 marker contrast, frozen Reload, no console errors, and no write/History controls; if no suitable live run exists, record that limitation without fabricating a run.",
+        "Perform the specified legacy-screen manual check for M and A/D opening, 20\u201370% resize, sub-900 stacking, independent scrolling, 4.5:1 marker contrast, frozen Reload, no console errors, and no write/History controls; if no suitable live run exists, record that limitation without fabricating a run.",
         "Confirm the full acceptance matrix: literal and contained path behavior, tree-read argv behavior, CAP-6, binary bytes/download, stale same-revision content, logs, virtual keyboard behavior, and UI dependency constraints.",
         "Only after every gate passes, change exactly 1-2-open-a-changed-file-in-the-shared-viewer from backlog to done in sprint-status.yaml; leave last_updated, Story 1.3, and Epic 1 unchanged."
       ],
       "technicalNotes": "Plan Task 10 (plan:2161-2301) is the only authorization for _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml. Follow its exact focused commands, affected-package suites, scope searches, acceptance matrix, and manual-check handling. PR handoff remains outside feature implementation but must follow plan:2312 onward when a PR is opened.",
-      "dependsOn": ["US-001", "US-002", "US-003", "US-004", "US-005", "US-006", "US-007", "US-008", "US-009"],
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008",
+        "US-009"
+      ],
       "priority": 10,
       "passes": false,
       "notes": ""
