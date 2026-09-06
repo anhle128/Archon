@@ -171,6 +171,15 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         timestamp: Date.now(),
       });
 
+    case 'interaction_resolved':
+      return JSON.stringify({
+        type: 'workflow_status',
+        runId: event.runId,
+        workflowName: '',
+        status: event.resumed ? 'running' : 'paused',
+        timestamp: Date.now(),
+      });
+
     case 'workflow_cancelled':
       return JSON.stringify({
         type: 'workflow_status',
@@ -236,6 +245,29 @@ function dataStr(data: Record<string, unknown>, ...keys: string[]): string | und
     if (typeof v === 'string') return v;
   }
   return undefined;
+}
+
+/** Read the first present boolean field from a parsed event `data` object. */
+function dataBool(data: Record<string, unknown>, ...keys: string[]): boolean | undefined {
+  for (const k of keys) {
+    const v = data[k];
+    if (typeof v === 'boolean') return v;
+  }
+  return undefined;
+}
+
+/**
+ * Persisted `interaction_resolved` → refetch status. Purge rows follow
+ * `terminal_status`; answered rows follow `resumed`. Missing/unknown `resumed`
+ * fails safe to `paused` rather than claiming the run is active.
+ */
+function interactionResolvedStatusFromData(
+  data: Record<string, unknown>
+): 'running' | 'paused' | 'failed' | 'cancelled' {
+  if (dataBool(data, 'purged') === true) {
+    return dataStr(data, 'terminal_status') === 'failed' ? 'failed' : 'cancelled';
+  }
+  return dataBool(data, 'resumed') === true ? 'running' : 'paused';
 }
 
 interface RuntimeNodeMetadataPayload {
@@ -328,6 +360,7 @@ export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
   'approval_requested',
   'approval_received',
   'node_awaiting',
+  'interaction_resolved',
 ];
 
 /**
@@ -384,6 +417,20 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
       runId,
       workflowName: '',
       status: 'paused',
+      timestamp,
+    };
+    return JSON.stringify(payload);
+  }
+
+  // Ask answer/purge → identifier-only refetch. Answered rows map resumed→
+  // running/paused; purged rows map terminal_status→failed/cancelled. Never
+  // copy envelope, answer, questions, options, or toolUseId onto SSE.
+  if (row.event_type === 'interaction_resolved') {
+    const payload: WorkflowStatusSsePayload = {
+      type: 'workflow_status',
+      runId,
+      workflowName: '',
+      status: interactionResolvedStatusFromData(data),
       timestamp,
     };
     return JSON.stringify(payload);
