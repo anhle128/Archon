@@ -4871,16 +4871,18 @@ async function executeLoopNode(
    * logs/events (e.g. loop_iteration_failed with per-iteration data); this
    * closes the node's lifecycle exactly once.
    */
+  interface LoopFailureExtras {
+    output?: string;
+    costUsd?: number;
+    tokens?: TokenUsage;
+    loopIterations?: number;
+    /** Extra persisted node_failed payload (e.g. the failing command name). */
+    data?: Record<string, unknown>;
+  }
+
   const failLoopNode = async (
     error: string,
-    extras: {
-      output?: string;
-      costUsd?: number;
-      tokens?: TokenUsage;
-      loopIterations?: number;
-      /** Extra persisted node_failed payload (e.g. the failing command name). */
-      data?: Record<string, unknown>;
-    } = {}
+    extras: LoopFailureExtras = {}
   ): Promise<NodeExecutionResult> => {
     getLog().error({ nodeId: node.id, error, ...(extras.data ?? {}) }, 'loop_node.failed');
     await logNodeError(logDir, workflowRun.id, node.id, error);
@@ -5109,6 +5111,33 @@ async function executeLoopNode(
         logEventStoreError(err, i);
       });
     await recordLoopStatus('iteration_started', String(i));
+
+    const failLoopIteration = async (
+      iterationError: string,
+      extras: LoopFailureExtras,
+      nodeError = `Loop iteration ${String(i)} failed: ${iterationError}`
+    ): Promise<NodeExecutionResult> => {
+      const duration = Date.now() - iterationStart;
+      getWorkflowEventEmitter().emit({
+        type: 'loop_iteration_failed',
+        runId: workflowRun.id,
+        nodeId: node.id,
+        iteration: i,
+        error: iterationError,
+      });
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'loop_iteration_failed',
+          step_name: stepName,
+          data: { iteration: i, error: iterationError, duration, nodeId: node.id },
+        })
+        .catch((eventError: Error) => {
+          logEventStoreError(eventError, i);
+        });
+      await recordLoopStatus('iteration_failed', String(i));
+      return failLoopNode(nodeError, extras);
+    };
 
     // Session threading. Fresh loop runs start iteration 1 without a prior
     // session. Resumed interactive loops continue from the session captured
@@ -5677,7 +5706,7 @@ async function executeLoopNode(
             `Loop node '${node.id}' stopped during iteration ${String(i)} (${effectiveStatus})`,
             msgContext
           );
-          return await failLoopNode(`Workflow ${effectiveStatus}`, {
+          return await failLoopIteration(`Workflow ${effectiveStatus}`, {
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             loopIterations: i,
@@ -5687,27 +5716,8 @@ async function executeLoopNode(
       } catch (error) {
         foldIterationUsage();
         const err = error as Error;
-        const duration = Date.now() - iterationStart;
         getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
-        getWorkflowEventEmitter().emit({
-          type: 'loop_iteration_failed',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          iteration: i,
-          error: err.message,
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'loop_iteration_failed',
-            step_name: stepName,
-            data: { iteration: i, error: err.message, duration, nodeId: node.id },
-          })
-          .catch((evtErr: Error) => {
-            logEventStoreError(evtErr, i);
-          });
-        await recordLoopStatus('iteration_failed', String(i));
-        return await failLoopNode(`Loop iteration ${i} failed: ${err.message}`, {
+        return await failLoopIteration(err.message, {
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
           loopIterations: i,
@@ -5769,37 +5779,13 @@ async function executeLoopNode(
       // the whole answer arrived as the payload. Failing that would make every
       // Claude/Codex structured loop fail on iteration 1.
       if (!iterationIdleTimedOut && fullOutput.trim() === '' && attemptStructured === undefined) {
-        const iterationDuration = Date.now() - iterationStart;
         const emptyError =
           'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.';
         getLog().error(
-          { nodeId: node.id, iteration: i, durationMs: iterationDuration },
+          { nodeId: node.id, iteration: i, durationMs: Date.now() - iterationStart },
           'loop_node.iteration_empty_output'
         );
-        getWorkflowEventEmitter().emit({
-          type: 'loop_iteration_failed',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          iteration: i,
-          error: emptyError,
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'loop_iteration_failed',
-            step_name: stepName,
-            data: {
-              iteration: i,
-              error: emptyError,
-              duration: iterationDuration,
-              nodeId: node.id,
-            },
-          })
-          .catch((evtErr: Error) => {
-            logEventStoreError(evtErr, i);
-          });
-        await recordLoopStatus('iteration_failed', String(i));
-        return failLoopNode(`Loop iteration ${i} failed: ${emptyError}`, {
+        return failLoopIteration(emptyError, {
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
           loopIterations: i,
@@ -5872,15 +5858,17 @@ async function executeLoopNode(
           );
           continue attempts;
         }
-        return await failLoopNode(
-          `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`,
+        const validationError = `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider's structured output failed schema validation: ${validation.errors.join('; ')}`;
+        return await failLoopIteration(
+          validationError,
           {
             output: lastIterationOutput,
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             loopIterations: i,
             data: { iteration: i },
-          }
+          },
+          validationError
         );
       }
 
@@ -5896,17 +5884,19 @@ async function executeLoopNode(
       }
       // Report the real cause: a timeout produces no payload either, and calling
       // that "the model replied with prose" would send the author down the wrong path.
-      return await failLoopNode(
-        iterationIdleTimedOut
-          ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.`
-          : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`,
+      const missingStructuredOutputError = iterationIdleTimedOut
+        ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.`
+        : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`;
+      return await failLoopIteration(
+        missingStructuredOutputError,
         {
           output: lastIterationOutput,
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
           loopIterations: i,
           data: { iteration: i },
-        }
+        },
+        missingStructuredOutputError
       );
     }
 
@@ -5922,14 +5912,16 @@ async function executeLoopNode(
             : JSON.stringify(iterationPayload);
       } catch (serializeErr) {
         const err = serializeErr as Error;
-        return await failLoopNode(
-          `Loop node '${node.id}': failed to serialize structured_output to JSON: ${err.message}`,
+        const serializationError = `Loop node '${node.id}': failed to serialize structured_output to JSON: ${err.message}`;
+        return await failLoopIteration(
+          serializationError,
           {
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             loopIterations: i,
             data: { iteration: i },
-          }
+          },
+          serializationError
         );
       }
       lastIterationStructuredOutput = iterationPayload;
@@ -5988,10 +5980,9 @@ async function executeLoopNode(
     // until #2563; do not "fix" the asymmetry back.
     let bashComplete = false;
     if (loop.until_bash && !signalDetected && !fieldComplete) {
-      // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
-      // to the caller instead of being swallowed by the per-iteration catch.
-      const loopBashPath = resolveBashPath();
+      let loopBashPath: string | undefined;
       try {
+        loopBashPath = resolveBashPath();
         const { prompt: bashPrompt } = substituteWorkflowVariables(
           loop.until_bash,
           workflowRun.id,
@@ -6040,24 +6031,44 @@ async function executeLoopNode(
       } catch (e) {
         const bashErr = e as NodeJS.ErrnoException;
         // System-level errors (ENOENT/EACCES/ENOTDIR) mean the bash binary itself
-        // is unreachable — looping forever on bashComplete=false is wrong. Throw
-        // out of the loop with a clear actionable error instead.
+        // is unreachable — looping forever on bashComplete=false is wrong. Close
+        // the iteration and fail the node with a clear actionable error instead.
         if (bashErr.code === 'ENOENT' || bashErr.code === 'EACCES' || bashErr.code === 'ENOTDIR') {
           getLog().error({ err: bashErr, nodeId: node.id, iteration: i }, 'loop.until_bash_failed');
-          throw new Error(
+          const executionError =
             `Loop node '${node.id}' until_bash failed: cannot execute bash at ` +
-              `'${loopBashPath}' (${bashErr.code}). Set ARCHON_BASH_PATH if Git Bash ` +
-              'is installed elsewhere.'
+            `'${loopBashPath ?? 'unknown'}' (${bashErr.code}). Set ARCHON_BASH_PATH if Git Bash ` +
+            'is installed elsewhere.';
+          return failLoopIteration(
+            executionError,
+            {
+              output: lastIterationOutput,
+              costUsd: loopTotalCostUsd,
+              ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+              loopIterations: i,
+              data: { iteration: i },
+            },
+            executionError
           );
         }
         // Non-exec errors (resolveBashPath validation, template substitution, etc.)
-        // have no err.code — they should halt the loop, not silently re-iterate.
+        // have no err.code — they halt the loop and close the current iteration.
         if (typeof bashErr.code !== 'number') {
           getLog().error(
             { err: bashErr, nodeId: node.id, iteration: i },
             'loop.until_bash_unexpected_error'
           );
-          throw bashErr;
+          return failLoopIteration(
+            bashErr.message,
+            {
+              output: lastIterationOutput,
+              costUsd: loopTotalCostUsd,
+              ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+              loopIterations: i,
+              data: { iteration: i },
+            },
+            bashErr.message
+          );
         }
         // Numeric exit code from the bash script = condition not met yet, keep looping.
         bashComplete = false;

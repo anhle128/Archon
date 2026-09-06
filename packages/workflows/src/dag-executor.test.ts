@@ -24451,6 +24451,78 @@ describe('executeDagWorkflow -- command and prompt transcripts', () => {
     expect(rows[2]?.kind === 'status' ? rows[2].payload.detail : undefined).toBe('1');
   });
 
+  it('closes an in-flight iteration when structured output validation fails', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: '{"confidence":0.9}' };
+      yield {
+        type: 'result',
+        sessionId: 'invalid-structured-session',
+        structuredOutput: { confidence: 0.9 },
+      };
+    });
+
+    const store = createMockStore();
+    const workflowRun = await runNodes(store, [
+      {
+        id: 'refine',
+        loop: { prompt: 'Iterate.', until: 'DONE', max_iterations: 3 },
+        output_format: {
+          type: 'object',
+          properties: { verdict: { type: 'string' }, confidence: { type: 'number' } },
+          required: ['verdict'],
+        },
+      },
+    ]);
+    const rows = await store.listNodeMessages(workflowRun.id, 'refine');
+    expect(transcriptTimeline(rows)).toEqual([
+      'started',
+      'iteration_started',
+      'text',
+      'iteration_failed',
+      'failed',
+    ]);
+    expect(
+      (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.some(
+        call =>
+          (call[0] as { event_type?: string; step_name?: string }).event_type ===
+            'loop_iteration_failed' && (call[0] as { step_name?: string }).step_name === 'refine'
+      )
+    ).toBe(true);
+  });
+
+  it('closes an in-flight iteration when the deterministic completion check cannot start', async () => {
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'Work completed without a signal.' };
+      yield { type: 'result', sessionId: 'until-bash-session' };
+    });
+
+    const previousBashPath = process.env.ARCHON_BASH_PATH;
+    process.env.ARCHON_BASH_PATH = join(testDir, 'missing-bash');
+    try {
+      const store = createMockStore();
+      const workflowRun = await runNodes(store, [
+        {
+          id: 'refine',
+          loop: { prompt: 'Iterate.', until_bash: 'exit 1', max_iterations: 3 },
+        },
+      ]);
+      const rows = await store.listNodeMessages(workflowRun.id, 'refine');
+      expect(transcriptTimeline(rows)).toEqual([
+        'started',
+        'iteration_started',
+        'text',
+        'iteration_failed',
+        'failed',
+      ]);
+    } finally {
+      if (previousBashPath === undefined) {
+        delete process.env.ARCHON_BASH_PATH;
+      } else {
+        process.env.ARCHON_BASH_PATH = previousBashPath;
+      }
+    }
+  });
+
   it('records started then completed on finalize-on-approve resume without a new iteration marker', async () => {
     mockSendQueryDag.mockImplementation(function* () {
       yield { type: 'assistant', content: 'should never run' };
