@@ -12421,6 +12421,50 @@ describe('executeDagWorkflow -- retry checkpoints', () => {
     }
   });
 
+  it('skips checkpointing when cwd is not a git repository', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-folder-checkpoint-test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    const upsertCheckpoint = mock(
+      async (data: Parameters<NonNullable<IWorkflowStore['upsertWorkflowNodeCheckpoint']>>[0]) => ({
+        ...data,
+        created_at: new Date(),
+      })
+    );
+    const store = createMockStore();
+    store.upsertWorkflowNodeCheckpoint = upsertCheckpoint;
+
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'dag-folder-checkpoint-test',
+          nodes: [{ id: 'bash-node', bash: 'echo folder-ok' }],
+        },
+        makeWorkflowRun('folder-checkpoint-run'),
+        'claude',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      );
+
+      expect(upsertCheckpoint).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('persists loop_group body checkpoints with namespaced node ids when workflow mutates checkout', async () => {
     const testDir = join(
       tmpdir(),

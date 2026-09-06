@@ -9,7 +9,13 @@ import { existsSync, writeFileSync } from 'fs';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
-import { execFileAsync, resolveBashPath, upsertCheckpointRef } from '@archon/git';
+import {
+  execFileAsync,
+  isGitWorkTree,
+  resolveBashPath,
+  toWorktreePath,
+  upsertCheckpointRef,
+} from '@archon/git';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { resolveWorkflowName } from './router';
@@ -229,6 +235,17 @@ async function createPreNodeCheckpoint(params: {
     getLog().warn(
       { workflowRunId: params.workflowRun.id, nodeId: checkpointNodeId },
       'dag.checkpoint_store_unavailable'
+    );
+    return;
+  }
+
+  // Folder projects and other non-git cwd values have no checkout to snapshot.
+  // Retry refs are git objects (`refs/archon/checkpoints/...`); requiring a
+  // repo here would fail `--folder` / `--container` runs before the first node.
+  if (!(await isGitWorkTree(toWorktreePath(params.cwd)))) {
+    getLog().debug(
+      { workflowRunId: params.workflowRun.id, nodeId: checkpointNodeId },
+      'dag.checkpoint_skipped_not_git'
     );
     return;
   }

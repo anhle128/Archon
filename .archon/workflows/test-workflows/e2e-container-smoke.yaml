@@ -5,6 +5,10 @@
 # overlay of the folder root, and that an overlay write is visible in the merged
 # view across separate exec calls within the run.
 #
+# The CI scratch dir is intentionally NOT a git repo (folder-project contract).
+# Pre-node retry checkpoints must no-op there; they are git refs and only apply
+# inside a work tree. Do not `git init` the scratch to paper over that.
+#
 # The HOST-folder-unchanged and clean-teardown assertions live in the CI job
 # (.github/workflows/e2e-smoke.yml): they can only be observed from the host after
 # the container is gone, because Phase B discards the overlay on teardown.
