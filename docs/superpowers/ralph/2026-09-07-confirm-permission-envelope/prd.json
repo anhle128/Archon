@@ -17,8 +17,8 @@
       "technicalNotes": "Follow plan Task 1 (docs/superpowers/plans/2026-09-07-confirm-permission-envelope.md:178-270) and Authoritative Contracts (lines 97-123). Modify packages/workflows/src/schemas/pending-interaction.ts and packages/workflows/src/schemas/pending-interaction.test.ts.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/workflows/src/schemas/pending-interaction.ts, packages/workflows/src/schemas/pending-interaction.test.ts. Commit cfc8747b."
     },
     {
       "id": "US-002",
@@ -41,8 +41,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/core/src/db/workflow-pending-interactions.ts, packages/core/src/db/workflow-pending-interactions.test.ts. Commit e46cf29c."
     },
     {
       "id": "US-003",
@@ -65,8 +65,8 @@
         "US-002"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/core/src/operations/workflow-operations.ts, packages/core/src/operations/workflow-operations.test.ts, packages/server/src/routes/api.workflow-runs.test.ts, packages/cli/src/commands/workflow.test.ts, packages/cli/src/commands/workflow-command-contract.test.ts. Commit 30322393."
     },
     {
       "id": "US-004",
@@ -89,8 +89,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts. Commit 37449709."
     },
     {
       "id": "US-005",
@@ -112,8 +112,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/lib/api.generated.d.ts, _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. Commit a189e2e8. Unblock commits 8a6cc533, 70c241f8, ac3781f4."
     }
   ]
 }
