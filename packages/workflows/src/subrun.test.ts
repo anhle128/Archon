@@ -85,6 +85,7 @@ import type {
   ChildIsolationRequest,
   ChildIsolationResult,
 } from './child-isolation';
+import type { SendQueryOptions } from '@archon/providers/types';
 
 // ---------------------------------------------------------------------------
 // Stateful in-memory store — implements just enough of IWorkflowStore to drive
@@ -278,11 +279,13 @@ class InMemoryStore implements IWorkflowStore {
     const r = this.runs.get(id);
     if (r) {
       r.status = 'paused';
-      r.metadata = {
-        ...r.metadata,
-        approval: { ...approvalContext, resolved: null },
-        ...(extraMetadata ?? {}),
-      };
+      if (approvalContext !== undefined) {
+        r.metadata = {
+          ...r.metadata,
+          approval: { ...approvalContext, resolved: null },
+          ...(extraMetadata ?? {}),
+        };
+      }
     }
     return Promise.resolve();
   };
@@ -547,6 +550,21 @@ function makeFanResolver(root: string): {
   };
   return { resolver, calls };
 }
+
+it('keeps approval metadata absent for an Ask-only pause in the stateful test store', async () => {
+  const store = new InMemoryStore();
+  const run = await store.createWorkflowRun({
+    workflow_name: 'ask-only',
+    conversation_id: 'conversation-1',
+    user_message: 'go',
+    user_id: 'starter-1',
+  });
+
+  await store.pauseWorkflowRun(run.id);
+
+  expect((await store.getWorkflowRun(run.id))?.status).toBe('paused');
+  expect((await store.getWorkflowRun(run.id))?.metadata.approval).toBeUndefined();
+});
 
 describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
   let cwd: string;
@@ -844,6 +862,114 @@ nodes:
     );
     expect(subCompleted?.data?.node_output).toBe('ai-output');
     expect(snapshotOrder).toEqual(['child-gated', 'parent-gated']);
+  });
+
+  it('stores an Ask on the child run and pauses its parent without copying the row', async () => {
+    await writeWorkflow(
+      'child-asks',
+      `
+name: child-asks
+description: child that asks the starter
+nodes:
+  - id: child-review
+    prompt: "ask starter"
+`
+    );
+    await writeWorkflow(
+      'parent-of-ask',
+      `
+name: parent-of-ask
+description: parent that invokes the asking child
+nodes:
+  - id: child
+    workflow: child-asks
+`
+    );
+
+    const store = new InMemoryStore();
+    const provider = {
+      ...makeProvider(),
+      sendQuery: mock(async function* (
+        prompt: string,
+        _cwd: string,
+        _resume?: string,
+        options?: SendQueryOptions
+      ) {
+        if (prompt.includes('ask starter')) {
+          const ask = options?.nativeTools?.find(tool => tool.name === 'AskHuman');
+          if (!ask) throw new Error('AskHuman was not injected into the child node');
+          await ask.handler(
+            {
+              questions: [
+                {
+                  id: 'ship',
+                  prompt: 'Ship it?',
+                  selection: 'single' as const,
+                  options: ['yes', 'no'],
+                  allowOther: false,
+                },
+              ],
+            },
+            { toolUseId: 'toolu_child', sessionId: 'sess-child' }
+          );
+          return;
+        }
+        yield { type: 'assistant', content: 'ai-output' };
+        yield { type: 'result', sessionId: 'sess-parent' };
+      }),
+    };
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+    const parent = await discover('parent-of-ask');
+
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'go',
+      'conv-db',
+      { userId: 'starter-1' }
+    );
+
+    expect(result.success && 'paused' in result && result.paused).toBe(true);
+    const parentRun = [...store.runs.values()].find(run => run.workflow_name === 'parent-of-ask');
+    const childRun = [...store.runs.values()].find(run => run.workflow_name === 'child-asks');
+    if (!parentRun || !childRun) throw new Error('Expected parent and child workflow runs');
+
+    expect(childRun.parent_run_id).toBe(parentRun.id);
+    expect(childRun.user_id).toBe('starter-1');
+    expect(childRun.status).toBe('paused');
+    expect(childRun.metadata.approval).toBeUndefined();
+    expect(parentRun.status).toBe('paused');
+    expect(parentRun.metadata.approval).toMatchObject({
+      type: 'child_workflow',
+      nodeId: 'child',
+      childRunId: childRun.id,
+    });
+
+    expect(await store.listPendingInteractions(childRun.id)).toEqual([
+      expect.objectContaining({
+        workflow_run_id: childRun.id,
+        node_id: 'child-review',
+        tool_use_id: 'toolu_child',
+        kind: 'ask',
+        status: 'pending',
+        provider_session_id: 'sess-child',
+      }),
+    ]);
+    expect(await store.listPendingInteractions(parentRun.id)).toEqual([]);
+    expect(
+      store.events.some(
+        event =>
+          event.workflow_run_id === childRun.id &&
+          event.step_name === 'child-review' &&
+          event.event_type === 'node_completed'
+      )
+    ).toBe(false);
   });
 
   it('a throw during the parent auto-resume pass lands the parent in failed, never wedged at running', async () => {
