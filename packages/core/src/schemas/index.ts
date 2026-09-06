@@ -126,6 +126,10 @@ export {
 } from './workflow-env';
 export type { EnvPatches, WorkflowEnvRow, WorkflowEnvSummary } from './workflow-env';
 
+// WorkflowNodeMessage
+export { workflowNodeMessageRowSchema } from './workflow-node-message';
+export type { WorkflowNodeMessageRow } from './workflow-node-message';
+
 // UsageReport
 export {
   usageDimensionsSchema,

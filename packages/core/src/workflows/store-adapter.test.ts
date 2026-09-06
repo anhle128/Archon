@@ -152,6 +152,10 @@ mock.module('../db/workflow-node-sessions', () => ({
   setWorkflowNodeSession: mock(() => Promise.resolve()),
   deleteWorkflowNodeSessions: mock(() => Promise.resolve()),
 }));
+mock.module('../db/workflow-node-messages', () => ({
+  appendNodeMessage: mock(() => Promise.resolve({ id: 'msg-1' })),
+  listNodeMessages: mock(() => Promise.resolve([])),
+}));
 
 class TestTransformError extends Error {
   readonly code: string;
