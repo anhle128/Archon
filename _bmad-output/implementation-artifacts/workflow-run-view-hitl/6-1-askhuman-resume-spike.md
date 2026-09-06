@@ -14,15 +14,16 @@ This document cites evidence only; it does not copy prompts, answers, transcript
 Source: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/evidence/6-1-claude-0.3.209.json`.
 `schemaVersion` is `1` and `sdkVersion` is `0.3.209`.
 Both required aliases were recorded: `sonnet` and `opus`.
+Each model experiment used fresh, non-serialized answer and completion markers.
 `requires_action` was not observed on either model.
 `failureCategory` is null on both models.
 
 `sonnet` host-abort facts: `handlerCallsBeforePause=1`, `handlerCallsAfterResume=1`, `sessionIdCaptured=true`, `resumedSameSession=true`, `completionMarkerSeen=true`.
-`sonnet` deferred facts: `firstStopReason=tool_deferred`, `deferredToolUsePresent=true`, `handlerCallsBeforePause=0`, one PreToolUse tool-use id (`toolu_013opg8M9QjsxQqrENdftExd`, not repeated on resume), `updatedInputReachedHandler=false`, `resumedHandlerCalls=0`, `resumedSuccessfully=true`, `unavailable=false`.
+`sonnet` deferred facts: `firstStopReason=tool_deferred`, `deferredToolUsePresent=true`, `handlerCallsBeforePause=0`, one PreToolUse tool-use id (`toolu_01VxPquujECqdWQFWb4ucU8B`, not repeated on resume), `updatedInputReachedHandler=false`, `resumedHandlerCalls=0`, `resumedSuccessfully=true`, `unavailable=false`.
 `sonnet` classification is `host-abort-new-user-message` because the same-id defer round trip is incomplete.
 
 `opus` host-abort facts: `handlerCallsBeforePause=1`, `handlerCallsAfterResume=1`, `sessionIdCaptured=true`, `resumedSameSession=true`, `completionMarkerSeen=true`.
-`opus` deferred facts: `firstStopReason=tool_deferred`, `deferredToolUsePresent=true`, `handlerCallsBeforePause=0`, one PreToolUse tool-use id (`toolu_015GjhdGn47hac4k3uPnq17M`, not repeated on resume), `updatedInputReachedHandler=false`, `resumedHandlerCalls=0`, `resumedSuccessfully=true`, `unavailable=false`.
+`opus` deferred facts: `firstStopReason=tool_deferred`, `deferredToolUsePresent=true`, `handlerCallsBeforePause=0`, one PreToolUse tool-use id (`toolu_01XZ1ZkrwXwYomH2q3USt76m`, not repeated on resume), `updatedInputReachedHandler=false`, `resumedHandlerCalls=0`, `resumedSuccessfully=true`, `unavailable=false`.
 `opus` classification is `host-abort-new-user-message` because the same-id defer round trip is incomplete.
 
 Top-level classification is `host-abort-new-user-message`.
@@ -33,15 +34,16 @@ Both aliases independently proved the same non-inconclusive protocol on the requ
 Source: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/evidence/6-1-claude-0.3.261.json`.
 `schemaVersion` is `1` and `sdkVersion` is `0.3.261`.
 Both required aliases were recorded: `sonnet` and `opus`.
+Each model experiment used fresh, non-serialized answer and completion markers.
 `requires_action` was not observed on either model.
 `failureCategory` is null on both models.
 
 `sonnet` host-abort facts: `handlerCallsBeforePause=1`, `handlerCallsAfterResume=1`, `sessionIdCaptured=true`, `resumedSameSession=true`, `completionMarkerSeen=true`.
-`sonnet` deferred facts: `firstStopReason=tool_deferred`, `deferredToolUsePresent=true`, `handlerCallsBeforePause=0`, repeated same PreToolUse tool-use id (`toolu_016wYtjStkP3xyooRiRXFQLV` then `toolu_016wYtjStkP3xyooRiRXFQLV`), `updatedInputReachedHandler=true`, `resumedHandlerCalls=1`, `resumedSuccessfully=true`, `unavailable=false`.
+`sonnet` deferred facts: `firstStopReason=tool_deferred`, `deferredToolUsePresent=true`, `handlerCallsBeforePause=0`, repeated same PreToolUse tool-use id (`toolu_01P1ef9TLicKJpRKKwj5f4xb` then `toolu_01P1ef9TLicKJpRKKwj5f4xb`), `updatedInputReachedHandler=true`, `resumedHandlerCalls=1`, `resumedSuccessfully=true`, `unavailable=false`.
 `sonnet` classification is `tool-deferred-reissue` because the complete same-id defer round trip is preferred over an also-proved host abort.
 
 `opus` host-abort facts: `handlerCallsBeforePause=1`, `handlerCallsAfterResume=1`, `sessionIdCaptured=true`, `resumedSameSession=true`, `completionMarkerSeen=true`.
-`opus` deferred facts: `firstStopReason=tool_deferred`, `deferredToolUsePresent=true`, `handlerCallsBeforePause=0`, repeated same PreToolUse tool-use id (`toolu_016ETV9P2mevok1rgUoJeL3Y` then `toolu_016ETV9P2mevok1rgUoJeL3Y`), `updatedInputReachedHandler=true`, `resumedHandlerCalls=1`, `resumedSuccessfully=true`, `unavailable=false`.
+`opus` deferred facts: `firstStopReason=tool_deferred`, `deferredToolUsePresent=true`, `handlerCallsBeforePause=0`, repeated same PreToolUse tool-use id (`toolu_01Bh8Knnydz2Utx5XC9TmC2D` then `toolu_01Bh8Knnydz2Utx5XC9TmC2D`), `updatedInputReachedHandler=true`, `resumedHandlerCalls=1`, `resumedSuccessfully=true`, `unavailable=false`.
 `opus` classification is `tool-deferred-reissue` because the complete same-id defer round trip is preferred over an also-proved host abort.
 
 Top-level classification is `tool-deferred-reissue`.

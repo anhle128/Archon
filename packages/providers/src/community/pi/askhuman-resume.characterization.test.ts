@@ -113,6 +113,10 @@ describe('Pi AskHuman durable resume characterization', () => {
       first = undefined;
 
       const reopened = SessionManager.open(sessionFile);
+      expect(reopened.buildSessionContext().messages.at(-1)).toMatchObject({
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: toolUseId, name: 'AskHuman' }],
+      });
       reopened.appendMessage(answer);
       second = await createSession(reopened);
       expect(second.agent.state.messages.at(-1)).toEqual(answer);
@@ -136,9 +140,14 @@ describe('Pi AskHuman durable resume characterization', () => {
       second = undefined;
 
       const reopenedAgain = SessionManager.open(sessionFile);
-      const persistedTail = reopenedAgain.buildSessionContext().messages.slice(-2);
-      expect(persistedTail[0]).toEqual(answer);
-      expect(persistedTail[1]).toMatchObject({
+      const persistedTail = reopenedAgain.buildSessionContext().messages.slice(-3);
+      expect(persistedTail).toHaveLength(3);
+      expect(persistedTail[0]).toMatchObject({
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: toolUseId, name: 'AskHuman' }],
+      });
+      expect(persistedTail[1]).toEqual(answer);
+      expect(persistedTail[2]).toMatchObject({
         role: 'assistant',
         content: [{ type: 'text', text: 'continued after AskHuman' }],
         provider: 'archon-askhuman-spike',

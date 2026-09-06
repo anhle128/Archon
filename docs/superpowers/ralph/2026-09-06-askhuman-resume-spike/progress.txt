@@ -242,4 +242,3 @@ BLOCKER US-008 | gate=bun run validate | cause=packages/workflows/src/dag-execut
 BLOCKER US-008 | gate=bun run validate | cause=ESLint FATAL ERROR Reached heap limit (~4GB) | action=runner workaround NODE_OPTIONS=--max-old-space-size=8192; no committed script change | 2026-09-06
 
 ---
-

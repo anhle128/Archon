@@ -3,6 +3,7 @@
  * Do not export from the providers package barrel. Do not call from tests or CI.
  */
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import {
@@ -84,6 +85,8 @@ export function classifyClaudeVersion(evidence: readonly ClaudeModelEvidence[]):
   if (evidence.length !== 2) return 'inconclusive';
   const models = new Set(evidence.map(item => item.model));
   if (!models.has('sonnet') || !models.has('opus')) return 'inconclusive';
+  const sdkVersions = new Set(evidence.map(item => item.sdkVersion));
+  if (sdkVersions.size !== 1 || evidence[0]?.sdkVersion.trim() === '') return 'inconclusive';
   const protocols = new Set(evidence.map(classifyClaudeModel));
   if (protocols.size !== 1 || protocols.has('inconclusive')) return 'inconclusive';
   return protocols.values().next().value ?? 'inconclusive';
@@ -108,19 +111,13 @@ const askHumanInputShape = {
 };
 
 const qualifiedToolName = 'mcp__archon__AskHuman';
-const ANSWER_MARKER = 'SPIKE_ANSWER_MARKER';
-const COMPLETION_MARKER = 'SPIKE_COMPLETION_MARKER';
 const EXPERIMENT_TIMEOUT_MS = 120_000;
 const REDACTED_SPIKE_RESULT = 'redacted spike result';
-const ASK_ONCE_PROMPT =
-  'Call the AskHuman tool exactly once with one question object: ' +
-  'id "q1", prompt "Select a label.", selection "single", ' +
-  'options ["alpha","beta"], allowOther false. ' +
-  'After a later user message contains ' +
-  ANSWER_MARKER +
-  ', reply with ' +
-  COMPLETION_MARKER +
-  ' and stop. Never call AskHuman a second time.';
+
+interface ExperimentMarkers {
+  answer: string;
+  completion: string;
+}
 
 interface CollectedClaudeQuery {
   sessionId: string | null;
@@ -135,6 +132,55 @@ interface CollectedClaudeQuery {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function createExperimentMarkers(): ExperimentMarkers {
+  const nonce = randomUUID().replaceAll('-', '');
+  return {
+    answer: `SPIKE_ANSWER_${nonce}`,
+    completion: `SPIKE_COMPLETION_${nonce}`,
+  };
+}
+
+function askOncePrompt(markers: ExperimentMarkers): string {
+  return (
+    'Call the AskHuman tool exactly once with one question object: ' +
+    'id "q1", prompt "Select a label.", selection "single", ' +
+    'options ["alpha","beta"], allowOther false. ' +
+    'Only after a later user message contains the generated answer marker ' +
+    markers.answer +
+    ', reply with the generated completion marker ' +
+    markers.completion +
+    ' and stop. Never call AskHuman a second time.'
+  );
+}
+
+export async function runWithExperimentTimeout<T>(
+  timeoutMs: number,
+  work: (register: (controller: AbortController) => void) => Promise<T>
+): Promise<T> {
+  const controllers = new Set<AbortController>();
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      expired = true;
+      const error = new Error('spike experiment timed out');
+      error.name = 'TimeoutError';
+      reject(error);
+      for (const controller of controllers) controller.abort();
+    }, timeoutMs);
+  });
+  const register = (controller: AbortController): void => {
+    controllers.add(controller);
+    if (expired) controller.abort();
+  };
+
+  try {
+    return await Promise.race([work(register), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 function emptyHostAbort(): ClaudeModelEvidence['hostAbort'] {
@@ -296,48 +342,58 @@ async function runHostAbortExperiment(
   model: string,
   _sdkVersion: string
 ): Promise<ClaudeModelEvidence['hostAbort'] & { requiresActionSeen: boolean }> {
-  const controller = new AbortController();
-  let handlerCalls = 0;
-  const firstServer = createAskHumanServer(async () => {
-    handlerCalls += 1;
-    controller.abort();
-    return redactedToolResult();
-  });
-  const first = await collectClaudeQuery(
-    ASK_ONCE_PROMPT,
-    spikeQueryOptions(model, firstServer, { abortController: controller }),
-    COMPLETION_MARKER
-  );
-  const handlerCallsBeforePause = handlerCalls;
-
-  const resumeServer = createAskHumanServer(async () => {
-    handlerCalls += 1;
-    return redactedToolResult();
-  });
-  let resumed: CollectedClaudeQuery | null = null;
-  if (first.sessionId !== null) {
-    resumed = await collectClaudeQuery(
-      ANSWER_MARKER,
-      spikeQueryOptions(model, resumeServer, { resume: first.sessionId }),
-      COMPLETION_MARKER
+  return runWithExperimentTimeout(EXPERIMENT_TIMEOUT_MS, async registerController => {
+    const markers = createExperimentMarkers();
+    const firstController = new AbortController();
+    registerController(firstController);
+    let handlerCalls = 0;
+    const firstServer = createAskHumanServer(async () => {
+      handlerCalls += 1;
+      firstController.abort();
+      return redactedToolResult();
+    });
+    const first = await collectClaudeQuery(
+      askOncePrompt(markers),
+      spikeQueryOptions(model, firstServer, { abortController: firstController }),
+      markers.completion
     );
-  }
+    const handlerCallsBeforePause = handlerCalls;
 
-  return {
-    handlerCallsBeforePause,
-    handlerCallsAfterResume: handlerCalls,
-    sessionIdCaptured: first.sessionId !== null,
-    resumedSameSession:
-      first.sessionId !== null && resumed !== null && resumed.sessionId === first.sessionId,
-    completionMarkerSeen: resumed?.completionMarkerSeen === true,
-    requiresActionSeen: first.requiresActionSeen || (resumed?.requiresActionSeen ?? false),
-  };
+    const resumeController = new AbortController();
+    registerController(resumeController);
+    const resumeServer = createAskHumanServer(async () => {
+      handlerCalls += 1;
+      return redactedToolResult();
+    });
+    let resumed: CollectedClaudeQuery | null = null;
+    if (first.sessionId !== null) {
+      resumed = await collectClaudeQuery(
+        markers.answer,
+        spikeQueryOptions(model, resumeServer, {
+          resume: first.sessionId,
+          abortController: resumeController,
+        }),
+        markers.completion
+      );
+    }
+
+    return {
+      handlerCallsBeforePause,
+      handlerCallsAfterResume: handlerCalls,
+      sessionIdCaptured: first.sessionId !== null,
+      resumedSameSession:
+        first.sessionId !== null && resumed !== null && resumed.sessionId === first.sessionId,
+      completionMarkerSeen: resumed?.completionMarkerSeen === true,
+      requiresActionSeen: first.requiresActionSeen || (resumed?.requiresActionSeen ?? false),
+    };
+  });
 }
 
 async function runDeferredExperiment(
   model: string,
   _sdkVersion: string
 ): Promise<ClaudeModelEvidence['deferred'] & { requiresActionSeen: boolean }> {
+  const markers = createExperimentMarkers();
   const hookToolUseIds: string[] = [];
   let handlerCallsBeforePause = 0;
   let resumedHandlerCalls = 0;
@@ -371,51 +427,61 @@ async function runDeferredExperiment(
     PreToolUse: [{ matcher: qualifiedToolName, hooks: [deferHook] }],
   };
 
-  const firstServer = createAskHumanServer(async () => {
-    handlerCallsBeforePause += 1;
-    return redactedToolResult();
-  });
-  const first = await collectClaudeQuery(
-    ASK_ONCE_PROMPT,
-    spikeQueryOptions(model, firstServer, { hooks: deferHooks }),
-    COMPLETION_MARKER
-  );
-
-  const firstHookId = hookToolUseIds[0];
-  const deferredToolUsePresent =
-    firstHookId !== undefined &&
-    first.deferredToolUseId === firstHookId &&
-    first.deferredToolUseName === qualifiedToolName;
-
-  const resumeServer = createAskHumanServer(async args => {
-    resumedHandlerCalls += 1;
-    if (archonResumeReachedHandler(args)) updatedInputReachedHandler = true;
-    return redactedToolResult();
-  });
-  let resumed: CollectedClaudeQuery | null = null;
-  if (first.sessionId !== null) {
-    resumed = await collectClaudeQuery(
-      'Continue the pending tool call.',
-      spikeQueryOptions(model, resumeServer, {
-        resume: first.sessionId,
+  return runWithExperimentTimeout(EXPERIMENT_TIMEOUT_MS, async registerController => {
+    const firstController = new AbortController();
+    registerController(firstController);
+    const firstServer = createAskHumanServer(async () => {
+      handlerCallsBeforePause += 1;
+      return redactedToolResult();
+    });
+    const first = await collectClaudeQuery(
+      askOncePrompt(markers),
+      spikeQueryOptions(model, firstServer, {
         hooks: deferHooks,
+        abortController: firstController,
       }),
-      COMPLETION_MARKER
+      markers.completion
     );
-  }
 
-  const unavailable = isUnavailable(first) || (resumed !== null && isUnavailable(resumed));
-  return {
-    firstStopReason: firstStopReason(first),
-    deferredToolUsePresent,
-    handlerCallsBeforePause,
-    hookToolUseIds,
-    updatedInputReachedHandler,
-    resumedHandlerCalls,
-    resumedSuccessfully: resumed !== null && resumed.completed && !unavailable,
-    unavailable,
-    requiresActionSeen: first.requiresActionSeen || (resumed?.requiresActionSeen ?? false),
-  };
+    const firstHookId = hookToolUseIds[0];
+    const deferredToolUsePresent =
+      firstHookId !== undefined &&
+      first.deferredToolUseId === firstHookId &&
+      first.deferredToolUseName === qualifiedToolName;
+
+    const resumeController = new AbortController();
+    registerController(resumeController);
+    const resumeServer = createAskHumanServer(async args => {
+      resumedHandlerCalls += 1;
+      if (archonResumeReachedHandler(args)) updatedInputReachedHandler = true;
+      return redactedToolResult();
+    });
+    let resumed: CollectedClaudeQuery | null = null;
+    if (first.sessionId !== null) {
+      resumed = await collectClaudeQuery(
+        'Continue the pending tool call.',
+        spikeQueryOptions(model, resumeServer, {
+          resume: first.sessionId,
+          hooks: deferHooks,
+          abortController: resumeController,
+        }),
+        markers.completion
+      );
+    }
+
+    const unavailable = isUnavailable(first) || (resumed !== null && isUnavailable(resumed));
+    return {
+      firstStopReason: firstStopReason(first),
+      deferredToolUsePresent,
+      handlerCallsBeforePause,
+      hookToolUseIds,
+      updatedInputReachedHandler,
+      resumedHandlerCalls,
+      resumedSuccessfully: resumed !== null && resumed.completed && !unavailable,
+      unavailable,
+      requiresActionSeen: first.requiresActionSeen || (resumed?.requiresActionSeen ?? false),
+    };
+  });
 }
 
 function classifyFailure(error: unknown): ClaudeFailureCategory {
@@ -442,24 +508,6 @@ function classifyFailure(error: unknown): ClaudeFailureCategory {
     return 'model-unavailable';
   }
   return 'runtime-error';
-}
-
-async function withExperimentTimeout<T>(work: () => Promise<T>): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work(),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          const error = new Error('spike experiment timed out');
-          error.name = 'TimeoutError';
-          reject(error);
-        }, EXPERIMENT_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
 }
 
 function hostAbortFields(
@@ -506,9 +554,7 @@ async function runClaudeVersionSpike(
     let deferred = emptyDeferred();
 
     try {
-      const hostResult = await withExperimentTimeout(() =>
-        runHostAbortExperiment(model, sdkVersion)
-      );
+      const hostResult = await runHostAbortExperiment(model, sdkVersion);
       hostAbort = hostAbortFields(hostResult);
       requiresActionSeen = requiresActionSeen || hostResult.requiresActionSeen;
     } catch (error) {
@@ -516,9 +562,7 @@ async function runClaudeVersionSpike(
     }
 
     try {
-      const deferredResult = await withExperimentTimeout(() =>
-        runDeferredExperiment(model, sdkVersion)
-      );
+      const deferredResult = await runDeferredExperiment(model, sdkVersion);
       deferred = deferredFields(deferredResult);
       requiresActionSeen = requiresActionSeen || deferredResult.requiresActionSeen;
     } catch (error) {

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   classifyClaudeModel,
   classifyClaudeVersion,
+  runWithExperimentTimeout,
   type ClaudeModelEvidence,
 } from './askhuman-resume-spike';
 
@@ -65,5 +66,28 @@ describe('Claude AskHuman spike evidence classification', () => {
 
   test('fails closed when the required model set is incomplete', () => {
     expect(classifyClaudeVersion([fullyProvedEvidence('sonnet')])).toBe('inconclusive');
+  });
+
+  test('fails closed when the required aliases come from different SDK versions', () => {
+    const sonnet = fullyProvedEvidence('sonnet');
+    const opus = fullyProvedEvidence('opus');
+    opus.sdkVersion = '0.3.261';
+
+    expect(classifyClaudeVersion([sonnet, opus])).toBe('inconclusive');
+  });
+
+  test('aborts registered SDK work when the experiment timeout expires', async () => {
+    const controller = new AbortController();
+    const aborted = new Promise<void>(resolve => {
+      controller.signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+
+    const result = runWithExperimentTimeout(1, async register => {
+      register(controller);
+      await aborted;
+    });
+
+    await expect(result).rejects.toThrow('spike experiment timed out');
+    expect(controller.signal.aborted).toBe(true);
   });
 });
