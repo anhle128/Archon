@@ -38,8 +38,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/core/src/db/workflow-resume-transition.ts, packages/core/src/db/workflow-pending-interactions.ts, packages/core/src/db/workflow-pending-interactions.test.ts, packages/core/src/db/workflows.ts."
     },
     {
       "id": "US-003",

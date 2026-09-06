@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Query-scoped resume is shared, callers own the transaction
+- **Where**: `packages/core/src/db/workflow-resume-transition.ts`
+- **Pattern**: `resumeWorkflowRunInTransaction` takes an already-open `query`. `'standard'` keeps failed/paused/cancelled/stale-running; `'paused-ask'` matches only `status = 'paused'`. `workflow-pending-interactions.ts` must not import `workflows.ts` (cycle). Public `resumeWorkflowRun` still owns CAS-miss probe and final select.
+- **Example**: `resumeWorkflowRunInTransaction(query, id, dialect, 'paused-ask')`
+
 ### Canonical AskHuman contracts live in the engine schema module
 - **Where**: `packages/workflows/src/schemas/pending-interaction.ts`
 - **Pattern**: Import `z` from `@hono/zod-openapi` and derive types with `z.infer`. Answer/resolve objects use `.strict()`. `askHumanQuestionSchema` is exported without `.strict()` so AskHuman's accepted question shape stays unchanged. `@archon/providers/types` may add `ResumeInteraction` but must not import `@archon/workflows`.
@@ -33,5 +38,31 @@
 - Fresh worktree had no node_modules; `bun install` from the lockfile is required before focused tests.
 - ESLint ignores test files when they are passed as explicit paths; lint production sources only (or use `--no-warn-ignored`).
 - `askHumanQuestionSchema` must not gain `.strict()`; that would change the existing AskHuman accepted shape.
+
+---
+
+## 2026-09-06 — US-002: Implement atomic answer CAS and shared resume primitive
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/workflow-resume-transition.ts` — shared resume primitive, eligibility, lock/status clauses
+- `packages/core/src/db/workflows.ts` — delegates resume SQL to the shared primitive; keeps CAS-miss probe and final select
+- `packages/core/src/db/workflow-pending-interactions.ts` — `resolvePendingInteraction` with envelope validation, row CAS, last-pending paused-ask resume, id-only `interaction_resolved`
+- `packages/core/src/db/workflow-pending-interactions.test.ts` — winning path, rollback, sibling pending, validation, redaction
+
+**Acceptance criteria verified**:
+- [x] workflow-resume-transition.ts exports WorkflowTransactionQuery, ResumeEligibility, ORPHAN_RESUME_STALE_DAYS, resumableWorkflowStatusClause, workflowRunLockClause, resumeWorkflowRunInTransaction
+- [x] workflows.ts delegates resume SQL and status predicates while preserving public resumeWorkflowRun behavior
+- [x] resolvePendingInteraction uses withTransaction and locks run + interaction rows (FOR UPDATE on Postgres)
+- [x] typed errors: NotFound, AlreadyResolved, RunNotPaused, ValidationError
+- [x] semantic envelope validation without logging prompt/answer sentinels
+- [x] CAS to answered, last-pending paused-ask resume only when remaining pending is zero
+- [x] interaction_resolved event with step_name = node_id and non-sensitive data
+- [x] bun test workflow-pending-interactions.test.ts, workflows.test.ts, workflows.resume-cas.integration.test.ts
+
+**Learnings**:
+- SQLite `RAISE(IGNORE)` on BEFORE UPDATE is a reliable way to force a resume CAS miss inside the same transaction without mocking `executeQuery`.
+- Do not destructure snake_case schema fields into locals; eslint naming-convention requires camelCase aliases.
+- `isDecline` must be a type predicate or `answer.answers` does not narrow after the early return.
 
 ---
