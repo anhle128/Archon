@@ -71,7 +71,16 @@ describe('buildWorkflowDagNodeStates', () => {
     expect(nodes.find(n => n.nodeId === 'loop-node')?.expectedIterations).toBe(20);
   });
 
-  test('projects node_routed events as completed route-loop decisions', () => {
+  test('returns no DAG lifecycle when server nodeStates are absent', () => {
+    expect(
+      buildWorkflowDagNodeStates(undefined, [
+        workflowEvent({ event_type: 'node_started', step_name: 'review' }),
+        workflowEvent({ event_type: 'node_routed', step_name: 'router' }),
+      ])
+    ).toEqual([]);
+  });
+
+  test('route decisions enrich an existing node without overriding server status', () => {
     const routeDecision = {
       sources: ['review'],
       outcome: 'negative',
@@ -84,54 +93,12 @@ describe('buildWorkflowDagNodeStates', () => {
       execution_seq: 4,
     };
 
-    const nodes = buildWorkflowDagNodeStates(undefined, [
-      workflowEvent({
-        id: 'event-route',
-        event_type: 'node_routed',
-        step_name: 'review-router',
-        data: routeDecision,
-      }),
-    ]);
-
+    const nodes = buildWorkflowDagNodeStates(
+      [{ nodeId: 'router', name: 'Router', status: 'running', retryEpoch: 0 }],
+      [workflowEvent({ event_type: 'node_routed', step_name: 'router', data: routeDecision })]
+    );
     expect(nodes).toHaveLength(1);
-    expect(nodes[0]).toMatchObject({
-      nodeId: 'review-router',
-      name: 'review-router',
-      status: 'completed',
-      routeDecision,
-    });
-  });
-
-  test('preserves runtime AI metadata from node_started event fallback', () => {
-    const nodes = buildWorkflowDagNodeStates(undefined, [
-      workflowEvent({
-        id: 'event-start',
-        event_type: 'node_started',
-        step_name: 'create-story',
-        data: {
-          provider: 'codex',
-          model: 'gpt-5.5',
-          tier: 'large',
-          modelReasoningEffort: 'xhigh',
-        },
-      }),
-      workflowEvent({
-        id: 'event-complete',
-        event_type: 'node_completed',
-        step_name: 'create-story',
-        data: { duration_ms: 1200 },
-      }),
-    ]);
-
-    expect(nodes).toHaveLength(1);
-    expect(nodes[0]).toMatchObject({
-      nodeId: 'create-story',
-      status: 'completed',
-      provider: 'codex',
-      model: 'gpt-5.5',
-      tier: 'large',
-      modelReasoningEffort: 'xhigh',
-      duration: 1200,
-    });
+    expect(nodes[0]?.status).toBe('running');
+    expect(nodes[0]?.routeDecision).toEqual(routeDecision);
   });
 });

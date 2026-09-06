@@ -23,7 +23,6 @@ import type {
   ArtifactType,
   WorkflowRunStatus,
   DagNodeState,
-  WorkflowStepStatus,
   LoopIterationInfo,
   RuntimeThinkingMetadata,
   RuntimeEffortLevel,
@@ -56,6 +55,10 @@ function formatRouteDecisionField(value: unknown, fallback: string): string {
   return fallback;
 }
 
+type WorkflowRunNodeState = NonNullable<
+  Awaited<ReturnType<typeof getWorkflowRun>>['nodeStates']
+>[number];
+
 interface WorkflowRunQueryData {
   workflowState: WorkflowState;
   workerPlatformId: string | null;
@@ -64,11 +67,8 @@ interface WorkflowRunQueryData {
   workingPath: string | null;
   codebaseId: string | null;
   events: WorkflowEventResponse[];
+  nodeStates: WorkflowRunNodeState[];
 }
-
-type WorkflowRunNodeState = NonNullable<
-  Awaited<ReturnType<typeof getWorkflowRun>>['nodeStates']
->[number];
 
 function isRuntimeModelReasoningEffort(value: unknown): value is RuntimeModelReasoningEffort {
   return typeof value === 'string' && value.length > 0;
@@ -120,40 +120,6 @@ function toDagNodeState(nodeState: WorkflowRunNodeState): DagNodeState {
     effort: nodeState.effort,
     thinking: nodeState.thinking,
   };
-}
-
-function buildDagNodeStatesFromEvents(events: WorkflowEventResponse[]): DagNodeState[] {
-  const nodeMap = new Map<string, DagNodeState>();
-  for (const e of events.filter(ev => ev.event_type.startsWith('node_'))) {
-    const nodeId = e.step_name ?? (e.data.nodeId as string) ?? '';
-    if (!nodeId) continue;
-    const status =
-      e.event_type === 'node_started'
-        ? 'running'
-        : e.event_type === 'node_completed' || e.event_type === 'node_routed'
-          ? 'completed'
-          : e.event_type === 'node_failed'
-            ? 'failed'
-            : 'skipped';
-    const existing = nodeMap.get(nodeId);
-    const runtimeMetadata = runtimeMetadataFromEventData(e.data);
-    if (!existing || status !== 'running') {
-      nodeMap.set(nodeId, {
-        ...existing,
-        nodeId,
-        name: nodeId,
-        status: status as WorkflowStepStatus,
-        duration: e.data.duration_ms as number | undefined,
-        error: e.data.error as string | undefined,
-        reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
-        ...runtimeMetadata,
-        routeDecision: e.event_type === 'node_routed' ? e.data : undefined,
-      });
-    } else {
-      nodeMap.set(nodeId, { ...existing, ...runtimeMetadata });
-    }
-  }
-  return Array.from(nodeMap.values());
 }
 
 function enrichDagNodesWithLoopIterations(
@@ -213,19 +179,8 @@ function enrichDagNodesWithRouteDecisions(
     const nodeId = e.step_name ?? '';
     if (!nodeId) continue;
     const existing = nodeMap.get(nodeId);
-    nodeMap.set(nodeId, {
-      ...existing,
-      nodeId,
-      name: existing?.name ?? nodeId,
-      status: 'completed',
-      duration: existing?.duration,
-      error: existing?.error,
-      reason: existing?.reason,
-      currentIteration: existing?.currentIteration,
-      maxIterations: existing?.maxIterations,
-      iterations: existing?.iterations,
-      routeDecision: e.data,
-    });
+    if (!existing) continue;
+    nodeMap.set(nodeId, { ...existing, routeDecision: e.data });
   }
   return Array.from(nodeMap.values());
 }
@@ -261,9 +216,7 @@ export function buildWorkflowDagNodeStates(
   nodeStates: WorkflowRunNodeState[] | undefined,
   events: WorkflowEventResponse[]
 ): DagNodeState[] {
-  const baseNodes = nodeStates
-    ? nodeStates.map(toDagNodeState)
-    : buildDagNodeStatesFromEvents(events);
+  const baseNodes = (nodeStates ?? []).map(toDagNodeState);
   return enrichDagNodesWithLoopProgress(
     enrichDagNodesWithLoopIterations(enrichDagNodesWithRouteDecisions(baseNodes, events), events),
     events
@@ -355,6 +308,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         workingPath: data.run.working_path ?? null,
         codebaseId: data.run.codebase_id ?? null,
         events: data.events,
+        nodeStates: data.nodeStates,
       };
     },
     refetchInterval: (query): number | false => {
