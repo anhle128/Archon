@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { instrumentProvider, redactTraceValue, type LangfuseRuntime } from './observability';
+import {
+  clearRegistry,
+  getProviderInfoList,
+  registerBuiltinProviders,
+  registerCommunityProviders,
+} from './registry';
 import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from './types';
 
 interface RecordedObservation {
@@ -28,6 +34,7 @@ function capabilities(): ProviderCapabilities {
     sandbox: true,
     nativeTools: true,
     containerExec: false,
+    askHuman: false,
   };
 }
 
@@ -358,4 +365,15 @@ describe('Langfuse provider observability', () => {
       expect(update.model).not.toBe('second-model-in-map');
     }
   });
+});
+
+test('only Claude and Pi advertise AskHuman', () => {
+  clearRegistry();
+  registerBuiltinProviders();
+  registerCommunityProviders();
+  const capable = getProviderInfoList()
+    .filter(info => info.capabilities.askHuman)
+    .map(info => info.id)
+    .sort();
+  expect(capable).toEqual(['claude', 'pi']);
 });

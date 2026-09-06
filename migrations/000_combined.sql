@@ -8,7 +8,7 @@
 --     COMMENT ON COLUMN — goes in the final "Indexes and column comments"
 --     section, below every ADD COLUMN.
 --
--- 22 Application Tables (+ the 4 remote_agent_auth_* Better Auth tables, listed inline below):
+-- 23 Application Tables (+ the 4 remote_agent_auth_* Better Auth tables, listed inline below):
 --   1. remote_agent_codebases
 --   2. remote_agent_codebase_env_vars
 --   3. remote_agent_users
@@ -31,7 +31,8 @@
 --  20. remote_agent_usage_ledger
 --  21. remote_agent_workflow_envs
 --  22. remote_agent_workflow_node_messages
---  23-26. remote_agent_auth_user / session / account / verification (PostgreSQL-only)
+--  23. remote_agent_pending_interactions
+--  24-27. remote_agent_auth_user / session / account / verification (PostgreSQL-only)
 --
 -- Dropped tables (via migrations):
 --   - remote_agent_command_templates (017)
@@ -757,6 +758,30 @@ COMMENT ON TABLE remote_agent_workflow_node_messages IS
   'Immutable sequenced per-node transcript rows (text/tool/status); cascade-deletes with the run.';
 
 -- ============================================================================
+-- Table 23: Pending interactions (AskHuman / permission pauses)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS remote_agent_pending_interactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workflow_run_id UUID NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+  node_id VARCHAR(255) NOT NULL,
+  tool_use_id VARCHAR(255) NOT NULL,
+  kind VARCHAR(16) NOT NULL CHECK (kind IN ('ask', 'permission')),
+  status VARCHAR(16) NOT NULL CHECK (status IN ('pending', 'answered', 'purged')),
+  envelope JSONB NOT NULL,
+  answer JSONB,
+  provider_session_id VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  resolved_at TIMESTAMP WITH TIME ZONE,
+  resolved_by VARCHAR(255),
+  CONSTRAINT uq_pending_interactions_run_tool_use
+    UNIQUE (workflow_run_id, tool_use_id)
+);
+
+COMMENT ON TABLE remote_agent_pending_interactions IS
+  'Structured pending AskHuman and permission interactions; unique per (workflow_run_id, tool_use_id); cascade-deletes with the run.';
+
+-- ============================================================================
 -- Indexes and column comments
 -- ============================================================================
 --
@@ -971,3 +996,27 @@ COMMENT ON COLUMN remote_agent_workflow_node_messages.kind IS
   'text, tool, or status.';
 COMMENT ON COLUMN remote_agent_workflow_node_messages.payload IS
   'Discriminated JSON payload matching kind.';
+
+-- Pending interactions
+COMMENT ON COLUMN remote_agent_pending_interactions.workflow_run_id IS
+  'Owning workflow run; cascade-deletes with the run.';
+COMMENT ON COLUMN remote_agent_pending_interactions.node_id IS
+  'Executor stepName of the asking node.';
+COMMENT ON COLUMN remote_agent_pending_interactions.tool_use_id IS
+  'Provider tool-use id; unique per run and used as the Ask request_id.';
+COMMENT ON COLUMN remote_agent_pending_interactions.kind IS
+  'ask or permission.';
+COMMENT ON COLUMN remote_agent_pending_interactions.status IS
+  'pending, answered, or purged.';
+COMMENT ON COLUMN remote_agent_pending_interactions.envelope IS
+  'Structured question envelope persisted at Ask time.';
+COMMENT ON COLUMN remote_agent_pending_interactions.answer IS
+  'Structured answer payload; NULL until answered.';
+COMMENT ON COLUMN remote_agent_pending_interactions.provider_session_id IS
+  'Provider session id captured at Ask time for later resume.';
+COMMENT ON COLUMN remote_agent_pending_interactions.created_at IS
+  'When the pending interaction was inserted.';
+COMMENT ON COLUMN remote_agent_pending_interactions.resolved_at IS
+  'When the interaction was answered or purged; NULL while pending.';
+COMMENT ON COLUMN remote_agent_pending_interactions.resolved_by IS
+  'Identity of the resolver; NULL while pending.';

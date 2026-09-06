@@ -19,7 +19,7 @@ import type {
   WorkflowConfig,
   WorkflowDeps,
 } from './deps';
-import type { WorkflowRetryContext } from './store';
+import type { IWorkflowStore, WorkflowRetryContext } from './store';
 import type {
   SendQueryOptions,
   NodeConfig,
@@ -29,8 +29,13 @@ import type {
   ExecutionContext,
   OverlayChangeSummary,
   UsageBreakdown,
+  NativeTool,
 } from '@archon/providers/types';
-import { CONTAINER_ENV_DENYLIST } from '@archon/providers/types';
+import {
+  CONTAINER_ENV_DENYLIST,
+  AskHumanAwaitingError,
+  AskHumanNoStarterError,
+} from '@archon/providers/types';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
@@ -76,6 +81,8 @@ import {
   isIncludeNode,
   isWorkflowNode,
   isPersistableNode,
+  isCommandNode,
+  isPromptNode,
   readSubrunMetadata,
   isApprovalContext,
   routeLoopRuntimeMetadataSchema,
@@ -136,6 +143,7 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import { appendNodeTranscript } from './node-transcript';
+import { createAskHumanTool } from './ask-human';
 import {
   isLiteralSpec,
   isTierName,
@@ -1730,6 +1738,32 @@ function assertRouteTargetCanBeActivated(
   }
 }
 
+function nativeToolsForAskHuman(
+  provider: string,
+  store: IWorkflowStore,
+  workflowRunId: string,
+  nodeId: string
+): NativeTool[] | undefined {
+  return getProviderCapabilities(provider).askHuman
+    ? [createAskHumanTool({ store, workflowRunId, nodeId })]
+    : undefined;
+}
+
+async function pauseOnAskHuman(
+  deps: WorkflowDeps,
+  runId: string,
+  nodeId: string,
+  recordStatus: (state: string) => Promise<void>
+): Promise<void> {
+  await deps.store.pauseWorkflowRun(runId);
+  await recordStatus('awaiting');
+  getWorkflowEventEmitter().emit({
+    type: 'node_awaiting',
+    runId,
+    nodeId,
+  });
+}
+
 /**
  * Execute a single DAG node. Returns NodeExecutionResult regardless of success/failure.
  * Always accumulates assistant text output (for $node_id.output substitution).
@@ -1973,10 +2007,12 @@ async function executeNodeInternal(
   const nodeAbortController = new AbortController();
   // Fork when resuming — leaves the source session untouched so retries are safe.
   const shouldForkSession = resumeSessionId !== undefined;
+  const nativeTools = nativeToolsForAskHuman(provider, deps.store, workflowRun.id, stepName);
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
     ...(shouldForkSession ? { forkSession: true } : {}),
+    ...(nativeTools ? { nativeTools } : {}),
     traceContext: {
       name: 'execute-workflow-node',
       sessionId: workflowRun.id,
@@ -3061,8 +3097,22 @@ async function executeNodeInternal(
     lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
     lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
 
+    if (error instanceof AskHumanAwaitingError) {
+      await pauseOnAskHuman(deps, workflowRun.id, node.id, recordNodeStatus);
+      return {
+        state: 'completed',
+        output: nodeOutputText,
+        costUsd: nodeCostUsd,
+        ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
+      };
+    }
+
     // If the abort was triggered by user cancel (not idle timeout), classify as cancel
-    if (nodeAbortController.signal.aborted && !nodeIdleTimedOut) {
+    if (
+      nodeAbortController.signal.aborted &&
+      !nodeIdleTimedOut &&
+      !(error instanceof AskHumanNoStarterError)
+    ) {
       getLog().info({ nodeId: node.id }, 'dag_node_cancelled_via_abort');
       await recordFailedStatus('Cancelled by user');
       return {
@@ -4813,6 +4863,12 @@ async function executeLoopNode(
   // ('' → node.id at top level, #2090). The loop's own per-iteration number lives in
   // each event's data (`iteration`), so no separate iteration param is threaded here.
   const stepName = stepNamePrefix + node.id;
+  const nativeTools = nativeToolsForAskHuman(
+    workflowProvider,
+    deps.store,
+    workflowRun.id,
+    stepName
+  );
   const recordLoopStatus = (state: string, detail?: string): Promise<void> =>
     appendNodeTranscript(deps.store, {
       workflow_run_id: workflowRun.id,
@@ -5277,6 +5333,7 @@ async function executeLoopNode(
         const iterationOptions: SendQueryOptions | undefined = {
           ...resolvedOptions,
           abortSignal: iterationAbortController.signal,
+          ...(nativeTools ? { nativeTools } : {}),
           traceContext: {
             name: 'execute-workflow-loop',
             sessionId: workflowRun.id,
@@ -5715,6 +5772,16 @@ async function executeLoopNode(
         }
       } catch (error) {
         foldIterationUsage();
+        if (error instanceof AskHumanAwaitingError) {
+          await pauseOnAskHuman(deps, workflowRun.id, node.id, recordLoopStatus);
+          return {
+            state: 'completed',
+            output: cleanOutput,
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+          };
+        }
         const err = error as Error;
         getLog().error({ err, nodeId: node.id, iteration: i }, 'loop_node.iteration_failed');
         return await failLoopIteration(err.message, {
@@ -9236,6 +9303,47 @@ export function collectContainerIncompatibleProviders(
   return incompatible;
 }
 
+const ASK_HUMAN_TOOL_NAMES = new Set(['AskHuman', 'mcp__archon__AskHuman']);
+
+function allowedToolsReferenceAskHuman(allowedTools: readonly string[] | undefined): boolean {
+  if (allowedTools === undefined) return false;
+  return allowedTools.some(entry => ASK_HUMAN_TOOL_NAMES.has(entry.split('(')[0].trim()));
+}
+
+/**
+ * Collect providers used by command/prompt/loop nodes that list AskHuman in
+ * `allowed_tools` but cannot ask (`capabilities.askHuman === false`). Recurses
+ * loop_group bodies with the same group scope runtime dispatch derives. Name
+ * matching strips `Name(specifier)` the same way validator.ts strips permission
+ * rules. `denied_tools` and implicit tool behavior are ignored. Unknown
+ * providers are skipped here — they fail later with a clearer error.
+ * Returns each unsupported provider id once, sorted.
+ */
+export function collectAskHumanUnsupportedProviders(
+  nodes: readonly DagNode[],
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>> = {},
+  aiProfile?: ResolvedAiProfile
+): string[] {
+  const unsupported = new Set<string>();
+  const visit = (ns: readonly DagNode[], currentScope: WorkflowModelScope): void => {
+    for (const node of ns) {
+      if (isLoopGroupNode(node)) {
+        const groupScope = resolveGroupModelScope(node, currentScope, assistantModels, aiProfile);
+        visit(node.loop_group.nodes, groupScope);
+        continue;
+      }
+      if (!isCommandNode(node) && !isPromptNode(node) && !isLoopNode(node)) continue;
+      if (!allowedToolsReferenceAskHuman(node.allowed_tools)) continue;
+      const provider = resolveNodeProviderForPreflight(node, currentScope.provider, aiProfile);
+      if (!isRegisteredProvider(provider)) continue;
+      if (!getProviderCapabilities(provider).askHuman) unsupported.add(provider);
+    }
+  };
+  visit(nodes, scope);
+  return [...unsupported].sort();
+}
+
 /**
  * Emit + persist a container-lifecycle event (fire-and-forget DB write). Mirrors
  * the `container_created`/`container_destroyed` pattern already in this file so
@@ -9723,21 +9831,36 @@ export async function executeDagWorkflow(
     (isContainerRunContextValue(execOrContainerCtx) ? execOrContainerCtx : undefined);
   const prRemote = config.prRemote;
   const retryEpoch = getRunRetryEpoch(workflowRun, retryContext);
+  // Shared outer scope for run-start preflights (AskHuman CAP-7 always, then
+  // containerExec when this run is in a container). Matches the outer
+  // WorkflowModelScope runtime loop_group dispatch builds so preflight and body
+  // turns agree on inherited providers at every group depth.
+  const preflightScope: WorkflowModelScope = {
+    provider: workflowProvider,
+    model: workflowModel,
+    preset: workflowPreset,
+    tier: workflow.model && isTierName(workflow.model) ? workflow.model : undefined,
+    effort: workflow.effort ?? workflow.modelReasoningEffort,
+    providerOrigin: 'workflow',
+  };
+  const askUnsupported = collectAskHumanUnsupportedProviders(
+    workflow.nodes,
+    preflightScope,
+    assistantModelDefaults(config),
+    aiProfile
+  );
+  if (askUnsupported.length > 0) {
+    const list = askUnsupported.join(', ');
+    throw new Error(
+      `AskHuman is not supported by provider${askUnsupported.length === 1 ? '' : 's'} '${list}'. ` +
+        'Remove AskHuman from allowed_tools, or use claude or pi.'
+    );
+  }
   // Container capability fail-fast: before ANY node runs (and before any
   // container work), reject a container run whose AI nodes resolve to a provider
   // that can't spawn in-container. No silent downgrade to the host — the user
-  // asked for isolation and must get it or a clear error. Scope matches the
-  // outer WorkflowModelScope runtime loop_group dispatch builds so preflight
-  // and body turns agree on inherited providers at every group depth.
+  // asked for isolation and must get it or a clear error.
   if (execContext.kind === 'container') {
-    const preflightScope: WorkflowModelScope = {
-      provider: workflowProvider,
-      model: workflowModel,
-      preset: workflowPreset,
-      tier: workflow.model && isTierName(workflow.model) ? workflow.model : undefined,
-      effort: workflow.effort ?? workflow.modelReasoningEffort,
-      providerOrigin: 'workflow',
-    };
     const incompatible = collectContainerIncompatibleProviders(
       workflow.nodes,
       preflightScope,

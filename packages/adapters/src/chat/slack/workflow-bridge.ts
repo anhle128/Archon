@@ -178,6 +178,7 @@ export class SlackWorkflowBridge {
         case 'task_activity':
         case 'hook_activity':
         case 'container_lifecycle':
+        case 'node_awaiting':
           break;
         default: {
           const exhaustive: never = event;

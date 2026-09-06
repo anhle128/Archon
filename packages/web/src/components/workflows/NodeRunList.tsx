@@ -11,6 +11,7 @@ export interface NodeRunListProps {
 const STATUS_COLORS: Record<LogRow['status'], string> = {
   pending: 'bg-accent/20 text-accent',
   running: 'bg-accent/20 text-accent',
+  awaiting: 'bg-accent/20 text-accent',
   completed: 'bg-success/20 text-success',
   failed: 'bg-error/20 text-error',
   skipped: 'bg-surface text-text-secondary',
