@@ -294,4 +294,3 @@
 - Sprint YAML last_updated comment and YAML field must share the same +0700 timestamp; leave 6-4/6-6/6-7 and epic-6 in-progress.
 
 ---
-

@@ -1,6 +1,17 @@
-import { useId, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import {
   Card,
   CardContent,
@@ -50,14 +61,15 @@ function formatAnswerValue(value: string | string[]): string {
 function answerSummaries(
   questions: readonly AskQuestion[],
   answer: AskAnswerBody | null
-): { label: string; value: string }[] {
+): { key: string; label: string; value: string }[] {
   if (answer === null || 'decline' in answer) {
     return [];
   }
   const prompts = new Map(
     questions.map((question): [string, string] => [question.id, question.prompt])
   );
-  return answer.answers.map(item => ({
+  return answer.answers.map((item, index) => ({
+    key: `${item.questionId}:${String(index)}`,
     label: prompts.get(item.questionId) ?? item.questionId,
     value: formatAnswerValue(item.value),
   }));
@@ -124,8 +136,6 @@ export function AskCard(props: AskCardProps): React.ReactElement {
     onDecline,
   } = props;
 
-  const declineTitleId = useId();
-  const declineDescId = useId();
   const [listedSingle, setListedSingle] = useState<Record<string, string>>({});
   const [listedMulti, setListedMulti] = useState<Record<string, string[]>>({});
   const [otherSelected, setOtherSelected] = useState<Record<string, boolean>>({});
@@ -216,13 +226,13 @@ export function AskCard(props: AskCardProps): React.ReactElement {
             <p className="text-sm text-text-secondary">Sending…</p>
           ) : null}
           <ResolvedStamp presentation={presentation} viewerIsStarter={viewerIsStarter} />
-          {isPending && presentation.error !== null ? (
+          {presentation.error !== null && presentation.viewState !== 'failed-resume' ? (
             <p role="alert" className="text-sm text-error">
               {presentation.error}
             </p>
           ) : null}
           {answerSummaries(questions, presentation.answer).map(item => (
-            <p key={item.label} className="text-sm text-text-primary">
+            <p key={item.key} className="text-sm text-text-primary">
               {item.label}: {item.value}
             </p>
           ))}
@@ -326,54 +336,32 @@ export function AskCard(props: AskCardProps): React.ReactElement {
                 <Button type="submit" disabled={!draftValid}>
                   Submit
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  aria-expanded={declineOpen}
-                  onClick={(): void => {
-                    setDeclineOpen(true);
-                  }}
-                >
-                  Decline
-                </Button>
-              </div>
-              {declineOpen ? (
-                <div
-                  role="alertdialog"
-                  aria-modal="true"
-                  aria-labelledby={declineTitleId}
-                  aria-describedby={declineDescId}
-                  className="rounded-lg border border-border bg-surface-elevated p-4 shadow-lg"
-                >
-                  <h2 id={declineTitleId} className="text-sm font-medium text-text-primary">
-                    Decline this ask?
-                  </h2>
-                  <p id={declineDescId} className="mt-1 text-sm text-text-secondary">
-                    The agent will be told you declined
-                  </p>
-                  <div className="mt-3 flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={(): void => {
-                        setDeclineOpen(false);
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      onClick={(): void => {
-                        setDeclineOpen(false);
-                        onDecline();
-                      }}
-                    >
+                <AlertDialog open={declineOpen} onOpenChange={setDeclineOpen}>
+                  <AlertDialogTrigger asChild>
+                    <Button type="button" variant="outline">
                       Decline
                     </Button>
-                  </div>
-                </div>
-              ) : null}
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Decline this ask?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        The agent will be told you declined
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={(): void => {
+                          onDecline();
+                        }}
+                      >
+                        Decline
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
             </div>
           ) : null}
           <PayloadDisclosure envelope={interaction.envelope} />
@@ -391,7 +379,7 @@ export function InvalidAskCard(props: {
   return (
     <section
       role="alert"
-      className="rounded-xl border border-error bg-error/5 p-4 text-text-primary shadow-sm"
+      className="rounded-lg border border-error bg-error/5 p-4 text-text-primary shadow-sm"
     >
       <p className="text-sm font-medium">Invalid Ask payload</p>
       <p className="mt-1 text-xs text-text-secondary">{`${props.agentDisplayName} · ${props.nodeId}`}</p>

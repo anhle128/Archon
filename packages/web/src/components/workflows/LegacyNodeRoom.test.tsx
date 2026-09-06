@@ -9,7 +9,6 @@ import type { DagNode, WorkflowEventResponse, WorkflowNodeMessagesResponse } fro
 import type { WorkflowRunStatus } from '@/lib/types';
 
 import type { LogRow } from './build-log-rows';
-import { LegacyNodeRoom } from './LegacyNodeRoom';
 
 const react = await import('react');
 const reactQuery = await import('@tanstack/react-query');
@@ -163,7 +162,7 @@ function renderStatic(args: {
   approval?: unknown;
 }): string {
   return renderToStaticMarkup(
-    <LegacyNodeRoom
+    <legacyNodeRoom.LegacyNodeRoom
       runId="run-1"
       row={args.row}
       loadMessages={args.loadMessages}
@@ -280,6 +279,12 @@ function installHappyDom(): Window {
   return win;
 }
 
+const legacyNodeRoomImportWindow = installHappyDom();
+const legacyNodeRoom = await import('./LegacyNodeRoom');
+// Radix keeps import-time DOM references; restore globals but keep the window alive.
+restoreGlobals();
+void legacyNodeRoomImportWindow;
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -313,7 +318,7 @@ describe('LegacyNodeRoom static rooms', () => {
       }),
     ];
     const markup = renderToStaticMarkup(
-      <LegacyNodeRoom
+      <legacyNodeRoom.LegacyNodeRoom
         runId="run-1"
         row={SETUP_ROW}
         loadMessages={loadMessages}
@@ -670,7 +675,7 @@ describe('LegacyNodeRoom dispatcher', () => {
       createElement(
         reactQuery.QueryClientProvider,
         { client: queryClient },
-        createElement(LegacyNodeRoom, {
+        createElement(legacyNodeRoom.LegacyNodeRoom, {
           runId: 'run-1',
           row: args.row,
           loadMessages: args.loadMessages,

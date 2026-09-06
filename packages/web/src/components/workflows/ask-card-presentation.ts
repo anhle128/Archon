@@ -30,7 +30,7 @@ function readCanonicalAnswer(interaction: PendingInteraction): {
   malformed: boolean;
 } {
   if (interaction.answer === null) {
-    return { answer: null, malformed: false };
+    return { answer: null, malformed: interaction.status === 'answered' };
   }
   const parsed = parseAskAnswer(interaction.answer);
   if (parsed === null) {

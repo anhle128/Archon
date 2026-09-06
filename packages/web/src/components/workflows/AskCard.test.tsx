@@ -3,13 +3,12 @@ process.env.NODE_ENV = 'development';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ComponentProps } from 'react';
 import type { Root } from 'react-dom/client';
 
 import type { AskAnswerBody, PendingInteraction } from '@/lib/api';
 import { formatDurationMs } from '@/lib/format';
 
-import { AskCard, InvalidAskCard } from './AskCard';
+import type { AskCardProps } from './AskCard';
 import type { AskCardPresentation } from './ask-card-presentation';
 import type { AskQuestion } from './parse-ask-envelope';
 
@@ -86,7 +85,7 @@ interface CardArgs {
   onDecline?: () => void;
 }
 
-function cardProps(overrides: CardArgs = {}): ComponentProps<typeof AskCard> {
+function cardProps(overrides: CardArgs = {}): AskCardProps {
   return {
     interaction: overrides.interaction ?? interaction(),
     questions: overrides.questions ?? QUESTIONS,
@@ -103,8 +102,9 @@ function cardProps(overrides: CardArgs = {}): ComponentProps<typeof AskCard> {
   };
 }
 
-function renderStatic(overrides: CardArgs = {}): string {
-  return renderToStaticMarkup(createElement(AskCard, cardProps(overrides)));
+async function renderStatic(overrides: CardArgs = {}): Promise<string> {
+  const { AskCard: askCard } = await loadAskCardModule();
+  return renderToStaticMarkup(createElement(askCard, cardProps(overrides)));
 }
 
 function visibleText(markup: string): string {
@@ -214,6 +214,25 @@ function installHappyDom(): Window {
   return win;
 }
 
+let askCardModulePromise: Promise<typeof import('./AskCard')> | null = null;
+
+async function loadAskCardModule(): Promise<typeof import('./AskCard')> {
+  if (askCardModulePromise === null) {
+    let tempWin: Window | null = null;
+    if (typeof globalThis.document === 'undefined') {
+      tempWin = installHappyDom();
+    }
+    askCardModulePromise = import('./AskCard');
+    const module = await askCardModulePromise;
+    if (tempWin !== null) {
+      // Radix keeps import-time DOM references; restore globals but keep the window alive.
+      restoreGlobals();
+    }
+    return module;
+  }
+  return askCardModulePromise;
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -257,18 +276,13 @@ function setControlValue(input: Element, value: string, checked?: boolean): void
 
 async function clickEl(el: Element): Promise<void> {
   await act(async () => {
-    const onClick = reactProps(el)?.onClick;
-    if (onClick !== undefined) {
-      onClick({ preventDefault: (): void => undefined });
-      return;
-    }
     (el as HTMLElement).click();
   });
 }
 
 describe('AskCard static markup', () => {
-  test('renders an accessible Ask form', () => {
-    const markup = renderStatic();
+  test('renders an accessible Ask form', async () => {
+    const markup = await renderStatic();
     const text = visibleText(markup);
 
     expect(markup).toContain('aria-label="question from agent, 2 questions"');
@@ -287,8 +301,8 @@ describe('AskCard static markup', () => {
     expect(text).toContain('Submit');
   });
 
-  test('renders named read-only state', () => {
-    const markup = renderStatic({ viewerIsStarter: false, starterDisplayName: 'Avery' });
+  test('renders named read-only state', async () => {
+    const markup = await renderStatic({ viewerIsStarter: false, starterDisplayName: 'Avery' });
     const text = visibleText(markup);
 
     expect(markup).toContain('disabled');
@@ -297,7 +311,7 @@ describe('AskCard static markup', () => {
     expect(text).not.toContain('Decline');
   });
 
-  test('renders Ask lifecycle states', () => {
+  test('renders Ask lifecycle states', async () => {
     const cases: { name: string; args: CardArgs; expectText: string[]; forbid?: string[] }[] = [
       {
         name: 'sending',
@@ -383,10 +397,23 @@ describe('AskCard static markup', () => {
         },
         expectText: ['network down', 'Submit', 'Decline'],
       },
+      {
+        name: 'malformed canonical answer',
+        args: {
+          presentation: {
+            viewState: 'answered',
+            answer: null,
+            error: 'Malformed canonical answer',
+            resolvedAt: RESOLVED_AT,
+          },
+        },
+        expectText: ['Answered · by you', 'Malformed canonical answer'],
+        forbid: ['Submit'],
+      },
     ];
 
     for (const row of cases) {
-      const markup = renderStatic(row.args);
+      const markup = await renderStatic(row.args);
       const text = visibleText(markup);
       for (const snippet of row.expectText) {
         expect(text).toContain(snippet);
@@ -405,10 +432,11 @@ describe('AskCard static markup', () => {
 });
 
 describe('InvalidAskCard', () => {
-  test('renders malformed Ask data as a visible contract error', () => {
+  test('renders malformed Ask data as a visible contract error', async () => {
     const row = interaction({ envelope: { broken: true } });
+    const { InvalidAskCard: invalidAskCard } = await loadAskCardModule();
     const markup = renderToStaticMarkup(
-      createElement(InvalidAskCard, {
+      createElement(invalidAskCard, {
         interaction: row,
         agentDisplayName: 'Claude',
         nodeId: 'review',
@@ -448,8 +476,9 @@ describe('AskCard actions', () => {
   });
 
   async function renderCard(overrides: CardArgs = {}): Promise<void> {
+    const { AskCard: askCard } = await loadAskCardModule();
     await act(async () => {
-      root.render(createElement(AskCard, cardProps(overrides)));
+      root.render(createElement(askCard, cardProps(overrides)));
     });
     await flush();
   }
@@ -591,20 +620,21 @@ describe('AskCard actions', () => {
   });
 
   test('focuses only the requested card', async () => {
+    const { AskCard: askCard } = await loadAskCardModule();
     await act(async () => {
       root.render(
         createElement(
           'div',
           null,
           createElement(
-            AskCard,
+            askCard,
             cardProps({
               autoFocus: true,
               interaction: interaction({ id: 'ask-focus-1' }),
             })
           ),
           createElement(
-            AskCard,
+            askCard,
             cardProps({
               autoFocus: false,
               interaction: interaction({ id: 'ask-focus-2' }),

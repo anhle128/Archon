@@ -19,7 +19,6 @@ import type { Root } from 'react-dom/client';
 const react = await import('react');
 const reactQuery = await import('@tanstack/react-query');
 const reactDomClient = await import('react-dom/client');
-const legacyGraphLogsPane = await import('./LegacyGraphLogsPane');
 
 const act = react.act;
 const createElement = react.createElement;
@@ -202,6 +201,25 @@ function installHappyDom(): Window {
   return win;
 }
 
+let legacyGraphLogsPaneModulePromise: Promise<typeof import('./LegacyGraphLogsPane')> | null = null;
+
+async function loadLegacyGraphLogsPaneModule(): Promise<typeof import('./LegacyGraphLogsPane')> {
+  if (legacyGraphLogsPaneModulePromise === null) {
+    let tempWin: Window | null = null;
+    if (typeof globalThis.document === 'undefined') {
+      tempWin = installHappyDom();
+    }
+    legacyGraphLogsPaneModulePromise = import('./LegacyGraphLogsPane');
+    const module = await legacyGraphLogsPaneModulePromise;
+    if (tempWin !== null) {
+      // Radix keeps import-time DOM references; restore globals but keep the window alive.
+      restoreGlobals();
+    }
+    return module;
+  }
+  return legacyGraphLogsPaneModulePromise;
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -254,8 +272,9 @@ describe('LegacyGraphLogsPane', () => {
   let host: Element;
   let root: Root;
   let queryClient: InstanceType<typeof reactQuery.QueryClient>;
+  let legacyGraphLogsPane: typeof import('./LegacyGraphLogsPane');
 
-  beforeEach(() => {
+  beforeEach(async () => {
     notifyManager.setScheduler((cb: () => void): void => {
       cb();
     });
@@ -274,6 +293,7 @@ describe('LegacyGraphLogsPane', () => {
         queries: { retry: false },
       },
     });
+    legacyGraphLogsPane = await loadLegacyGraphLogsPaneModule();
   });
 
   afterEach(async () => {

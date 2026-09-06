@@ -18,13 +18,11 @@ import type { Root } from 'react-dom/client';
 const react = await import('react');
 const reactQuery = await import('@tanstack/react-query');
 const reactDomClient = await import('react-dom/client');
-const nodeTranscriptPane = await import('./NodeTranscriptPane');
 
 const act = react.act;
 const createElement = react.createElement;
 const notifyManager = reactQuery.notifyManager;
 const createRoot = reactDomClient.createRoot;
-const transcriptRefetchInterval = nodeTranscriptPane.transcriptRefetchInterval;
 
 const CREATED_AT = '2026-09-06T00:00:00.000Z';
 
@@ -185,6 +183,25 @@ function installHappyDom(): Window {
   return win;
 }
 
+let nodeTranscriptPaneModulePromise: Promise<typeof import('./NodeTranscriptPane')> | null = null;
+
+async function loadNodeTranscriptPaneModule(): Promise<typeof import('./NodeTranscriptPane')> {
+  if (nodeTranscriptPaneModulePromise === null) {
+    let tempWin: Window | null = null;
+    if (typeof globalThis.document === 'undefined') {
+      tempWin = installHappyDom();
+    }
+    nodeTranscriptPaneModulePromise = import('./NodeTranscriptPane');
+    const module = await nodeTranscriptPaneModulePromise;
+    if (tempWin !== null) {
+      // Radix keeps import-time DOM references; restore globals but keep the window alive.
+      restoreGlobals();
+    }
+    return module;
+  }
+  return nodeTranscriptPaneModulePromise;
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -216,7 +233,8 @@ function deferred<T>(): {
 }
 
 describe('transcriptRefetchInterval', () => {
-  test('polls node messages for non-terminal run statuses', () => {
+  test('polls node messages for non-terminal run statuses', async () => {
+    const { transcriptRefetchInterval } = await loadNodeTranscriptPaneModule();
     expect(transcriptRefetchInterval('pending')).toBe(1000);
     expect(transcriptRefetchInterval('running')).toBe(1000);
     expect(transcriptRefetchInterval('paused')).toBe(1000);
@@ -231,8 +249,9 @@ describe('NodeTranscriptPane', () => {
   let host: Element;
   let root: Root;
   let queryClient: InstanceType<typeof reactQuery.QueryClient>;
+  let nodeTranscriptPane: typeof import('./NodeTranscriptPane');
 
-  beforeEach(() => {
+  beforeEach(async () => {
     notifyManager.setScheduler((cb: () => void): void => {
       cb();
     });
@@ -249,6 +268,7 @@ describe('NodeTranscriptPane', () => {
         queries: { retry: false },
       },
     });
+    nodeTranscriptPane = await loadNodeTranscriptPaneModule();
   });
 
   afterEach(async () => {

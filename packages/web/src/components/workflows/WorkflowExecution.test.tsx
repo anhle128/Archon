@@ -1,14 +1,48 @@
 import { describe, expect, test } from 'bun:test';
+import { Window } from 'happy-dom';
 
-import {
+import type { WorkflowExecutionBody } from './WorkflowExecution';
+import type { WorkflowRunView } from './source-control/dag-run-tabs';
+import { getWorkflowRun, type WorkflowEventResponse } from '@/lib/api';
+
+const workflowExecutionImportWindow = new Window({ url: 'https://localhost/' });
+const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+const previousSelf = Object.getOwnPropertyDescriptor(globalThis, 'self');
+const previousHTMLElement = Object.getOwnPropertyDescriptor(globalThis, 'HTMLElement');
+Object.assign(globalThis as object, {
+  document: workflowExecutionImportWindow.document,
+  window: workflowExecutionImportWindow,
+  self: workflowExecutionImportWindow,
+  HTMLElement: workflowExecutionImportWindow.HTMLElement,
+});
+const {
   buildWorkflowDagNodeStates,
   emptyAskActionStates,
   mapWorkflowRunDetail,
   resolveWorkflowExecutionBody,
-  type WorkflowExecutionBody,
-} from './WorkflowExecution';
-import type { WorkflowRunView } from './source-control/dag-run-tabs';
-import { getWorkflowRun, type WorkflowEventResponse } from '@/lib/api';
+} = await import('./WorkflowExecution');
+// Radix keeps import-time DOM references; restore globals but keep the window alive.
+if (previousDocument === undefined) {
+  Reflect.deleteProperty(globalThis, 'document');
+} else {
+  Object.defineProperty(globalThis, 'document', previousDocument);
+}
+if (previousWindow === undefined) {
+  Reflect.deleteProperty(globalThis, 'window');
+} else {
+  Object.defineProperty(globalThis, 'window', previousWindow);
+}
+if (previousSelf === undefined) {
+  Reflect.deleteProperty(globalThis, 'self');
+} else {
+  Object.defineProperty(globalThis, 'self', previousSelf);
+}
+if (previousHTMLElement === undefined) {
+  Reflect.deleteProperty(globalThis, 'HTMLElement');
+} else {
+  Object.defineProperty(globalThis, 'HTMLElement', previousHTMLElement);
+}
 
 function workflowEvent(overrides: Partial<WorkflowEventResponse>): WorkflowEventResponse {
   return {

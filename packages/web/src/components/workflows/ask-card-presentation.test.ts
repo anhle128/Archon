@@ -147,6 +147,23 @@ describe('resolveAskCardPresentation', () => {
           resolvedAt: CANONICAL_RESOLVED_AT,
         },
       },
+      {
+        name: 'answered status without canonical answer',
+        actual: resolve({
+          interaction: interaction({
+            status: 'answered',
+            answer: null,
+            resolved_at: CANONICAL_RESOLVED_AT,
+          }),
+          action: { phase: 'accepted', answer: LOCAL_ANSWER, resolvedAt: LOCAL_RESOLVED_AT },
+        }),
+        expected: {
+          viewState: 'answered',
+          answer: null,
+          error: 'Malformed canonical answer',
+          resolvedAt: CANONICAL_RESOLVED_AT,
+        },
+      },
     ];
 
     for (const { actual, expected } of cases) {
