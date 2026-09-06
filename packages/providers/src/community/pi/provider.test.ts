@@ -53,6 +53,10 @@ const mockExtensionRunner = {
   setFlagValue: mockSetFlagValue,
 };
 const mockSetModel = mock(async (_model: unknown) => undefined);
+const mockContinue = mock(async () => {
+  for (const ev of scriptedEvents) capturedListener?.(ev);
+});
+const mockAgentState: { messages: unknown[] } = { messages: [] };
 const mockSession = {
   subscribe: mockSubscribe,
   prompt: mockPrompt,
@@ -63,13 +67,29 @@ const mockSession = {
   setModel: mockSetModel,
   isStreaming: false,
   sessionId: 'mock-session-uuid',
+  agent: {
+    state: mockAgentState,
+    continue: mockContinue,
+  },
 };
 
-const mockCreateAgentSession = mock(async (_options?: unknown) => ({
-  session: mockSession,
-  extensionsResult: { extensions: [], errors: [], runtime: {} },
-  modelFallbackMessage: undefined,
-}));
+const mockCreateAgentSession = mock(async (options?: unknown) => {
+  const manager = (
+    options as {
+      sessionManager?: {
+        buildSessionContext?: () => { messages: unknown[] };
+        messages?: unknown[];
+      };
+    }
+  )?.sessionManager;
+  const messages = manager?.buildSessionContext?.().messages ?? manager?.messages ?? [];
+  mockAgentState.messages = [...messages];
+  return {
+    session: mockSession,
+    extensionsResult: { extensions: [], errors: [], runtime: {} },
+    modelFallbackMessage: undefined,
+  };
+});
 
 // Per-test state backing the AuthStorage mock. `fileCreds` emulates what's
 // in ~/.pi/agent/auth.json; `runtimeOverrides` emulates env-var passthrough
@@ -106,8 +126,33 @@ const mockModelRegistryCreate = mock(() => ({
 // SessionManager mocks. Each returns a tagged session-manager stub so tests
 // can assert whether resume resolved to an existing session or fell through
 // to a fresh one.
-const mockSessionCreate = mock((_cwd: string) => ({ __smKind: 'created' }));
-const mockSessionOpen = mock((_path: string) => ({ __smKind: 'opened' }));
+type FakeSessionManager = {
+  __smKind: 'created' | 'opened';
+  messages: unknown[];
+  appendMessage: ReturnType<typeof mock>;
+  buildSessionContext: ReturnType<typeof mock>;
+};
+
+let lastResolvedManager: FakeSessionManager | undefined;
+
+function createFakeSessionManager(kind: 'created' | 'opened'): FakeSessionManager {
+  const messages: unknown[] = [];
+  const appendMessage = mock((message: unknown) => {
+    messages.push(message);
+    return `entry-${messages.length}`;
+  });
+  const buildSessionContext = mock(() => ({ messages: [...messages] }));
+  return { __smKind: kind, messages, appendMessage, buildSessionContext };
+}
+
+const mockSessionCreate = mock((_cwd: string) => {
+  lastResolvedManager = createFakeSessionManager('created');
+  return lastResolvedManager;
+});
+const mockSessionOpen = mock((_path: string) => {
+  lastResolvedManager = createFakeSessionManager('opened');
+  return lastResolvedManager;
+});
 const mockSessionList = mock(
   async (_cwd: string) => [] as { id: string; path: string; cwd: string }[]
 );
@@ -201,6 +246,7 @@ import {
   AskHumanNoStarterError,
   type NativeTool,
   type NativeToolHandlerContext,
+  type ResumeInteraction,
 } from '../../types';
 import { PI_CAPABILITIES } from './capabilities';
 // Same module instance the provider dynamic-imports, so clearing this cache
@@ -240,6 +286,7 @@ describe('PiProvider', () => {
     mockLogger.debug.mockClear();
     mockLogger.trace.mockClear();
     mockPrompt.mockClear();
+    mockContinue.mockClear();
     mockAbort.mockClear();
     mockDispose.mockClear();
     mockSubscribe.mockClear();
@@ -267,6 +314,8 @@ describe('PiProvider', () => {
     mockSessionOpen.mockClear();
     mockSessionList.mockClear();
     mockSessionList.mockImplementation(async () => []);
+    lastResolvedManager = undefined;
+    mockAgentState.messages = [];
     mockSettingsManagerInMemory.mockClear();
     mockSettingsManagerCreate.mockClear();
     mockSettingsManagerDrainErrors.mockReset();
@@ -2652,6 +2701,322 @@ describe('PiProvider', () => {
       expect(error).not.toBeInstanceOf(AskHumanNoStarterError);
       expect(mockAbort).not.toHaveBeenCalled();
       expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('AskHuman resume', () => {
+    const ANSWER_SENTINEL = 'SENTINEL_ANSWER_ZX9';
+    const ASK_RESUME_FAILED_MESSAGE = 'Could not resume the AskHuman session';
+    const interactions: ResumeInteraction[] = [
+      {
+        tool_use_id: 'toolu_answer_1',
+        payload: [{ questionId: 'q1', value: ANSWER_SENTINEL }],
+        declined: false,
+      },
+      {
+        tool_use_id: 'toolu_decline_2',
+        payload: 'declined',
+        declined: true,
+      },
+    ];
+
+    function loggerPayload(): string {
+      return JSON.stringify([
+        ...mockLogger.fatal.mock.calls,
+        ...mockLogger.error.mock.calls,
+        ...mockLogger.warn.mock.calls,
+        ...mockLogger.info.mock.calls,
+        ...mockLogger.debug.mock.calls,
+        ...mockLogger.trace.mock.calls,
+      ]);
+    }
+
+    function seedExistingSession(id = 'sess-ask'): void {
+      mockSessionList.mockImplementationOnce(async () => [
+        { id, path: `/sessions/${id}.jsonl`, cwd: '/tmp' },
+      ]);
+    }
+
+    function expectedToolResult(
+      interaction: ResumeInteraction,
+      timestamp: number
+    ): {
+      role: 'toolResult';
+      toolCallId: string;
+      toolName: 'AskHuman';
+      content: [{ type: 'text'; text: string }];
+      isError: false;
+      timestamp: number;
+    } {
+      return {
+        role: 'toolResult',
+        toolCallId: interaction.tool_use_id,
+        toolName: 'AskHuman',
+        content: [
+          {
+            type: 'text',
+            text: interaction.declined ? 'declined' : JSON.stringify(interaction.payload),
+          },
+        ],
+        isError: false,
+        timestamp,
+      };
+    }
+
+    test('appends ordered AskHuman tool results then continues without prompt', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      seedExistingSession();
+      resetScript(scriptedAgentEnd());
+      const now = 1_700_000_000_123;
+      const originalNow = Date.now;
+      Date.now = () => now;
+      try {
+        const { error } = await consume(
+          new PiProvider().sendQuery('executor prompt must not be used', '/tmp', 'sess-ask', {
+            model: 'google/gemini-2.5-pro',
+            resumeInteractions: interactions,
+          })
+        );
+        expect(error).toBeUndefined();
+      } finally {
+        Date.now = originalNow;
+      }
+
+      const expectedAnswer = expectedToolResult(interactions[0]!, now);
+      const expectedDecline = expectedToolResult(interactions[1]!, now);
+      expect(lastResolvedManager?.appendMessage.mock.calls.map(call => call[0])).toEqual([
+        expectedAnswer,
+        expectedDecline,
+      ]);
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+      const [createArgs] = mockCreateAgentSession.mock.calls[0] as [
+        { sessionManager: FakeSessionManager },
+      ];
+      expect(createArgs.sessionManager).toBe(lastResolvedManager);
+      expect(mockContinue).toHaveBeenCalledTimes(1);
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(mockSessionCreate).not.toHaveBeenCalled();
+    });
+
+    test('missing session throws without create', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      mockSessionList.mockImplementationOnce(async () => []);
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', 'missing-id', {
+          model: 'google/gemini-2.5-pro',
+          resumeInteractions: interactions,
+        })
+      );
+      expect(error?.message).toBe(ASK_RESUME_FAILED_MESSAGE);
+      expect(mockSessionCreate).not.toHaveBeenCalled();
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(mockContinue).not.toHaveBeenCalled();
+      expect(loggerPayload()).not.toContain(ANSWER_SENTINEL);
+    });
+
+    test('identical already-appended tool result is reused', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      const existing = expectedToolResult(interactions[0]!, 99);
+      mockSessionOpen.mockImplementationOnce(() => {
+        lastResolvedManager = createFakeSessionManager('opened');
+        lastResolvedManager.messages.push(existing);
+        return lastResolvedManager;
+      });
+      seedExistingSession();
+      resetScript(scriptedAgentEnd());
+      const now = 1_700_000_000_456;
+      const originalNow = Date.now;
+      Date.now = () => now;
+      try {
+        const { error } = await consume(
+          new PiProvider().sendQuery('hi', '/tmp', 'sess-ask', {
+            model: 'google/gemini-2.5-pro',
+            resumeInteractions: [interactions[0]!],
+          })
+        );
+        expect(error).toBeUndefined();
+      } finally {
+        Date.now = originalNow;
+      }
+      expect(lastResolvedManager?.appendMessage).not.toHaveBeenCalled();
+      expect(mockContinue).toHaveBeenCalledTimes(1);
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    test('conflicting existing tool result fails safely', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      mockSessionOpen.mockImplementationOnce(() => {
+        lastResolvedManager = createFakeSessionManager('opened');
+        lastResolvedManager.messages.push({
+          role: 'toolResult',
+          toolCallId: interactions[0]!.tool_use_id,
+          toolName: 'OtherTool',
+          content: [{ type: 'text', text: ANSWER_SENTINEL }],
+          isError: false,
+          timestamp: 1,
+        });
+        return lastResolvedManager;
+      });
+      seedExistingSession();
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', 'sess-ask', {
+          model: 'google/gemini-2.5-pro',
+          resumeInteractions: [interactions[0]!],
+        })
+      );
+      expect(error?.message).toBe(ASK_RESUME_FAILED_MESSAGE);
+      expect(mockCreateAgentSession).not.toHaveBeenCalled();
+      expect(loggerPayload()).not.toContain(ANSWER_SENTINEL);
+    });
+
+    test('matching result that is not the transcript tail fails safely', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      mockSessionOpen.mockImplementationOnce(() => {
+        lastResolvedManager = createFakeSessionManager('opened');
+        lastResolvedManager.messages.push(expectedToolResult(interactions[0]!, 1));
+        lastResolvedManager.messages.push({
+          role: 'user',
+          content: 'later message',
+          timestamp: 2,
+        });
+        return lastResolvedManager;
+      });
+      seedExistingSession();
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', 'sess-ask', {
+          model: 'google/gemini-2.5-pro',
+          resumeInteractions: [interactions[0]!],
+        })
+      );
+      expect(error?.message).toBe(ASK_RESUME_FAILED_MESSAGE);
+      expect(mockCreateAgentSession).not.toHaveBeenCalled();
+    });
+
+    test('constructed-agent tail mismatch fails safely', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      seedExistingSession();
+      mockCreateAgentSession.mockImplementationOnce(async () => ({
+        session: {
+          ...mockSession,
+          agent: {
+            state: { messages: [{ role: 'user', content: 'not the tool result' }] },
+            continue: mockContinue,
+          },
+        },
+        extensionsResult: { extensions: [], errors: [], runtime: {} },
+        modelFallbackMessage: undefined,
+      }));
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', 'sess-ask', {
+          model: 'google/gemini-2.5-pro',
+          resumeInteractions: [interactions[0]!],
+        })
+      );
+      expect(error?.message).toBe(ASK_RESUME_FAILED_MESSAGE);
+      expect(mockDispose).toHaveBeenCalled();
+      expect(mockContinue).not.toHaveBeenCalled();
+      expect(loggerPayload()).not.toContain(ANSWER_SENTINEL);
+    });
+
+    test('thrown continue error with answer sentinel is sanitized', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      seedExistingSession();
+      mockContinue.mockImplementationOnce(async () => {
+        throw new Error(`process crashed: ${ANSWER_SENTINEL}`);
+      });
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', 'sess-ask', {
+          model: 'google/gemini-2.5-pro',
+          resumeInteractions: [interactions[0]!],
+        })
+      );
+      expect(error?.message).toBe(ASK_RESUME_FAILED_MESSAGE);
+      expect(error?.cause).toBeUndefined();
+      expect(mockContinue).toHaveBeenCalledTimes(1);
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(loggerPayload()).not.toContain(ANSWER_SENTINEL);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { errorClass: expect.any(String) },
+        'pi.ask_resume_failed'
+      );
+    });
+
+    test('isError terminal result replaces errors while preserving usage', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      seedExistingSession();
+      resetScript([
+        {
+          type: 'agent_end',
+          messages: [
+            {
+              role: 'assistant',
+              usage: {
+                input: 11,
+                output: 7,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 18,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.012 },
+              },
+              stopReason: 'error',
+              errorMessage: `sdk failed: ${ANSWER_SENTINEL}`,
+              content: [],
+            },
+          ],
+        },
+      ]);
+      const { chunks, error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', 'sess-ask', {
+          model: 'google/gemini-2.5-pro',
+          resumeInteractions: [interactions[0]!],
+        })
+      );
+      expect(error).toBeUndefined();
+      const result = chunks.find(
+        (
+          chunk
+        ): chunk is {
+          type: 'result';
+          isError?: boolean;
+          errors?: string[];
+          tokens?: { input: number; output: number; totalTokens: number; cost?: number };
+          sessionId?: string;
+        } =>
+          typeof chunk === 'object' &&
+          chunk !== null &&
+          (chunk as { type?: string }).type === 'result'
+      );
+      expect(result).toMatchObject({
+        type: 'result',
+        isError: true,
+        errors: [ASK_RESUME_FAILED_MESSAGE],
+        sessionId: 'mock-session-uuid',
+      });
+      expect(result?.tokens).toMatchObject({ input: 11, output: 7, total: 18, cost: 0.012 });
+      expect(JSON.stringify(result)).not.toContain(ANSWER_SENTINEL);
+      expect(loggerPayload()).not.toContain(ANSWER_SENTINEL);
+    });
+
+    test('ordinary resume still permits cold fallback and starts with session.prompt', async () => {
+      process.env.GEMINI_API_KEY = 'sk-test';
+      mockSessionList.mockImplementationOnce(async () => []);
+      resetScript(scriptedAgentEnd());
+      const { chunks, error } = await consume(
+        new PiProvider().sendQuery('do a thing', '/tmp', 'nonexistent-id', {
+          model: 'google/gemini-2.5-pro',
+        })
+      );
+      expect(error).toBeUndefined();
+      expect(mockSessionCreate).toHaveBeenCalledWith('/tmp');
+      expect(mockPrompt).toHaveBeenCalledWith('do a thing');
+      expect(mockContinue).not.toHaveBeenCalled();
+      const systemChunks = chunks.filter(
+        (chunk): chunk is { type: 'system'; content: string } =>
+          typeof chunk === 'object' &&
+          chunk !== null &&
+          (chunk as { type?: string }).type === 'system'
+      );
+      expect(systemChunks.some(chunk => chunk.content.includes('Could not resume'))).toBe(true);
     });
   });
 });

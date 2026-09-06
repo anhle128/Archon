@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
@@ -801,6 +801,61 @@ describe('bridgeSession cleanup', () => {
     // Yield to let the microtask queue drain so the .catch() runs.
     await new Promise(resolve => setTimeout(resolve, 10));
   }, 5_000);
+});
+
+describe('bridgeSession startMode', () => {
+  test('continue calls agent.continue, never session.prompt, and still disposes', async () => {
+    const mockPrompt = mock(async () => undefined);
+    const mockContinue = mock(async () => undefined);
+    const mockDispose = mock(() => undefined);
+    const mockSession = {
+      sessionId: 'test-session-id',
+      prompt: mockPrompt,
+      dispose: mockDispose,
+      subscribe: () => () => undefined,
+      abort: async () => undefined,
+      agent: { continue: mockContinue, state: { messages: [] } },
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(
+      mockSession,
+      'must-not-be-prompted',
+      undefined,
+      undefined,
+      undefined,
+      'continue'
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(mockContinue).toHaveBeenCalledTimes(1);
+    expect(mockPrompt).not.toHaveBeenCalled();
+    expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('default startMode still calls session.prompt and never agent.continue', async () => {
+    const mockPrompt = mock(async () => undefined);
+    const mockContinue = mock(async () => undefined);
+    const mockDispose = mock(() => undefined);
+    const mockSession = {
+      sessionId: 'test-session-id',
+      prompt: mockPrompt,
+      dispose: mockDispose,
+      subscribe: () => () => undefined,
+      abort: async () => undefined,
+      agent: { continue: mockContinue, state: { messages: [] } },
+    } as unknown as AgentSession;
+
+    for await (const _chunk of bridgeSession(mockSession, 'test prompt')) {
+      // drain
+    }
+
+    expect(mockPrompt).toHaveBeenCalledTimes(1);
+    expect(mockPrompt).toHaveBeenCalledWith('test prompt');
+    expect(mockContinue).not.toHaveBeenCalled();
+    expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ─── streaming tail completion ────────────────────────────────────────────────────────────────────
