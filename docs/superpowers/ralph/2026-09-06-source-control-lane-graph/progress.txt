@@ -1,0 +1,265 @@
+## Codebase Patterns
+
+### Worktree smoke needs PORT so Vite does not proxy to 3090
+- **Where**: `packages/web/vite.config.ts` `apiPort = env.PORT ?? '3090'`
+- **Pattern**: Host Archon already occupies 3090. Start this worktree with `PORT=<free> bun run dev:server` and the same `PORT` for Vite so `/api` hits the new git log route. `bun --filter @archon/web dev` can log Local:5173 without binding; start `bun x vite --port 5173 --strictPort --host 127.0.0.1` from `packages/web`.
+- **Example**: `PORT=3750 bun run dev:server` then Vite with `PORT=3750`
+
+### Whole-tab CAP-6 hides History
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-panel.tsx` `displayedEmptyReason`
+- **Pattern**: Union Changes and History `emptyReason`. `container` wins over `no_checkout`. Either reason early-returns the quiet CAP-6 copy and omits the History heading/graph. Ready empty log (`commits: []`, no emptyReason) is `No commits yet` under History, not CAP-6.
+- **Example**: `if (reasons.includes('container')) return 'container'`
+
+### Tab History query is independent with combined stale
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-tab.tsx`
+- **Pattern**: Second `useQuery` keyed `['workflowRunGitLog', runId]` with the same Infinity/no-poll flags as Changes. Own `gitLogSnapshotReducer`. `onReload` `Promise.all`s both refetches. Combined `stale` is true when either snapshot or the viewer has pending AND the selected-file candidate guard still allows accept. Commit activation must not call diff/file.
+- **Example**: `const [result, historyResult] = await Promise.all([refetch(), refetchHistory()])`
+
+### mockGitRoutes log branch before unexpected-fetch throw
+- **Where**: `packages/web/src/component-integration/source-control-tab.test.tsx`
+- **Pattern**: Default `/git/log` to `EMPTY_GIT_LOG` so existing Changes tests stay stable. `onLog` is optional. `requireListbox` must pin `aria-label="Uncommitted changes"`. Complete URL equality assertions filter `/git/log`. Direct panel renders pass `historySnapshot` + `historyLoadState`.
+- **Example**: `if (url.includes('/git/log')) { logCall += 1; ... }`
+
+### History graph is SVG + listbox, not React Flow
+- **Where**: `packages/web/src/components/workflows/source-control/commit-history-graph.tsx`, `commit-graph-row.tsx`
+- **Pattern**: Reuse Changes' `useVirtualizer` (`estimateSize` 24, `initialRect` height 280, overscan 8). `nextCommitIndex` mirrors `nextChangedFileIndex`. Rows are `role="option"` buttons. SVG width `laneCount * 12`, height 24; `data-edge="through|incoming|parent"`; circle vs diamond polygon; `stroke-text-secondary` / `fill-text-primary`; never opacity. `aria-label` is `${isMerge ? 'Merge commit' : 'Commit'} ${shortOid}: ${subject}; ${authorName}; ${relativeTime}`. Do not import `@xyflow/react`.
+- **Example**: `useVirtualizer({ count, estimateSize: () => COMMIT_ROW_HEIGHT, initialRect: { width: 0, height: 280 }, overscan: 8 })`
+
+### History freeze reducer is a deliberate duplicate of Changes
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-state.ts` `gitLogSnapshotReducer`
+- **Pattern**: Do not extract a shared snapshot reducer. Rule of Three: copy the freeze/pending/accept transitions beside `sourceControlSnapshotReducer`. Fingerprint ready History as `ready:${revision}` and CAP-6 as `empty:${emptyReason}` so an empty unborn log never collides with `no_checkout`/`container`. `toGitLogSnapshot` also copies `truncated`.
+- **Example**: `gitLogSnapshotReducer(INITIAL_GIT_LOG_STATE, { type: 'received', snapshot })`
+
+### assignCommitLanes is pure topology, not one-lane-per-branch
+- **Where**: `packages/web/src/components/workflows/source-control/commit-lanes.ts`
+- **Pattern**: Newest-first git log order. `active: (string | null)[]` is the next oid each lane is waiting to paint. Incoming = reservations matching this oid; through = other non-null reservations. Place on smallest incoming, else first null, else append. Clear incoming before placing parents in `%P` order. First parent reuses this commit's lane when free; later parents reuse an existing reservation, a null slot, or append. Root commits leave no outgoing reservation. `laneCount` is one more than the max lane index. No React/DOM.
+- **Example**: `assignCommitLanes([{ oid, parents }])` → `{ rows: [{ oid, lane, incomingLanes, throughLanes, parentLanes, isMerge }], laneCount }`
+
+### Git log client mirrors getWorkflowRunGitChanges
+- **Where**: `packages/web/src/lib/api.ts` `getWorkflowRunGitLog`
+- **Pattern**: Same `fetchJSON` + `encodeURIComponent(runId)` + optional `{ signal }` RequestInit. No `working_path`. Re-export `GitLogResponse`/`GitLogCommit` next to the other git types. Client tests append to `api.git-changes.test.ts`.
+- **Example**: `return fetchJSON(\`/api/workflows/runs/${encodeURIComponent(runId)}/git/log\`, options?.signal ? { signal: options.signal } : undefined);`
+
+### generate:types needs this worktree's OpenAPI, not port 3090
+- **Where**: `packages/web/package.json` `generate:types` hardcodes `http://localhost:3090/api/openapi.json`
+- **Pattern**: Host Archon on 3090 is a different checkout and lacks new routes. Start `PORT=<free> bun run dev:server` from this worktree and run `bun x openapi-typescript http://127.0.0.1:<port>/api/openapi.json -o src/lib/api.generated.d.ts` from `packages/web`. Do not kill the process on 3090.
+- **Example**: `PORT=3191 bun run dev:server` then `bun x openapi-typescript http://127.0.0.1:3191/api/openapi.json -o src/lib/api.generated.d.ts`
+
+### Git log route mirrors changes CAP-6 handler
+- **Where**: `packages/server/src/routes/git/log-handler.ts`, registered in `packages/server/src/routes/api.ts` immediately after changes
+- **Pattern**: Same `loadRunCheckout` gate as changes: 404 on missing run, 200 CAP-6 empty envelope (`container`/`no_checkout`) before any git probe, post-read recheck on thrown git error, opaque 500 `{ error: 'Could not read git history' }` with `errorType` only. Paired Pino `git.log_started` then `git.log_completed`/`git.log_failed`. Do not call `requireWebUser`.
+- **Example**: `registerOpenApiRoute(gitLogRoute, async c => handleGitLog(c, apiError));`
+
+### Git log HTTP tests share api.git-changes.test.ts
+- **Where**: `packages/server/src/routes/api.git-changes.test.ts` (`mockLog`, `expectGitLogPair`)
+- **Pattern**: Keep `mockLog` configurable from US-001. Helpers `gitLogCalls`/`expectGitLogPair` sit beside `expectFileLogPair`. Tests must stay in this isolated process — `bun --filter @archon/server test` already splits it.
+- **Example**: `expectGitLogPair('git.log_completed', { runId: 'run-1', commitCount: 1 });`
+
+### @archon/git mock.module factories must stub new exports
+- **Where**: 31 `mock.module('@archon/git')` factories listed in plan Task 1 Step 4
+- **Pattern**: Bun `mock.module()` merges omitted exports from the real module. A new public export like `log` will hit live git unless every factory stubs it.
+- **Example**: `log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),`
+
+### Git exec error text uses Error & { stderr?: string }
+- **Where**: `packages/git/src/git-log.ts` `errorText`, matching `packages/git/src/repo.ts` / `worktree.ts`
+- **Pattern**: Do not type `message`/`stderr` as `unknown` then `String(...)` — `@typescript-eslint/no-base-to-string` fails. Cast to `Error & { stderr?: string }` and interpolate.
+- **Example**: `const err = error as Error & { stderr?: string }; return \`${err.message} ${err.stderr ?? ''}\`;`
+
+### Fresh worktree needs bun install before bun --filter tests
+- **Where**: package scripts such as `bun --filter @archon/git test`
+- **Pattern**: Filter runs from the package directory and cannot resolve workspace deps without `node_modules`. `bun test packages/git/src/git-log.test.ts` from repo root can still pass because git-log itself does not import `@archon/paths`.
+
+---
+
+## 2026-09-06 — US-001: Add the public log git read
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/git-log.ts` — `log`, `parseGitLogZ`, `gitLogResultFromStdout`, `isEmptyHistoryError`, `GIT_LOG_MAX_COMMITS`
+- `packages/git/src/git-log.test.ts` — parser, truncation, unborn HEAD, real merge/dev-sibling git tests
+- `packages/git/src/index.ts` — export log types and helper
+- 31 `@archon/git` mock factories — stub `log`; named `mockLog` in `packages/server/src/routes/api.git-changes.test.ts`
+
+**Acceptance criteria verified**:
+- [x] Create packages/git/src/git-log.ts and failing unit tests in packages/git/src/git-log.test.ts covering parser, truncation, unborn/empty repositories, and real git commits with merges and dev sibling branches.
+- [x] Implement parseGitLogZ(stdout: string): GitLogCommit[] splitting NUL-delimited records into 5-tuples; validate SHA-1/SHA-256; throw 'Malformed git log output' on invalid format.
+- [x] Implement gitLogResultFromStdout(stdout: string): GitLogResult with 501 sentinel cap and SHA-256 revision of stdout.
+- [x] Implement isEmptyHistoryError(error: unknown): boolean matching unborn/empty repo errors.
+- [x] Implement log(workingPath) using execFileAsync with the exact argv.
+- [x] Export log, GIT_LOG_MAX_COMMITS, GitLogCommit, and GitLogResult from packages/git/src/index.ts.
+- [x] Stub log in all 31 existing @archon/git mock factories.
+- [x] Verify bun test packages/git/src/git-log.test.ts and bun --filter @archon/git test pass green.
+
+**Learnings**:
+- This worktree had no node_modules; `bun install` was required before `bun --filter @archon/git test`.
+- `errorText` had to match repo.ts's `Error & { stderr?: string }` cast to satisfy `no-base-to-string`.
+- Named `mockLog` in api.git-changes.test.ts is required by the plan (US-002 will override it).
+
+---
+
+## 2026-09-06 — US-002: Add GET /api/workflows/runs/{runId}/git/log route
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/git.schemas.ts` — `gitLogCommitSchema` + `gitLogResponseSchema` (ready vs CAP-6 empty union)
+- `packages/server/src/routes/git/log-route.ts` — OpenAPI GET `/api/workflows/runs/{runId}/git/log` 200/404/500
+- `packages/server/src/routes/git/log-handler.ts` — `loadRunCheckout`, `log(toWorktreePath)`, ENOENT recheck, opaque 500, paired Pino
+- `packages/server/src/routes/api.ts` — register immediately after changes; no `requireWebUser`
+- `packages/server/src/routes/api.git-changes.test.ts` — 7 HTTP tests + `expectGitLogPair`
+
+**Acceptance criteria verified**:
+- [x] Failing-then-green HTTP tests: missing run 404, CAP-6 container, CAP-6 no_checkout, post-gate 500, success, ignored `working_path`, paired Pino
+- [x] `gitLogCommitSchema` and `gitLogResponseSchema` (`emptyReason` optional `container` | `no_checkout`, commits, revision, truncated)
+- [x] `log-route.ts` OpenAPI GET with 200, 404, 500
+- [x] `log-handler.ts` uses `loadRunCheckout`, CAP-6, `@archon/git` `log`, ENOENT recheck, opaque 500, paired `git.log_*` events
+- [x] Registered in `api.ts` alongside existing git routes
+- [x] `bun test packages/server/src/routes/api.git-changes.test.ts` (62 pass) and `bun --filter @archon/server test` (0 fail)
+
+**Learnings**:
+- Handler is a near-copy of `changes-handler.ts` with `commitCount` instead of `fileCount` and `truncated` on the ready body.
+- `z.string().datetime({ offset: true })` still works on Zod 4.4 via `@hono/zod-openapi` for git `%aI` timestamps like `2026-09-06T18:09:18Z`.
+- ESLint ignores `*.test.ts`; do not pass test files to eslint --max-warnings 0 or the ignore warning fails the gate.
+
+---
+
+## 2026-09-06 — US-003: Generate web contract and add log client
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated OpenAPI types with `GitLogResponse` and `GitLogCommit`
+- `packages/web/src/lib/api.ts` — re-export types + `getWorkflowRunGitLog`
+- `packages/web/src/lib/api.git-changes.test.ts` — URL encoding, no `working_path`, AbortSignal forwarding
+- `packages/web/src/components/workflows/build-run-graph-input.ts` — unblock only: `case 'awaiting'` in `toNodeState`
+
+**Acceptance criteria verified**:
+- [x] Failing client tests asserting GET `/api/workflows/runs/{runId}/git/log` without `working_path`, URL-encoded runId, and AbortSignal in RequestInit
+- [x] Regenerated `api.generated.d.ts` contains `GitLogResponse` and `GitLogCommit` in `components['schemas']`
+- [x] Re-export `GitLogCommit` and `GitLogResponse` from `api.ts`
+- [x] Implement `getWorkflowRunGitLog(runId, options?: { signal?: AbortSignal })`
+- [x] `bun test packages/web/src/lib/api.git-changes.test.ts` (20 pass) and `bun --filter @archon/web type-check` green
+
+**Learnings**:
+- Port 3090 is the host Archon checkout (`/Volumes/WD_BLACK/workspace/opensource/Archon`); do not stop it. Generate types from this worktree's server on a free port.
+- `bun --filter @archon/web type-check` failed on a pre-existing missing `awaiting` case; unblocked with a separate `chore(unblock)` commit before restoring US-003.
+
+---
+
+BLOCKER US-003 | gate=bun --filter @archon/web type-check | cause=packages/web/src/components/workflows/build-run-graph-input.ts:35 TS2366 Function lacks ending return statement (switch omitted WorkflowStepStatus 'awaiting') | action=chore(unblock) added case 'awaiting' then restored US-003 stash | 2026-09-06
+
+---
+
+## 2026-09-06 — US-004: Implement Spike 3 commit lane assignment
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/commit-lanes.ts` — pure `assignCommitLanes` with reserved-lane topology
+- `packages/web/src/components/workflows/source-control/commit-lanes.test.ts` — linear, merge/convergence, octopus, root, empty, windowed, 500-commit
+
+**Acceptance criteria verified**:
+- [x] Unit tests for linear history on lane 0, merge commits connecting branches, branch convergence, octopus merges, root commits with empty parents, empty commit lists, and 500-commit stability
+- [x] Implement `assignCommitLanes(commits: readonly { oid: string; parents: readonly string[] }[]): LaneGraph`
+- [x] Process commits newest-first; assign to smallest incoming, reusable null, or append
+- [x] Clear incoming reservations before placing parents in git `%P` order; roots leave no outgoing reservations
+- [x] Return `LaneGraph` with `rows` (`oid`, `lane`, `incomingLanes`, `throughLanes`, `parentLanes`, `isMerge`) and `laneCount`
+- [x] `bun test packages/web/src/components/workflows/source-control/commit-lanes.test.ts` (7 pass)
+
+**Learnings**:
+- Renderer checkpoint still holds: React Flow stays the DAG canvas; Source Control already has listbox + `useVirtualizer`; no new deps.
+- AC required a 500-commit stability test the plan snippet omitted; added a 500-commit linear chain plus a dedicated empty-parents root case.
+- Plan's `LaneRow` name matches the algorithm; AC's `CommitLaneRow` is the same shape.
+
+---
+
+## 2026-09-06 — US-005: Freeze History snapshots beside Changes
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/source-control-state.ts` — `GitLogSnapshot` types, `toGitLogSnapshot`, `gitLogSnapshotReducer`, `INITIAL_GIT_LOG_STATE` appended beside unchanged Changes reducer
+- `packages/web/src/components/workflows/source-control/source-control-state.test.ts` — first ready display, divergent freeze, matching-revision no-op, CAP-6 divergence, accept_pending
+
+**Acceptance criteria verified**:
+- [x] Unit tests in source-control-state.test.ts for first ready display, revision-divergent pending freeze, matching-revision no-op, and accepted reload swap
+- [x] Define GitLogSnapshot, GitLogSnapshotState, GitLogSnapshotAction, and INITIAL_GIT_LOG_STATE
+- [x] Implement toGitLogSnapshot and gitLogSnapshotReducer
+- [x] Retain existing Changes snapshot reducer and types completely unchanged
+- [x] bun test packages/web/src/components/workflows/source-control/source-control-state.test.ts (10 pass)
+
+**Learnings**:
+- Duplicate the freeze/pending/accept reducer; do not extract a generic helper (Rule of Three).
+- Fingerprint CAP-6 as `empty:${emptyReason}` so a ready empty log (`ready:${revision}`) never matches no_checkout/container.
+- Existing Changes tests must keep passing in the same file (5 + 5 = 10).
+
+---
+
+## 2026-09-06 — US-006: Render virtualized History lane graph widget
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/format-commit-time.ts` — `formatCommitTime` with RelativeTimeFormat under 30 days, UTC DateTimeFormat after, `Unknown time` on invalid input
+- `packages/web/src/components/workflows/source-control/format-commit-time.test.ts` — relative, UTC offset, invalid fallback
+- `packages/web/src/components/workflows/source-control/commit-graph-row.tsx` — option row with SVG through/incoming/parent edges, circle vs diamond, no opacity
+- `packages/web/src/components/workflows/source-control/commit-history-graph.tsx` — virtualized listbox, `nextCommitIndex`, Enter/Space activate without opening files
+- `packages/web/src/components/workflows/source-control/commit-history-graph.test.tsx` — SVG topology, a11y names, virtualization, keyboard helpers
+
+**Acceptance criteria verified**:
+- [x] Create format-commit-time.ts and format-commit-time.test.ts implementing formatCommitTime
+- [x] Create commit-graph-row.tsx with role=option, aria-label, inline SVG lanes (width laneCount * 12px, height 24px)
+- [x] SVG through/incoming/parent edges with stroke-text-secondary strokeWidth 1.5, no opacity; circle vs diamond fill-text-primary
+- [x] Create commit-history-graph.tsx listbox aria-label=Commit history, aria-activedescendant, useVirtualizer 24px / 280px fallback
+- [x] Export nextCommitIndex for ArrowUp/Down, Home, End; Enter/Space selects without opening files
+- [x] Create commit-history-graph.test.tsx verifying SVG topology, a11y, keyboard, no opacity
+- [x] bun test packages/web/src/components/workflows/source-control/ passes green
+
+**Learnings**:
+- Follow Changes virtualizer exactly: `initialRect: { width: 0, height: 280 }` is what makes SSR `renderToStaticMarkup` emit rows and `height:4800px`.
+- `nextCommitIndex('Enter', …)` must return the current index; file-open is Story 2.2.
+- Prettier wrapped the long merge `aria-label` expect; tests still match the concatenated accessible name.
+
+---
+
+
+## 2026-09-06 — US-007: Insert History below Changes and integrate tab queries
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/source-control-panel.tsx` — two-region Changes/History layout, whole-tab CAP-6, empty/truncated/error History states
+- `packages/web/src/components/workflows/source-control/source-control-panel.test.tsx` — two-region, CAP-6 omission, empty-repo, error Reload, truncation banner
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — independent git log query, history freeze reducer, concurrent Reload, combined stale
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — URL-aware mocks, mount log fetch, CAP-6, keyboard without file open, History freeze
+
+**Acceptance criteria verified**:
+- [x] Panel accepts historySnapshot and historyLoadState; Changes above History with flex-1 min-h-0
+- [x] History renders CommitHistoryGraph, No commits yet, truncation, loading/error with in-region Reload
+- [x] Whole-tab CAP-6 from either region; container precedes no_checkout; History heading omitted
+- [x] Panel tests cover two-region, CAP-6 exclusion, empty repo
+- [x] Tab useQuery getWorkflowRunGitLog (staleTime Infinity, no polling); gitLogSnapshotReducer; combined stale; concurrent refetch; commit selection without opening files
+- [x] Integration tests: mounted log query, empty history, CAP-6, concurrent reload, no diff/file on commit Enter
+- [x] NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx (42 pass)
+
+**Learnings**:
+- mockFetchResponses must be URL-aware once the tab issues a second endpoint; sequential payloads would steal log fetches.
+- Combined stale still honors the selected-file candidate guard so History pending cannot expose Changed on disk — Reload before the viewer candidate is ready.
+- file-viewer.test.tsx keeps not.toContain('History'); the viewer has no History chrome.
+
+---
+
+## 2026-09-06 — US-008: Verify full acceptance gates and update sprint status
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` — epic-2 in-progress; 2-1 done; 2-2 remains backlog
+
+**Acceptance criteria verified**:
+- [x] Focused isolated tests: git-log 10, commit-lanes 7, api.git-changes 62, web api.git-changes 20, source-control/ 71, source-control-tab 42 — all 0 fail
+- [x] Package suites: @archon/git 274, @archon/server (api.git-changes own invocation, 0 fail), @archon/web (source-control-tab own invocation, 0 fail)
+- [x] bun run format:check, git diff --check, bun run validate (type-check, lint --max-warnings 0, format, test:install, full test) all exit 0
+- [x] 19-point matrix: two-region panel, CAP-6 omission, SVG incoming/through/parent + circle/diamond, ordered parents[], non-dev commits, SHA-1/SHA-256 no mix, keyboard nextCommitIndex + mounted Enter without /git/diff|/git/file, stroke-text-secondary/fill-text-primary no opacity, No commits yet, CAP-6 HTTP 200, container never calls log, execFileAsync log, 500 cap + 501 sentinel, registerOpenApiRoute + generated types, encoded runId only, freeze Reload, no Stage/Discard/Commit chrome, console untouched vs origin/dev, no new package.json/bun.lock deps
+- [x] Legacy smoke on `/legacy/workflows/runs/5d34895e93307a3f345df852d74bd5d7`: Changes above History lane graph with merge diamond; commit click left viewer on Select a file to inspect
+- [x] sprint-status.yaml updated; 2-2 still backlog
+
+**Learnings**:
+- Vite proxy defaults to 3090 unless PORT is set; smoke must share PORT with this worktree's server.
+- `bun --filter @archon/web dev` can print Local:5173 without actually listening; start vite with `--host 127.0.0.1 --strictPort`.
+- This checkout's HEAD log is truncated at 500, so the live History region shows "Showing the newest 500 commits."
+
+---

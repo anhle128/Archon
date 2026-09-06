@@ -431,6 +431,8 @@ export async function getWorkflowRun(
 export type GitChangesResponse = components['schemas']['GitChangesResponse'];
 export type GitChangedFile = components['schemas']['GitChangedFile'];
 export type GitEmptyReason = components['schemas']['GitEmptyReason'];
+export type GitLogResponse = components['schemas']['GitLogResponse'];
+export type GitLogCommit = components['schemas']['GitLogCommit'];
 export type GitDiffResponse = components['schemas']['GitDiffResponse'];
 export type GitReadyDiffResponse = Exclude<GitDiffResponse, { emptyReason: GitEmptyReason }>;
 export type GitDiffHunk = components['schemas']['GitDiffHunk'];
@@ -486,6 +488,16 @@ export async function getWorkflowRunGitChanges(
 ): Promise<GitChangesResponse> {
   return fetchJSON(
     `/api/workflows/runs/${encodeURIComponent(runId)}/git/changes`,
+    options?.signal ? { signal: options.signal } : undefined
+  );
+}
+
+export async function getWorkflowRunGitLog(
+  runId: string,
+  options?: { signal?: AbortSignal }
+): Promise<GitLogResponse> {
+  return fetchJSON(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/git/log`,
     options?.signal ? { signal: options.signal } : undefined
   );
 }

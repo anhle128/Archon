@@ -323,6 +323,7 @@ mock.module('@archon/git', () => ({
   hasUncommittedChanges: mock(() => Promise.resolve(false)),
   changedFiles: mock(async () => ({ files: [], revision: '0'.repeat(64) })),
   isGitWorkTree: mock(async () => false),
+  log: mock(async () => ({ commits: [], revision: '0'.repeat(64), truncated: false })),
 }));
 
 mock.module('fs', () => ({

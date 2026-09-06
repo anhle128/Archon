@@ -4,6 +4,7 @@ import {
   getWorkflowRunGitChanges,
   getWorkflowRunGitDiff,
   getWorkflowRunGitFile,
+  getWorkflowRunGitLog,
   gitFileUrl,
   type GitDiffHunk,
 } from './api';
@@ -355,5 +356,60 @@ describe('getWorkflowRunGitFile', () => {
         message: `API error 404 (/api/workflows/runs/run%2Fone/git/file/src/a.ts): ${'x'.repeat(200)}...`,
       });
     }
+  });
+});
+
+describe('getWorkflowRunGitLog', () => {
+  test('GETs the encoded run-scoped log URL without a checkout path', async () => {
+    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          commits: [
+            {
+              oid: 'a'.repeat(40),
+              parents: [],
+              authorName: 'Ada',
+              authorDate: '2026-09-06T18:09:18Z',
+              subject: 'init',
+            },
+          ],
+          revision: 'a'.repeat(64),
+          truncated: false,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    );
+
+    const response = await getWorkflowRunGitLog('run/one');
+
+    expect(response).toEqual({
+      commits: [
+        {
+          oid: 'a'.repeat(40),
+          parents: [],
+          authorName: 'Ada',
+          authorDate: '2026-09-06T18:09:18Z',
+          subject: 'init',
+        },
+      ],
+      revision: 'a'.repeat(64),
+      truncated: false,
+    });
+    expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/log');
+    expect(String(fetchSpy.mock.calls[0]?.[0])).not.toContain('working_path');
+  });
+
+  test('forwards the exact AbortSignal in RequestInit', async () => {
+    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ commits: [], revision: 'a'.repeat(64), truncated: false }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    const signal = new AbortController().signal;
+
+    await getWorkflowRunGitLog('run/one', { signal });
+
+    expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/log', { signal });
   });
 });

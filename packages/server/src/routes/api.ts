@@ -546,6 +546,8 @@ import {
 } from './schemas/workflow.schemas';
 import { gitChangesRoute } from './git/changes-route';
 import { handleGitChanges } from './git/changes-handler';
+import { gitLogRoute } from './git/log-route';
+import { handleGitLog } from './git/log-handler';
 import { gitDiffRoute } from './git/diff-route';
 import { handleGitDiff } from './git/diff-handler';
 import { handleGitFile } from './git/file-handler';
@@ -5018,6 +5020,11 @@ export function registerApiRoutes(
   // GET /api/workflows/runs/:runId/git/changes - Live uncommitted changes for a run
   registerOpenApiRoute(gitChangesRoute, async c => {
     return handleGitChanges(c, apiError);
+  });
+
+  // GET /api/workflows/runs/:runId/git/log - Commit history for a run checkout
+  registerOpenApiRoute(gitLogRoute, async c => {
+    return handleGitLog(c, apiError);
   });
 
   // GET /api/workflows/runs/:runId/git/diff - Now hunks for a modified file

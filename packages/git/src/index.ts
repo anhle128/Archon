@@ -74,6 +74,10 @@ export type {
   PorcelainEntry,
 } from './changed-files';
 
+// Commit log (run-branch history)
+export { GIT_LOG_MAX_COMMITS, log } from './git-log';
+export type { GitLogCommit, GitLogResult } from './git-log';
+
 // Forge detection
 export { detectForge } from './forge';
 export type { ForgeType, ForgeInfo } from './forge';

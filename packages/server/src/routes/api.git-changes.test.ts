@@ -13,6 +13,7 @@ import type {
   FileAtSource,
   FileDiffRequest,
   FileDiffResult,
+  GitLogResult,
 } from '@archon/git';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
@@ -31,6 +32,13 @@ const mockChangedFiles = mock(
   async (_workingPath: string): Promise<ChangedFilesResult> => ({
     files: [],
     revision: REVISION,
+  })
+);
+const mockLog = mock(
+  async (_workingPath: string): Promise<GitLogResult> => ({
+    commits: [],
+    revision: REVISION,
+    truncated: false,
   })
 );
 const mockIsGitWorkTree = mock(async (_workingPath: string): Promise<boolean> => true);
@@ -108,6 +116,7 @@ mock.module('@archon/git', () => ({
   fileDiff: mockFileDiff,
   changedFiles: mockChangedFiles,
   isGitWorkTree: mockIsGitWorkTree,
+  log: mockLog,
 }));
 mock.module('@archon/paths', () => ({
   createLogger: (): typeof mockLogger => mockLogger,
@@ -224,6 +233,27 @@ function expectFileLogPair(
   return payload;
 }
 
+function gitLogCalls(): Array<{ payload: Record<string, unknown>; event: string }> {
+  return [...mockLogger.info.mock.calls, ...mockLogger.error.mock.calls]
+    .filter(
+      (call): call is [Record<string, unknown>, string] =>
+        typeof call[1] === 'string' && String(call[1]).startsWith('git.log_')
+    )
+    .map(([payload, event]) => ({ payload, event }));
+}
+
+function expectGitLogPair(
+  terminal: 'git.log_completed' | 'git.log_failed',
+  terminalPayload: Record<string, unknown>,
+  runId = 'run-1'
+): void {
+  const events = gitLogCalls();
+  expect(events).toEqual([
+    { payload: { runId }, event: 'git.log_started' },
+    { payload: terminalPayload, event: terminal },
+  ]);
+}
+
 beforeEach(async () => {
   checkoutDir = await mkdtemp(join(tmpdir(), 'archon-git-route-'));
   mockGetWorkflowRun.mockReset();
@@ -231,6 +261,7 @@ beforeEach(async () => {
   mockGetById.mockReset();
   mockChangedFiles.mockReset();
   mockIsGitWorkTree.mockReset();
+  mockLog.mockReset();
   mockFileAt.mockReset();
   mockFileDiff.mockReset();
   mockGetWorkflowRun.mockImplementation(async (): Promise<WorkflowRun> => runRow());
@@ -242,6 +273,9 @@ beforeEach(async () => {
     async (): Promise<ChangedFilesResult> => ({ files: [], revision: REVISION })
   );
   mockIsGitWorkTree.mockImplementation(async (): Promise<boolean> => true);
+  mockLog.mockImplementation(
+    async (): Promise<GitLogResult> => ({ commits: [], revision: REVISION, truncated: false })
+  );
   mockFileAt.mockImplementation(async (): Promise<FileAtResult> => readyFileAt());
   mockFileDiff.mockImplementation(
     async (): Promise<FileDiffResult> => ({
@@ -1070,4 +1104,115 @@ test('file route maps stale cursor to 409 and keeps CAP-6 free of presentation h
   const empty = await makeApp().request('/api/workflows/runs/run-1/git/file/x.ts?source=worktree');
   expect(empty.headers.get('X-Archon-Git-Presentation')).toBeNull();
   expect(empty.headers.get('ETag')).toBeNull();
+});
+
+test('git log returns 404 for a missing run', async () => {
+  mockGetWorkflowRun.mockResolvedValueOnce(null);
+
+  const response = await makeApp().request('/api/workflows/runs/missing/git/log');
+
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ error: 'Workflow run not found' });
+  expect(mockLog).not.toHaveBeenCalled();
+  expectGitLogPair('git.log_failed', { runId: 'missing' }, 'missing');
+});
+
+test('git log returns container CAP-6 before any git probe', async () => {
+  mockGetConversationById.mockResolvedValueOnce({ isolation_env_id: 'env-1' });
+  mockGetById.mockResolvedValueOnce({ provider: 'container' });
+
+  const response = await makeApp().request('/api/workflows/runs/run-1/git/log');
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    emptyReason: 'container',
+    commits: [],
+    revision: '',
+    truncated: false,
+  });
+  expect(mockIsGitWorkTree).not.toHaveBeenCalled();
+  expect(mockLog).not.toHaveBeenCalled();
+  expectGitLogPair('git.log_completed', { runId: 'run-1', emptyReason: 'container' });
+});
+
+test('git log returns no_checkout for a null working_path', async () => {
+  mockGetWorkflowRun.mockResolvedValueOnce(runRow({ working_path: null }));
+
+  const response = await makeApp().request('/api/workflows/runs/run-1/git/log');
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    emptyReason: 'no_checkout',
+    commits: [],
+    revision: '',
+    truncated: false,
+  });
+  expect(mockLog).not.toHaveBeenCalled();
+  expectGitLogPair('git.log_completed', { runId: 'run-1', emptyReason: 'no_checkout' });
+});
+
+test('git log serializes HEAD commits from the canonical checkout and ignores query paths', async () => {
+  const canonical = await realpath(checkoutDir);
+  const commit = {
+    oid: 'a'.repeat(64),
+    parents: ['b'.repeat(64)],
+    authorName: 'Ada',
+    authorDate: '2026-09-06T18:09:18Z',
+    subject: 'run work',
+  };
+  mockLog.mockResolvedValueOnce({ commits: [commit], revision: REVISION, truncated: false });
+
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/log?working_path=%2Ftmp%2Fhostile'
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    commits: [commit],
+    revision: REVISION,
+    truncated: false,
+  });
+  expect(mockLog).toHaveBeenCalledWith(canonical);
+  expectGitLogPair('git.log_completed', { runId: 'run-1', commitCount: 1 });
+});
+
+test('git log returns an empty ready history rather than CAP-6 for an unborn repository', async () => {
+  mockLog.mockResolvedValueOnce({ commits: [], revision: REVISION, truncated: false });
+
+  const response = await makeApp().request('/api/workflows/runs/run-1/git/log');
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ commits: [], revision: REVISION, truncated: false });
+  expectGitLogPair('git.log_completed', { runId: 'run-1', commitCount: 0 });
+});
+
+test('git log maps a post-gate git failure to an opaque 500 without logging paths', async () => {
+  mockLog.mockRejectedValueOnce(new Error(`boom at ${checkoutDir}/secret`));
+
+  const response = await makeApp().request('/api/workflows/runs/run-1/git/log');
+  const body = await response.json();
+
+  expect(response.status).toBe(500);
+  expect(body).toEqual({ error: 'Could not read git history' });
+  expect(JSON.stringify(body)).not.toContain(checkoutDir);
+  expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(checkoutDir);
+  expectGitLogPair('git.log_failed', { runId: 'run-1', errorType: 'Error' });
+});
+
+test('git log returns CAP-6 when the checkout vanishes during the read', async () => {
+  mockLog.mockImplementationOnce(async () => {
+    await rm(checkoutDir, { recursive: true, force: true });
+    throw new Error(`boom at ${checkoutDir}/secret`);
+  });
+
+  const response = await makeApp().request('/api/workflows/runs/run-1/git/log');
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({
+    emptyReason: 'no_checkout',
+    commits: [],
+    revision: '',
+    truncated: false,
+  });
+  expectGitLogPair('git.log_completed', { runId: 'run-1', emptyReason: 'no_checkout' });
 });
