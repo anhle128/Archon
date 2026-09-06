@@ -17,8 +17,8 @@
       "technicalNotes": "Follow Task 1 of plan: docs/superpowers/plans/2026-09-06-node-room-from-graph-legacy.md:107-205, 303-338. Create types.ts, constants.ts, taken-path.ts, and taken-path.test.ts in packages/web/src/lib/run-graph/. Pure TypeScript only, no any, no external dependencies.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/web/src/lib/run-graph/types.ts, constants.ts, taken-path.ts, taken-path.test.ts."
     },
     {
       "id": "US-002",
@@ -39,8 +39,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/web/src/lib/run-graph/positions.ts, positions.test.ts."
     },
     {
       "id": "US-003",
@@ -65,8 +65,8 @@
         "US-002"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/lib/run-graph/routes.ts, routes.test.ts, layout.ts, layout.test.ts, index.ts."
     },
     {
       "id": "US-004",
@@ -87,8 +87,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/components/workflows/build-run-graph-input.ts, build-run-graph-input.test.ts."
     },
     {
       "id": "US-005",
@@ -109,8 +109,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/components/workflows/RunGraphRouteEdge.tsx, RunGraphRouteEdge.test.tsx, build-workflow-dag-view-model.ts, build-workflow-dag-view-model.test.ts, WorkflowDagViewer.tsx."
     },
     {
       "id": "US-006",
@@ -133,8 +133,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/components/workflows/resolve-graph-room-row.ts, resolve-graph-room-row.test.ts, LegacyGraphLogsPane.tsx, LegacyGraphLogsPane.test.tsx, WorkflowExecution.tsx, WorkflowExecution.test.tsx."
     },
     {
       "id": "US-007",
@@ -155,8 +155,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Validated in iteration 7. Files: _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. Story 5.3 marked done after full focused tests, type-check, lint, format:check, and bun run validate."
     }
   ]
 }
