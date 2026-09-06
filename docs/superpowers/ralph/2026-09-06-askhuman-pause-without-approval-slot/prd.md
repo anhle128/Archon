@@ -1,6 +1,6 @@
 # Pause a Run When the Agent Asks Without Stealing the Approval Slot Ralph PRD
 
-Source plan: `docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md`  
+Source plan: `docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md`
 Derived slug: `2026-09-06-askhuman-pause-without-approval-slot`
 
 ## Overview
@@ -13,7 +13,7 @@ Story 6.2 deliberately does NOT implement question answering, resume interaction
 
 ## Problem
 
-When an agent needs human input mid-run, it previously had no structured mechanism to pause and ask questions without either usurping the workflow-level gate approval slot (`metadata.approval`) or failing the run. 
+When an agent needs human input mid-run, it previously had no structured mechanism to pause and ask questions without either usurping the workflow-level gate approval slot (`metadata.approval`) or failing the run.
 
 1. Usurping `metadata.approval` destroys gate context and violates the separation between declared human-in-the-loop gates and dynamic agent questions (`docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:8-13`).
 2. Without a dedicated pending interactions table (`remote_agent_pending_interactions`), structured questions and session ids cannot be persisted durably across provider reconnects (`docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:155-182`).

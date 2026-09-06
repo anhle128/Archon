@@ -173,7 +173,7 @@ export function projectLatestEffectiveNodeStates(
       states.set(nodeId, {
         node_id: nodeId,
         state: 'awaiting',
-        retry_epoch: retryEpoch,
+        retry_epoch: existing?.retry_epoch ?? retryEpoch,
         output: existing?.output ?? '',
         ...(existing?.error !== undefined ? { error: existing.error } : {}),
         ...(existing?.reason !== undefined ? { reason: existing.reason } : {}),
