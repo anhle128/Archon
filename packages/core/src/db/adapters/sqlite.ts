@@ -1086,6 +1086,24 @@ export class SqliteAdapter implements IDatabase {
         CONSTRAINT uq_workflow_node_messages_run_node_seq
           UNIQUE (workflow_run_id, node_id, seq)
       );
+
+      -- Pending interactions (AskHuman / permission pauses)
+      CREATE TABLE IF NOT EXISTS remote_agent_pending_interactions (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        workflow_run_id TEXT NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
+        node_id TEXT NOT NULL,
+        tool_use_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('ask', 'permission')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'answered', 'purged')),
+        envelope TEXT NOT NULL,
+        answer TEXT,
+        provider_session_id TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        resolved_at TEXT,
+        resolved_by TEXT,
+        CONSTRAINT uq_pending_interactions_run_tool_use
+          UNIQUE (workflow_run_id, tool_use_id)
+      );
     `);
     getLog().info('db.sqlite_schema_initialized');
   }
