@@ -1,0 +1,48 @@
+.sc-diff-side {
+  --diff-background-color: var(--surface-inset);
+  --diff-text-color: var(--text-primary);
+  --diff-gutter-insert-background-color: color-mix(
+    in oklch,
+    var(--success) 18%,
+    var(--surface-inset)
+  );
+  --diff-code-insert-background-color: color-mix(
+    in oklch,
+    var(--success) 18%,
+    var(--surface-inset)
+  );
+  --diff-gutter-delete-background-color: color-mix(
+    in oklch,
+    var(--error) 18%,
+    var(--surface-inset)
+  );
+  --diff-code-delete-background-color: color-mix(in oklch, var(--error) 18%, var(--surface-inset));
+}
+
+.sc-diff-side.diff {
+  min-width: 100%;
+  width: max-content;
+  table-layout: auto;
+}
+
+.sc-diff-side .diff-code {
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.sc-diff-before col:nth-child(n + 3),
+.sc-diff-before .diff-line > :nth-child(n + 3),
+.sc-diff-after col:nth-child(-n + 2),
+.sc-diff-after .diff-line > :nth-child(-n + 2) {
+  display: none;
+}
+
+.sc-diff-marker {
+  display: inline-block;
+  width: 1ch;
+  margin-right: 0.5ch;
+  color: var(--text-primary);
+  font-family: monospace;
+  text-align: center;
+}

@@ -77,6 +77,21 @@ export async function execFileAsync(
   };
 }
 
+export async function execFileBufferAsync(
+  cmd: string,
+  args: string[],
+  options?: { timeout?: number; cwd?: string; maxBuffer?: number; env?: NodeJS.ProcessEnv }
+): Promise<{ stdout: Buffer; stderr: Buffer }> {
+  const result = await promisifiedExecFile(cmd, args, {
+    ...options,
+    encoding: 'buffer',
+  });
+  return {
+    stdout: Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout ?? ''),
+    stderr: Buffer.isBuffer(result.stderr) ? result.stderr : Buffer.from(result.stderr ?? ''),
+  };
+}
+
 /** Wrapper around fs.mkdir for test mockability */
 export async function mkdirAsync(path: string, options?: { recursive?: boolean }): Promise<void> {
   await fsMkdir(path, options);

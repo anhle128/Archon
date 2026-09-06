@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import type { PointerEvent, ReactElement } from 'react';
 
 import type { GitChangedFile } from '@/lib/api';
 
@@ -6,6 +6,8 @@ export function ChangedFileRow(props: {
   file: GitChangedFile;
   id: string;
   active: boolean;
+  selected: boolean;
+  onSelect: () => void;
 }): ReactElement {
   const statusLabel =
     props.file.status === 'M'
@@ -15,11 +17,18 @@ export function ChangedFileRow(props: {
         : 'D, deleted';
 
   return (
-    <div
-      id={props.id}
+    <button
+      type="button"
       role="option"
-      aria-selected={props.active}
-      className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-xs ${
+      tabIndex={-1}
+      id={props.id}
+      aria-selected={props.selected}
+      data-active={props.active ? 'true' : 'false'}
+      onPointerDown={(event: PointerEvent<HTMLButtonElement>): void => {
+        event.preventDefault();
+      }}
+      onClick={props.onSelect}
+      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${
         props.active ? 'bg-surface-elevated' : 'hover:bg-surface-hover'
       }`}
     >
@@ -30,6 +39,6 @@ export function ChangedFileRow(props: {
       >
         {props.file.status}
       </span>
-    </div>
+    </button>
   );
 }

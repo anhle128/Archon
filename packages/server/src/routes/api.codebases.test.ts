@@ -100,6 +100,22 @@ mock.module('@archon/paths', () => ({
 mockAllWorkflowModules();
 
 mock.module('@archon/git', () => ({
+  fileAt: mock(async () => ({
+    path: 'x.ts',
+    bytes: new Uint8Array(),
+    binary: false,
+    contentHash: '0'.repeat(64),
+  })),
+  fileDiff: mock(async () => ({
+    path: 'x.ts',
+    status: 'M' as const,
+    scope: 'now' as const,
+    ref: 'live' as const,
+    hunks: [],
+    cursor: '' as const,
+    truncated: false as const,
+    binary: false,
+  })),
   removeWorktree: mockRemoveWorktree,
   toRepoPath: (p: string) => p,
   toWorktreePath: (p: string) => p,

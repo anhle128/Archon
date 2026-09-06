@@ -2606,6 +2606,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/runs/{runId}/git/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a run's Now git hunks for a modified file */
+        get: {
+            parameters: {
+                query: {
+                    path: string;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Ready Now hunks or a CAP-6 empty envelope */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GitDiffResponse"];
+                    };
+                };
+                /** @description Invalid file path */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Workflow run or file not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Git read failed */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflows/runs/{runId}/nodes/{nodeId}/messages": {
         parameters: {
             query?: never;
@@ -4908,6 +4976,45 @@ export interface components {
         GitChangedFileStatus: "M" | "A" | "D";
         /** @enum {string} */
         GitEmptyReason: "container" | "no_checkout";
+        GitDiffResponse: {
+            path: string;
+            /** @enum {string} */
+            status: "M";
+            /** @enum {string} */
+            scope: "now" | "commit";
+            ref: string;
+            hunks: components["schemas"]["GitDiffHunk"][];
+            cursor: string;
+            truncated: boolean;
+            binary: boolean;
+        } | {
+            emptyReason: components["schemas"]["GitEmptyReason"];
+        };
+        GitDiffHunk: {
+            oldStart: number;
+            oldLines: number;
+            newStart: number;
+            newLines: number;
+            header: string;
+            changes: components["schemas"]["GitDiffChange"][];
+        };
+        GitDiffChange: {
+            /** @enum {string} */
+            type: "normal";
+            content: string;
+            oldLine: number;
+            newLine: number;
+        } | {
+            /** @enum {string} */
+            type: "insert";
+            content: string;
+            newLine: number;
+        } | {
+            /** @enum {string} */
+            type: "delete";
+            content: string;
+            oldLine: number;
+        };
         UsageReport: {
             scope: {
                 from: string | null;

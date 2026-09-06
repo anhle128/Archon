@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from 'fs';
 import { normalize, join, sep, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
+import { requestLogPath } from '../request-log-path';
 import type {
   ConversationLockManager,
   AttachedFile,
@@ -537,6 +538,9 @@ import {
 } from './schemas/workflow.schemas';
 import { gitChangesRoute } from './git/changes-route';
 import { handleGitChanges } from './git/changes-handler';
+import { gitDiffRoute } from './git/diff-route';
+import { handleGitDiff } from './git/diff-handler';
+import { handleGitFile } from './git/file-handler';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -2118,7 +2122,10 @@ export function registerApiRoutes(
         // — it returns undefined rather than throwing. The /api/* gate maps that
         // undefined to a 401 (fail-closed); requireWebUser is the strict variant
         // that distinguishes a backend 503 from a missing identity.
-        getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
+        getLog().warn(
+          { err: err as Error, path: requestLogPath(c.req.path) },
+          'web.session_resolve_failed'
+        );
       }
     }
 
@@ -2134,7 +2141,7 @@ export function registerApiRoutes(
       // failed (e.g. DB outage). Fall back to NULL attribution rather than
       // failing the request. headerPresent distinguishes this from "no header".
       getLog().warn(
-        { err: err as Error, headerPresent: true, path: c.req.path },
+        { err: err as Error, headerPresent: true, path: requestLogPath(c.req.path) },
         'web.user_resolve_failed'
       );
       return undefined;
@@ -4998,6 +5005,19 @@ export function registerApiRoutes(
   // GET /api/workflows/runs/:runId/git/changes - Live uncommitted changes for a run
   registerOpenApiRoute(gitChangesRoute, async c => {
     return handleGitChanges(c, apiError);
+  });
+
+  // GET /api/workflows/runs/:runId/git/diff - Now hunks for a modified file
+  registerOpenApiRoute(gitDiffRoute, async c => {
+    return handleGitDiff(c, apiError);
+  });
+
+  // GET /api/workflows/runs/:runId/git/file/*
+  // The wildcard carries a server-issued git-relative path and is decoded exactly once.
+  // NUL, absolute paths, and any slash or backslash ".." segment are rejected after decoding.
+  // OpenAPI 3.0 cannot represent this wildcard, and successful responses are raw bytes.
+  app.get('/api/workflows/runs/:runId/git/file/*', async c => {
+    return handleGitFile(c, apiError);
   });
 
   // GET /api/usage - Installation usage/cost report (direct runs only)

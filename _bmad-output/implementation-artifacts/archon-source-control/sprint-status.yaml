@@ -56,7 +56,7 @@ epics_file: /Users/dale/Desktop/workspace/OceanLabs/workflow-engine/archon/_bmad
 development_status:
   epic-1: in-progress
   1-1-see-this-runs-uncommitted-files: done
-  1-2-open-a-changed-file-in-the-shared-viewer: backlog
+  1-2-open-a-changed-file-in-the-shared-viewer: done
   1-3-open-every-changed-file: backlog
   epic-1-retrospective: optional
 

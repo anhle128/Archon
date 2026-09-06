@@ -61,16 +61,20 @@ export interface HealthResponse {
   activePlatforms?: string[];
 }
 
-async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await (options === undefined ? fetch(url) : fetch(url, options));
-  if (!res.ok) {
-    const body = await res.text();
+async function assertApiResponseOk(response: Response, url: string): Promise<void> {
+  if (!response.ok) {
+    const body = await response.text();
     const truncated = body.length > 200 ? body.slice(0, 200) + '...' : body;
     const path = new URL(url, window.location.origin).pathname;
-    throw Object.assign(new Error(`API error ${res.status} (${path}): ${truncated}`), {
-      status: res.status,
+    throw Object.assign(new Error(`API error ${response.status} (${path}): ${truncated}`), {
+      status: response.status,
     });
   }
+}
+
+async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
+  const res = await (options === undefined ? fetch(url) : fetch(url, options));
+  await assertApiResponseOk(res, url);
   return res.json() as Promise<T>;
 }
 
@@ -427,9 +431,93 @@ export async function getWorkflowRun(
 export type GitChangesResponse = components['schemas']['GitChangesResponse'];
 export type GitChangedFile = components['schemas']['GitChangedFile'];
 export type GitEmptyReason = components['schemas']['GitEmptyReason'];
+export type GitDiffResponse = components['schemas']['GitDiffResponse'];
+export type GitReadyDiffResponse = Exclude<GitDiffResponse, { emptyReason: GitEmptyReason }>;
+export type GitDiffHunk = components['schemas']['GitDiffHunk'];
+export type GitDiffChange = components['schemas']['GitDiffChange'];
+export type GitFileSource = 'worktree' | 'head';
+export type GitFileClientResult =
+  | { kind: 'empty'; emptyReason: GitEmptyReason }
+  | { kind: 'binary'; contentHash: string }
+  | { kind: 'text'; text: string; contentHash: string };
 
-export async function getWorkflowRunGitChanges(runId: string): Promise<GitChangesResponse> {
-  return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}/git/changes`);
+export async function getWorkflowRunGitChanges(
+  runId: string,
+  options?: { signal?: AbortSignal }
+): Promise<GitChangesResponse> {
+  return fetchJSON(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/git/changes`,
+    options?.signal ? { signal: options.signal } : undefined
+  );
+}
+
+export async function getWorkflowRunGitDiff(
+  runId: string,
+  path: string,
+  options?: { cursor?: string; signal?: AbortSignal }
+): Promise<GitDiffResponse> {
+  const params = new URLSearchParams({ path });
+  if (options?.cursor) params.set('cursor', options.cursor);
+  return fetchJSON(
+    '/api/workflows/runs/' + encodeURIComponent(runId) + '/git/diff?' + params.toString(),
+    options?.signal ? { signal: options.signal } : undefined
+  );
+}
+
+export function gitFileUrl(runId: string, path: string, source: GitFileSource): string {
+  const encodedPath = path
+    .split('/')
+    .map(segment => encodeURIComponent(segment))
+    .join('/');
+  return (
+    '/api/workflows/runs/' +
+    encodeURIComponent(runId) +
+    '/git/file/' +
+    encodedPath +
+    '?source=' +
+    encodeURIComponent(source)
+  );
+}
+
+function contentHashFromEtag(response: Response): string {
+  const etag = response.headers.get('ETag') ?? '';
+  const match = /^(?:"([a-f0-9]{64})"|([a-f0-9]{64}))$/.exec(etag);
+  const contentHash = match?.[1] ?? match?.[2];
+  if (!contentHash) throw new Error('Invalid git file response');
+  return contentHash;
+}
+
+export async function getWorkflowRunGitFile(
+  runId: string,
+  path: string,
+  source: GitFileSource,
+  options?: { signal?: AbortSignal }
+): Promise<GitFileClientResult> {
+  const url = gitFileUrl(runId, path, source);
+  const response = await (options?.signal ? fetch(url, { signal: options.signal }) : fetch(url));
+  await assertApiResponseOk(response, url);
+  const contentType = response.headers.get('Content-Type') ?? '';
+  if (contentType.includes('application/json')) {
+    const body: unknown = await response.json();
+    if (
+      typeof body === 'object' &&
+      body !== null &&
+      'emptyReason' in body &&
+      (body.emptyReason === 'container' || body.emptyReason === 'no_checkout')
+    ) {
+      return { kind: 'empty', emptyReason: body.emptyReason };
+    }
+    throw new Error('Invalid git file response');
+  }
+  const contentHash = contentHashFromEtag(response);
+  if (contentType.includes('application/octet-stream')) {
+    await response.body?.cancel();
+    return { kind: 'binary', contentHash };
+  }
+  if (contentType.includes('text/plain')) {
+    return { kind: 'text', text: await response.text(), contentHash };
+  }
+  throw new Error('Invalid git file response');
 }
 
 export type WorkflowNodeStateResponse = components['schemas']['WorkflowNodeState'];
@@ -448,7 +536,6 @@ export async function getWorkflowNodeMessages(
       '/messages'
   );
 }
-
 export async function getWorkflowRunByWorker(
   workerPlatformId: string
 ): Promise<components['schemas']['WorkflowRunByWorkerResponse'] | null> {
