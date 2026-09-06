@@ -3,11 +3,15 @@ import {
   askAnswerBodySchema,
   askAnswerItemSchema,
   askHumanQuestionSchema,
+  confirmPendingPermissionInputSchema,
   insertPendingInteractionSchema,
   pendingInteractionSchema,
+  permissionConfirmBodySchema,
   resolvePendingInteractionInputSchema,
   resolvePendingInteractionResultSchema,
   type AskAnswerBody,
+  type ConfirmPendingPermissionInput,
+  type PermissionConfirmBody,
   type ResolvePendingInteractionInput,
   type ResolvePendingInteractionResult,
 } from './pending-interaction';
@@ -162,4 +166,38 @@ describe('resolvePendingInteraction schemas', () => {
       }).success
     ).toBe(false);
   });
+});
+
+describe('permissionConfirmBodySchema', () => {
+  test('accepts an exact opaque intent and preserves surrounding whitespace', () => {
+    const body: PermissionConfirmBody = permissionConfirmBodySchema.parse({
+      intent: ' allow-once ',
+    });
+    expect(body).toEqual({ intent: ' allow-once ' });
+  });
+
+  test.each([
+    {},
+    { intent: '' },
+    { intent: '   ' },
+    { intent: 1 },
+    { intent: 'allow-once', extra: true },
+    { intent: 'allow-once', decline: true },
+    { answers: [{ questionId: 'q1', value: 'yes' }] },
+  ])('rejects a body outside the exact intent contract: %#', body => {
+    expect(permissionConfirmBodySchema.safeParse(body).success).toBe(false);
+  });
+});
+
+test('confirmPendingPermissionInputSchema accepts only the persistence fields', () => {
+  const input: ConfirmPendingPermissionInput = confirmPendingPermissionInputSchema.parse({
+    workflow_run_id: 'run-1',
+    tool_use_id: 'tool-1',
+    answer: { intent: 'allow-once' },
+    resolved_by: 'user-1',
+  });
+  expect(input.answer).toEqual({ intent: 'allow-once' });
+  expect(confirmPendingPermissionInputSchema.safeParse({ ...input, extra: true }).success).toBe(
+    false
+  );
 });
