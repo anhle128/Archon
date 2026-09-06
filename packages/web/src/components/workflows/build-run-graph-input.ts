@@ -39,6 +39,7 @@ function toNodeState(status: WorkflowStepStatus): LayoutNode['nodeState'] {
     case 'completed':
     case 'failed':
     case 'skipped':
+    case 'awaiting':
       return status;
   }
 }
