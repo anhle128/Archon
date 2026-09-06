@@ -74,6 +74,7 @@ const gitReadyDiffResponseSchema = z.object({
   cursor: z.string(),
   truncated: z.boolean(),
   binary: z.boolean(),
+  fileFallback: z.boolean(),
 });
 
 const gitEmptyDiffResponseSchema = z.object({

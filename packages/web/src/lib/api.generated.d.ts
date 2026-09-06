@@ -2550,130 +2550,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/workflows/runs/{runId}/git/changes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List a run's uncommitted git changes */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    runId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Live changes or a CAP-6 empty envelope */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["GitChangesResponse"];
-                    };
-                };
-                /** @description Workflow run not found */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
-                /** @description Git read failed */
-                500: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/workflows/runs/{runId}/git/diff": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read a run's Now git hunks for a modified file */
-        get: {
-            parameters: {
-                query: {
-                    path: string;
-                    cursor?: string;
-                };
-                header?: never;
-                path: {
-                    runId: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description Ready Now hunks or a CAP-6 empty envelope */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["GitDiffResponse"];
-                    };
-                };
-                /** @description Invalid file path */
-                400: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
-                /** @description Workflow run or file not found */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
-                /** @description Git read failed */
-                500: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/workflows/runs/{runId}/nodes/{nodeId}/messages": {
         parameters: {
             query?: never;
@@ -2787,6 +2663,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/runs/{runId}/git/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a run's Now git hunks for a modified file */
+        get: {
+            parameters: {
+                query: {
+                    path: string;
+                    cursor?: string;
+                };
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Ready Now hunks or a CAP-6 empty envelope */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GitDiffResponse"];
+                    };
+                };
+                /** @description Invalid file path */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Workflow run or file not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description File changed */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Git read failed */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+
     "/api/usage": {
         parameters: {
             query?: never;
@@ -5043,6 +4997,7 @@ export interface components {
             cursor: string;
             truncated: boolean;
             binary: boolean;
+            fileFallback: boolean;
         } | {
             emptyReason: components["schemas"]["GitEmptyReason"];
         };
