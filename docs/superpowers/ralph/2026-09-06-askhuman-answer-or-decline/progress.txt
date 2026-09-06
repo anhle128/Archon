@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Resolve is on the pending store port; purge is not
+- **Where**: `packages/workflows/src/store.ts`, `packages/core/src/workflows/store-adapter.ts`
+- **Pattern**: Add only `resolvePendingInteraction(input: ResolvePendingInteractionInput): Promise<ResolvePendingInteractionResult>` to `IWorkflowPendingInteractionStore`. Adapter delegates to the core DB helper. Do not add purge to the port. Each test file owns its own typed stub; do not introduce a cross-suite mock factory.
+- **Example**: `resolvePendingInteraction: input => workflowPendingInteractionDb.resolvePendingInteraction(input)`
+
 ### Terminal purge is query-scoped; workflows.ts calls in
 - **Where**: `packages/core/src/db/workflow-pending-interactions.ts`, `packages/core/src/db/workflows.ts`
 - **Pattern**: `purgePendingInteractionsInTransaction` takes the caller's `query` and must not open a nested transaction. It selects pending rows in store order (`created_at ASC, id ASC`), CAS-updates only `pending` → `purged` with `resolved_at`, leaves `answer`/`resolved_by` null, and writes one id-only `interaction_resolved` event. `workflows.ts` may import this helper; the reverse import is a cycle. Call purge only after a winning status CAS. `failOrphanedRuns` locks running ids first, updates that set, then purges each selected id.
@@ -93,5 +98,35 @@
 **Learnings**:
 - Keep envelope out of the purge SELECT so a corrupt stored question cannot block cancel/fail.
 - failOrphanedRuns must lock and collect running ids first, then UPDATE that locked set, then purge each selected id — a single unscoped UPDATE cannot attach per-run purge events correctly.
+
+---
+
+## 2026-09-06 — US-004: Expose pending-interaction resolution store port and update doubles
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/store.ts` — added resolvePendingInteraction to IWorkflowPendingInteractionStore
+- `packages/core/src/workflows/store-adapter.ts` — delegated resolvePendingInteraction to core DB
+- `packages/core/src/workflows/store-adapter.test.ts` — mock + exact input/output delegation test
+- `packages/workflows/src/ask-human.test.ts` — typed resolve stub
+- `packages/workflows/src/dag-executor.test.ts` — typed resolve stub
+- `packages/workflows/src/executor.test.ts` — typed resolve stub
+- `packages/workflows/src/executor-preamble.test.ts` — typed resolve stub
+- `packages/workflows/src/plannotator-gate-executor.test.ts` — typed resolve stub
+- `packages/workflows/src/plannotator-gate-supervisor.test.ts` — typed resolve stub on Pick
+- `packages/workflows/src/script-node-deps.test.ts` — typed resolve stub
+- `packages/workflows/src/subrun.test.ts` — typed resolve stub on InMemoryStore
+
+**Acceptance criteria verified**:
+- [x] IWorkflowPendingInteractionStore adds resolvePendingInteraction(input: ResolvePendingInteractionInput): Promise<ResolvePendingInteractionResult>
+- [x] store-adapter.ts delegates resolvePendingInteraction to core DB resolvePendingInteraction
+- [x] store-adapter.test.ts tests exact input/output passing
+- [x] All listed IWorkflowStore doubles implement typed resolvePendingInteraction stubs (no purge)
+- [x] bun test src/workflows/store-adapter.test.ts in packages/core and bun x tsc --noEmit in packages/workflows
+
+**Learnings**:
+- The pending store port is resolve-only; purge stays an internal DB lifecycle helper and must not appear on IWorkflowPendingInteractionStore or test doubles.
+- Workflow `tsconfig.json` excludes `**/*.test.ts`, so `bun x tsc --noEmit` does not typecheck doubles; class doubles that `implements IWorkflowStore` still need the method for local correctness.
+- Do not introduce a shared mock factory; repeat the typed stub inside each test file that already owns the double.
 
 ---

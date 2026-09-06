@@ -78,8 +78,8 @@
         "US-002"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/workflows/src/store.ts, packages/core/src/workflows/store-adapter.ts, packages/core/src/workflows/store-adapter.test.ts, packages/workflows/src/ask-human.test.ts, packages/workflows/src/dag-executor.test.ts, packages/workflows/src/executor.test.ts, packages/workflows/src/executor-preamble.test.ts, packages/workflows/src/plannotator-gate-executor.test.ts, packages/workflows/src/plannotator-gate-supervisor.test.ts, packages/workflows/src/script-node-deps.test.ts, packages/workflows/src/subrun.test.ts."
     },
     {
       "id": "US-005",
