@@ -1,0 +1,338 @@
+## Codebase Patterns
+### Root lint heap
+- **Where**: `package.json` `lint` / `validate`
+- **Pattern**: Default Node heap can OOM on `bun run lint --max-warnings 0` (~4 GB). Retry with `NODE_OPTIONS='--max-old-space-size=8192' bun run lint --max-warnings 0` (and the same prefix on `bun run validate`).
+- **Gotcha**: Do not drop `--max-warnings 0`. Lint production files only; web `*.test.ts` is eslint-ignored.
+
+### LegacyNodeLogs wiring
+- **Where**: `packages/web/src/components/workflows/LegacyNodeLogs.tsx`, `packages/web/src/components/workflows/WorkflowExecution.tsx`
+- **Pattern**: Keep list/selection/reset/header/footer. Replace `NodeTranscriptPane` with one `LegacyNodeRoom` and pass `definitionNodes`, `definitionPending`, `events`, `runStatus`, `approval`, `onApprove`, `onReject`. Store `approval` on `WorkflowRunQueryData` from `data.run.metadata.approval ?? null`. Gate handlers `await` API then invalidate `['workflowRun', runId]` with no catch so `GateRoom` sees the rejection. Pass new props only on the Logs branch.
+- **Example**: `runStatus={queryData?.workflowState.status ?? workflow.status}`
+- **Gotcha**: Logs tests stay on happy-dom + `QueryClientProvider` + `notifyManager`. Agent fixtures need a `command` definition. Loop-group list rows come from `loop_iteration_*` on the group id; room chrome still reads qualified body events (`group.body`). Lint production files only.
+
+### LegacyNodeRoom dispatcher
+- **Where**: `packages/web/src/components/workflows/LegacyNodeRoom.tsx`
+- **Pattern**: Null `row` returns `RoomPlaceholder` "Select a node" with no region. Selected rows render header (label, `TYPE_LABELS[nodeType]` or `Loading`, status token) outside the body. `waitingForDefinition` is `definitionPending && definitionNode === null && kind === 'agent' && nodeType === 'unknown'`. Exhaustive `switch (resolution.kind)` with local `assertNever`. Only `'agent'` mounts `NodeTranscriptPane`. Do not wrap `body` in a second `RoomRegion`.
+- **Example**: `waitingForDefinition ? 'Loading' : TYPE_LABELS[resolution.nodeType]`
+- **Gotcha**: Happy-dom agent cases need `QueryClientProvider` + `notifyManager` like `NodeTranscriptPane.test.tsx`. Non-agent rooms stay `renderToStaticMarkup` because `useQuery` never mounts. Lint production files only.
+
+### LoopGroupRoom authored topology + iteration accordions
+- **Where**: `packages/web/src/components/workflows/LoopGroupRoom.tsx`
+- **Pattern**: Always wrap in one `RoomRegion` and render heading `Loop group`. `Body nodes` lists authored `id` plus `Start` or `After ${dependsOn.join(', ')}`. Empty `iterations` still shows topology plus `RoomPlaceholder` "Node hasn't produced output". Non-empty maps one `<details open={iteration === selectedIteration}>` per iteration; summary is U+00D7 + iteration + status; body lists `qualifiedId` + derived status.
+- **Example**: `{'×' + String(iteration.iteration) + ' ' + iteration.status}`
+- **Gotcha**: Do not add SVG, dagre, React Flow, or clickable nested graph nodes. Static markup tests via `renderToStaticMarkup`.
+
+### RouteControllerRoom inspection-only card
+- **Where**: `packages/web/src/components/workflows/RouteControllerRoom.tsx`
+- **Pattern**: Always wrap in one `RoomRegion` and render heading `Routing decision`. Null `decision` → `RoomPlaceholder` inside the labelled region. Present decisions use a `<dl>` whose rows come from `FIELDS` and are omitted when `decision[key] === null`. 9rem label column; `font-mono` on every `dd`.
+- **Example**: `grid-cols-[9rem_1fr]` + skip `decision[key] === null`
+- **Gotcha**: Do not invent route mutation controls or an agent timeline. Static markup tests via `renderToStaticMarkup`. `×` in later stories is U+00D7.
+
+### ChildWorkflowRoom inspection-only card
+- **Where**: `packages/web/src/components/workflows/ChildWorkflowRoom.tsx`
+- **Pattern**: Always wrap in one `RoomRegion` and render heading `Child run`. Show paused banner (`child.message ?? 'Sub-run is paused awaiting review'`), fan-out copy, `encodeURIComponent` child-run `<a>`, and `font-mono bg-surface-inset` output only when those fields are set. `RoomPlaceholder` only when `!hasContent`.
+- **Example**: `encodeURIComponent(child.childRunId)` in the Open child run href
+- **Gotcha**: Fan-out with `childRunId: null` must not invent `Open child run`. Never call the transcript loader. Static markup tests via `renderToStaticMarkup`.
+
+### GateRoom local action runner
+- **Where**: `packages/web/src/components/workflows/GateRoom.tsx`
+- **Pattern**: Wrap in one `RoomRegion`. Render `chrome.message` always; document/pre and Open Plannotator (`target="_blank"` `rel="noopener noreferrer"`) only when non-null; Approve + `ConfirmRunActionDialog` Reject only when `canDecide`; inactive banner `Gate is not the active pause` with `bg-warning/5 border-warning/20`; decision text `Approved`/`Rejected`. Own `actionPending`/`actionError`; `void runAction(...)` from clicks; failures in `<p role="alert" className="text-sm text-error">`.
+- **Example**: `void runAction(onApprove)` / `void runAction(() => onReject(reason))`
+- **Gotcha**: Happy-dom GateRoom tests must `act` + `flush` after `root.render`. Do not `expect(markup).not.toContain('Approve')` when the banner says `Approved`. Reuse dashboard `ConfirmRunActionDialog`; do not re-parse `reviewUrl`. Lint production files only.
+
+### Shared RoomRegion / RoomPlaceholder
+- **Where**: `packages/web/src/components/workflows/NodeRoom.tsx`, `packages/web/src/components/workflows/StdoutRoom.tsx`
+- **Pattern**: Unselected NodeRoom returns `RoomPlaceholder` with no region. Every selected body (loading/error/empty/loaded, and every dedicated room) wraps in exactly one `RoomRegion` (`role="region"` `aria-label={`${nodeId} room`}`). StdoutRoom renders `<pre>` whenever `text` is a string (including `''`); `RoomPlaceholder` "Node hasn't produced output" only when `text === null`. Truncation copy is `Output truncated from N bytes` or `Output truncated`. `Exit status: 0` only when `exitCode === 0`.
+- **Example**: `<RoomRegion nodeId={nodeId}>…</RoomRegion>`
+- **Gotcha**: Do not wrap unselected state. Do not import console rooms. Tests are eslint-ignored — lint production files only.
+
+
+### Attempt-scoped selectors
+- **Where**: `packages/web/src/components/workflows/select-room-data.ts`
+- **Pattern**: Ordinary rows slice `events` from `row.id` then filter `step_name`. Last `node_completed`/`node_failed` in that slice wins — a later failure suppresses an earlier completion. Route rows match `data.execution_seq` exactly. Loop-group rows scan the original array, ignore `eventsForRow`, and last-lifecycle-wins per `(iteration, qualifiedId)`.
+- **Example**: `selectNodeStdout(events, row)` / `selectLoopGroupChrome({ definitionNode, events, row })`
+- **Gotcha**: Array order is the attempt clock, not `created_at`. `isRecord` guards `event.data`. Do not parse error prose for exit codes.
+
+### Pure resolveRoomKind classifier
+- **Where**: `packages/web/src/components/workflows/resolve-room-kind.ts`
+- **Pattern**: Definition lookup first via recursive `loop_group` qualified IDs (`prefix + '.' + node.id`). Then matching `readApprovalContext` (`child_workflow` → workflow; `approval`/`plannotator_gate`/omitted → gate). Then events: any `node_routed`, latest bash/script `node_started|completed|failed`, latest workflow `node_completed|failed`, latest `approval_requested`. Else agent/`unknown`.
+- **Example**: `resolveRoomKind('group.nested.check', nodes, events, approval)`
+- **Gotcha**: Scan from the array end for "latest". Do not treat `interactive_loop`/`writeback` as gate/workflow. `ROOM_BY_BODY` is a frozen map, not mutable module state.
+
+### Shared web ApprovalContext boundary
+- **Where**: `packages/web/src/lib/approval-context.ts`
+- **Pattern**: Parse run metadata with `readApprovalContext(unknown)` (required `nodeId` + `message` strings; optional typed enums). `getPlannotatorReviewUrl({ status, approval })` returns a normalized HTTP(S) `url.href` only for paused `plannotator_gate` rows.
+- **Example**: `getPlannotatorReviewUrl({ status: run.status, approval: run.metadata.approval })`
+- **Gotcha**: Callers and dashboard fixtures must include `nodeId` and `message`. Incomplete `{ type, reviewUrl }` objects fail the parser even when the old private helper accepted them.
+
+### Web tests are ESLint-ignored
+- **Where**: `packages/web` eslint ignore for `*.test.ts`
+- **Pattern**: Lint production files only (`bun x eslint <prod files> --max-warnings 0`). Passing ignored test paths to eslint with `--max-warnings 0` fails as a warning.
+
+---
+
+## 2026-09-06 — US-001: Extract web ApprovalContext and Plannotator URL boundary
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/approval-context.ts` — added `WebApprovalContextType`, `WebApprovalContext`, `readApprovalContext`, `getPlannotatorReviewUrl`
+- `packages/web/src/lib/approval-context.test.ts` — literal fixtures for required fields, omitted type, invalid enums, non-paused runs, unsafe/malformed URLs
+- `packages/web/src/components/dashboard/WorkflowRunCard.tsx` — removed private URL helper; calls shared `getPlannotatorReviewUrl`
+- `packages/web/src/components/dashboard/WorkflowRunCard.test.tsx` — fixtures now include required `nodeId`/`message`
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/lib/approval-context.ts defining WebApprovalContextType ('approval' | 'plannotator_gate' | 'child_workflow' | 'interactive_loop' | 'writeback') and WebApprovalContext interface.
+- [x] Implement readApprovalContext(value: unknown): WebApprovalContext | null, validating required nodeId and message strings, optional enum types, optional childRunId/document strings, nullable/string reviewUrl, and optional approved/rejected/null resolved state.
+- [x] Implement getPlannotatorReviewUrl(input: { status: string; approval: unknown }): string | null returning normalized HTTP(S) URL only when status is 'paused' and approval type is 'plannotator_gate'.
+- [x] Create packages/web/src/lib/approval-context.test.ts testing literal fixtures for malformed metadata, omitted type backwards-compatibility, invalid enum values, non-paused runs, and unsafe/malformed URL protocols (e.g. javascript:).
+- [x] Refactor packages/web/src/components/dashboard/WorkflowRunCard.tsx to remove its private URL helper and use getPlannotatorReviewUrl without changing dashboard behavior.
+- [x] Tests pass via bun test src/lib/approval-context.test.ts src/components/dashboard/WorkflowRunCard.test.tsx in packages/web.
+
+**Learnings**:
+- TDD RED confirmed missing `./approval-context` before implementation.
+- Dashboard fixtures originally omitted `nodeId`/`message`; shared parser rejects those. Add the required strings rather than loosening the parser.
+- `bun install` was required in this fresh worktree before JSX component tests could resolve `react/jsx-runtime`.
+- Avoid the StrReplace tool on large TSX files in this harness — it truncated WorkflowRunCard.tsx. Surgical Python edits preserved the Actions block.
+
+---
+
+## 2026-09-06 — US-002: Add pure node-room classification
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/resolve-room-kind.ts` — `NodeBodyKind`, `RoomKind`, `RoomResolution`, `resolveRoomKind`
+- `packages/web/src/components/workflows/resolve-room-kind.test.ts` — authored modes, nested loop-group IDs, ApprovalContext fallbacks, event fallbacks
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/resolve-room-kind.ts exporting NodeBodyKind, RoomKind, RoomResolution, and resolveRoomKind(nodeId, definitionNodes, events, approval).
+- [x] For authored DagNodes, inspect mutually exclusive body fields in exact priority: route_loop, loop_group, loop, plannotator_gate, approval, bash, script, workflow, command, prompt.
+- [x] Recursively resolve qualified loop-group body IDs using dot-separated prefix matching (e.g. group.body, group.nested.check).
+- [x] When definition lookup yields no match, evaluate fallbacks in order: matching child_workflow ApprovalContext -> workflow; matching approval/plannotator_gate/omitted ApprovalContext -> gate; node_routed event -> route_loop; latest typed bash/script event -> stdout; latest typed workflow event -> workflow; latest approval_requested event -> gate; otherwise agent with unknown nodeType.
+- [x] Create packages/web/src/components/workflows/resolve-room-kind.test.ts asserting each authored mode, nested loop-group IDs, ApprovalContext fallbacks, and event fallbacks.
+- [x] Do not call resolveNodeDisplay or import console detectVariant. Keep module free of React and mutable module state.
+- [x] Tests pass via bun test src/components/workflows/resolve-room-kind.test.ts in packages/web.
+
+**Learnings**:
+- Plan test fixtures are valid `DagNode` literals; `loop`/`loop_group` require `fresh_context`.
+- `node_routed` events match on `event_type` + `step_name` only; stdout/workflow/gate fallbacks scan from the end.
+- Cursor Write tool failed on new files here; pi-agent write succeeded.
+
+---
+
+## 2026-09-06 — US-003: Add attempt-scoped room data selectors
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/select-room-data.ts` — StdoutView, GateChrome, ChildRunRef, RouteDecisionView, LoopGroupChrome and the five selectors
+- `packages/web/src/components/workflows/select-room-data.test.ts` — attempt isolation, truncation, gates, fan-out, route primitives, loop-group authored order
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/select-room-data.ts exporting StdoutView, GateChrome, ChildRunRef, RouteDecisionView, LoopGroupChrome, and their five corresponding selector functions.
+- [x] selectNodeStdout isolates events starting from row.id (matching step_name) and uses last terminal event in that attempt; later node_failed suppresses earlier completion; handles empty string stdout with exitCode 0; validates truncation boolean and originalBytes integer.
+- [x] selectGateChrome sets canDecide only when runStatus is 'paused', ApprovalContext belongs to selected node, gate type is compatible, and resolved is null/undefined; extracts reviewUrl via getPlannotatorReviewUrl only for matching node; sets showInactiveNotice when paused on another/incompatible gate.
+- [x] selectChildRun selects paused child_workflow ApprovalContext only when run is paused and nodeId matches; otherwise uses last selected-attempt workflow completion (fan_out, child_run_id, node_output); later failure suppresses earlier completion.
+- [x] selectRouteDecision matches route_iteration execution_seq exactly and stringifies only safe primitives (string, finite number, boolean), returning null on missing or malformed fields.
+- [x] selectLoopGroupChrome preserves authored body order, builds qualifiedId (prefix + child.id), copies depends_on, groups positive safe-integer iterations using last-event-wins, and derives direct body status per iteration.
+- [x] Create packages/web/src/components/workflows/select-room-data.test.ts covering all selector cases, attempt isolation, and proving array-order precedence over timestamp sorting.
+- [x] Tests pass via bun test src/components/workflows/select-room-data.test.ts in packages/web.
+
+**Learnings**:
+- Write/StrReplace in this harness can truncate TS files and inject Read-tool markers; prefer Python pathlib writes and verify the file tail.
+- Failed-rerun fixtures must put `created_at` of the later failure *before* the new start so timestamp sorting would pick the stale completion.
+- Keep `isRecord` and use it on `event.data`; lint forbids unused helpers.
+
+---
+
+## 2026-09-06 — US-004: Make selected-room shell accessible and add StdoutRoom
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/NodeRoom.tsx` — exported RoomPlaceholder and RoomRegion; selected loading/error/empty/loaded wrap in one RoomRegion
+- `packages/web/src/components/workflows/NodeRoom.test.tsx` — unselected has no region; selected loading/error/empty/loaded have exactly one `aria-label="review room"` region
+- `packages/web/src/components/workflows/StdoutRoom.tsx` — status, truncation, failed detail, preformatted stdout, Exit status: 0, placeholder when text is null
+- `packages/web/src/components/workflows/StdoutRoom.test.tsx` — captured stdout, empty vs null, truncation, failure without chat markdown
+
+**Acceptance criteria verified**:
+- [x] Modify packages/web/src/components/workflows/NodeRoom.tsx to export RoomPlaceholder and RoomRegion ({ nodeId, children }) where RoomRegion renders <section role="region" aria-label={`${nodeId} room`}>.
+- [x] Update NodeRoom so unselected state returns RoomPlaceholder with 'Select a node' and no region, while loading, error, empty, and loaded states are each wrapped in exactly one RoomRegion.
+- [x] Modify packages/web/src/components/workflows/NodeRoom.test.tsx:70-203 to verify that selected loading, error, and empty states contain role="region" with aria-label="review room".
+- [x] Create packages/web/src/components/workflows/StdoutRoom.tsx wrapped in RoomRegion, displaying Status: <status>, truncation notices ('Output truncated from N bytes' / 'Output truncated'), failed detail, preformatted stdout in a font-mono bg-surface-inset container when text is a string (including empty string), and 'Exit status: 0' when applicable.
+- [x] When stdout.text is null, StdoutRoom displays RoomPlaceholder with exact text "Node hasn't produced output".
+- [x] Create packages/web/src/components/workflows/StdoutRoom.test.tsx covering captured stdout, empty successful stdout vs null stdout, truncation notice, and failure detail without chat markdown.
+- [x] Tests pass via bun test src/components/workflows/NodeRoom.test.tsx src/components/workflows/StdoutRoom.test.tsx in packages/web.
+
+**Learnings**:
+- Keep unselected NodeRoom outside RoomRegion so the list has no labelled room until a row is selected.
+- Loaded transcript padding/gap lives on an inner wrapper; RoomRegion owns the accessible boundary only.
+- Prettier collapsed the `exitCode === 0` paragraph onto one line; match that in later rooms.
+
+---
+
+## 2026-09-06 — US-005: Add declared GateRoom behavior
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/GateRoom.tsx` — labelled gate room with message, document, Plannotator link, canDecide actions, inactive/decision banners, local pending/error state
+- `packages/web/src/components/workflows/GateRoom.test.tsx` — static markup plus happy-dom Approve interactions, pending disable, and action-error re-enable
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/GateRoom.tsx wrapped in RoomRegion, taking nodeId, chrome: GateChrome, onApprove, onReject.
+- [x] Render declared message, Plannotator document, and safe 'Open Plannotator' link (with target="_blank" rel="noopener noreferrer") when chrome.reviewUrl is non-null.
+- [x] Render Approve button and ConfirmRunActionDialog Reject trigger button only when chrome.canDecide is true.
+- [x] Render 'Gate is not the active pause' warning banner when chrome.showInactiveNotice is true.
+- [x] Render decision banner ('Approved' or 'Rejected') when chrome.decision is set.
+- [x] Own local actionPending and actionError states; disable buttons while action is executing; surface action failure message in a role="alert" text-error element and re-enable controls.
+- [x] Do not include AskHuman, awaiting, or waiting-on-you chrome.
+- [x] Create packages/web/src/components/workflows/GateRoom.test.tsx verifying static markup and happy-dom button interactions, action error handling, and callback invocation.
+- [x] Tests pass via NODE_ENV=development bun test src/components/workflows/GateRoom.test.tsx in packages/web.
+
+**Learnings**:
+- Wrap happy-dom `root.render` in `act` and `flush` before querying buttons (React 19 commits asynchronously).
+- `Approved` contains `Approve`; assert on `<button` absence rather than the Approve substring.
+- Do not drive Radix `ConfirmRunActionDialog` open/confirm in happy-dom; verify the Reject trigger is present and cover callbacks via Approve.
+
+---
+
+## 2026-09-06 — US-006: Add ChildWorkflowRoom
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/ChildWorkflowRoom.tsx` — labelled Child run room with paused/fan-out chrome, encoded child-run link, and preformatted output
+- `packages/web/src/components/workflows/ChildWorkflowRoom.test.tsx` — static markup for child link, paused message, fan-out summary, and no-output empty state
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/ChildWorkflowRoom.tsx wrapped in RoomRegion, accepting nodeId and child: ChildRunRef.
+- [x] Render heading 'Child run'.
+- [x] Render paused warning banner with child.message (or fallback 'Sub-run is paused awaiting review') when child.paused is true.
+- [x] Render 'This node spawned multiple child runs' when child.fanOut is true.
+- [x] Render an anchor link with text 'Open child run' and href='/legacy/workflows/runs/<encodedChildRunId>' when child.childRunId is non-null.
+- [x] Render preformatted node output in a mono bg-surface-inset container when child.output is non-null.
+- [x] Render RoomPlaceholder with "Node hasn't produced output" when there is no content (no childRunId, fanOut, output, or paused status).
+- [x] Create packages/web/src/components/workflows/ChildWorkflowRoom.test.tsx covering child link, paused message, fan-out summary, and no-output empty state without rendering chat markdown.
+- [x] Tests pass via bun test src/components/workflows/ChildWorkflowRoom.test.tsx in packages/web.
+
+**Learnings**:
+- Follow the plan render structure; Prettier collapsed the function signature onto one line.
+- `child-1` does not prove encoding; the href still uses `encodeURIComponent` so IDs with reserved characters stay valid.
+- Do not mount NodeTranscriptPane or request messages from this room.
+
+---
+
+## 2026-09-06 — US-007: Add RouteControllerRoom
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/RouteControllerRoom.tsx` — labelled Routing decision room with 9rem definition list of non-null fields
+- `packages/web/src/components/workflows/RouteControllerRoom.test.tsx` — static markup for literals, null empty state, and omitted null fields
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/RouteControllerRoom.tsx wrapped in RoomRegion, accepting nodeId and decision: RouteDecisionView | null.
+- [x] Render heading 'Routing decision'.
+- [x] When decision is null, render RoomPlaceholder with exact text "Node hasn't produced output".
+- [x] When decision is present, render a definition list (<dl>) containing rows for non-null fields: Outcome, Target, Condition, Condition result, Attempt, Execution, Negative count, Maximum iterations.
+- [x] Condition and identifier values use font-mono styling.
+- [x] Do not render chat markdown, route mutation controls, or an agent timeline.
+- [x] Create packages/web/src/components/workflows/RouteControllerRoom.test.tsx testing literal fields, null decision empty state, and omission of undefined/null fields.
+- [x] Tests pass via bun test src/components/workflows/RouteControllerRoom.test.tsx in packages/web.
+
+**Learnings**:
+- Follow the plan FIELDS table and skip `decision[key] === null`; do not stringify null as the word null.
+- Prettier collapsed the null-decision `renderToStaticMarkup` onto one line.
+- Apply `font-mono` on every `dd` as the plan shows; that covers condition and identifier values.
+
+---
+
+## 2026-09-06 — US-008: Add LoopGroupRoom
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/LoopGroupRoom.tsx` — labelled Loop group room with authored body topology and per-iteration details
+- `packages/web/src/components/workflows/LoopGroupRoom.test.tsx` — static markup for topology, selected-iteration open, and empty-iteration placeholder
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/LoopGroupRoom.tsx wrapped in RoomRegion, accepting nodeId and chrome: LoopGroupChrome.
+- [x] Render heading 'Loop group' and section 'Body nodes' listing each body node ID with 'Start' (if no dependsOn) or 'After <deps>' (if dependsOn has elements).
+- [x] Render <details> accordion elements for each iteration with summary text '×<iteration> <status>' (e.g. '×1 completed').
+- [x] Set the open attribute only on the details element matching chrome.selectedIteration.
+- [x] Inside each details body, render each qualified body node ID with its iteration status.
+- [x] When iterations array is empty, render RoomPlaceholder with exact text "Node hasn't produced output" below the body topology.
+- [x] Do not include SVG, graph libraries, or clickable nested graph nodes.
+- [x] Create packages/web/src/components/workflows/LoopGroupRoom.test.tsx testing authored topology, open selected iteration, and empty iterations placeholder.
+- [x] Tests pass via bun test src/components/workflows/LoopGroupRoom.test.tsx in packages/web.
+
+**Learnings**:
+- Follow the plan component body; `open={iteration === selectedIteration}` is omitted by React when false, so only the selected details has the `open` attribute.
+- `×` is U+00D7, not ASCII `x`.
+- Empty iterations still render Body nodes topology above the shared no-output placeholder.
+
+---
+
+## 2026-09-06 — US-009: Add LegacyNodeRoom dispatcher and shared header
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/LegacyNodeRoom.tsx` — shared selected-node header plus exhaustive room-kind switch
+- `packages/web/src/components/workflows/LegacyNodeRoom.test.tsx` — static non-agent rooms plus happy-dom agent/definition-pending/rerender cases
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/LegacyNodeRoom.tsx implementing LegacyNodeRoomProps (runId, row, isLive, loadMessages, definitionNodes, definitionPending, events, runStatus, approval, onApprove, onReject).
+- [x] When row is null, render RoomPlaceholder with exact text 'Select a node' and no region.
+- [x] For selected rows, render a shared header with row.label, a type pill (Command, Prompt, Loop, Bash, Script, Approval, Plannotator gate, Workflow, Route loop, Loop group, Agent, or 'Loading' when waitingForDefinition), and status pill.
+- [x] When definitionPending is true and resolution has only the unknown agent fallback, render RoomRegion with RoomPlaceholder 'Loading node room' without mounting NodeTranscriptPane or requesting messages.
+- [x] Exhaustive switch by resolution.kind: 'agent' mounts NodeTranscriptPane; 'stdout' mounts StdoutRoom; 'gate' mounts GateRoom; 'workflow' mounts ChildWorkflowRoom; 'route_loop' mounts RouteControllerRoom; 'loop_group' mounts LoopGroupRoom.
+- [x] Create packages/web/src/components/workflows/LegacyNodeRoom.test.tsx covering all room types, null row, definition-pending state, and proving loadMessages is called only for agent rooms.
+- [x] Tests pass via NODE_ENV=development bun test src/components/workflows/LegacyNodeRoom.test.tsx src/components/workflows/NodeTranscriptPane.test.tsx src/components/workflows/NodeRoom.test.tsx in packages/web.
+
+**Learnings**:
+- Header lives outside the labelled room; each body already owns exactly one `RoomRegion`.
+- `waitingForDefinition` must require the unknown-agent fallback, not `definitionPending` alone — a present command definition still mounts the transcript while the rest of the graph is loading.
+- Happy-dom command cases copy `NodeTranscriptPane.test.tsx` `notifyManager` + `QueryClientProvider`; static markup is enough for every non-agent kind because `loadMessages` never runs.
+
+---
+
+## 2026-09-06 — US-010: Wire dispatcher into LegacyNodeLogs and WorkflowExecution
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/LegacyNodeLogs.tsx` — replaced NodeTranscriptPane with LegacyNodeRoom and required room inputs
+- `packages/web/src/components/workflows/LegacyNodeLogs.test.tsx` — end-to-end selection for agent, bash, approval, child, route, loop-group; runId reset
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — approval on query data, uncaught gate handlers, Logs-only prop pass-through
+
+**Acceptance criteria verified**:
+- [x] Extend LegacyNodeLogsProps with definitionNodes, definitionPending, runStatus, approval, onApprove, onReject.
+- [x] Replace direct NodeTranscriptPane mount in LegacyNodeLogs with LegacyNodeRoom, passing through the selected row and new props.
+- [x] In WorkflowExecution.tsx, retain approval in WorkflowRunQueryData (data.run.metadata.approval ?? null) and create handleGateApprove and handleGateReject callbacks that call approveWorkflowRun / rejectWorkflowRun and invalidate workflowRun query without catching errors.
+- [x] Pass definitionNodes, definitionPending, runStatus, approval, onApprove, onReject into LegacyNodeLogs in the Logs tab branch.
+- [x] Keep activeView graph, source-control, chat, and sequential branches unchanged.
+- [x] Update packages/web/src/components/workflows/LegacyNodeLogs.test.tsx with end-to-end selection tests across agent, bash, approval, child workflow, route, and loop-group rows.
+- [x] Prove selecting bash or workflow does not call loadMessages, and changing runId clears selection.
+- [x] Tests pass via NODE_ENV=development bun test src/components/workflows/LegacyNodeLogs.test.tsx src/components/workflows/LegacyNodeRoom.test.tsx and bun test src/components/workflows/WorkflowExecution.test.tsx, plus bun run type-check in packages/web.
+
+**Learnings**:
+- Keep list selection and run-change reset in LegacyNodeLogs; only swap the room body.
+- Agent fixtures in Logs tests need a `command` definition so click-to-load stays explicit after the dispatcher.
+- Loop-group list rows are `loop_iteration_*` on the group id; room chrome still reads qualified body events.
+- Do not catch in WorkflowExecution gate handlers — GateRoom owns the visible action error.
+
+---
+
+## 2026-09-06 — US-011: Validate story and update sprint tracking
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — 5-2-see-the-right-room-for-each-node-type-legacy backlog → done; last_updated 2026-09-06 19:16:11 +0700 (comment + YAML field)
+
+**Acceptance criteria verified**:
+- [x] Run all selector, helper, static room, DOM room, and Logs integration tests in packages/web.
+- [x] Run packages/web type-check with zero errors.
+- [x] Run bun run lint --max-warnings 0 from the repository root with zero warnings.
+- [x] Run bun run validate from the repository root with zero errors.
+- [x] Update sprint-status.yaml lines 2, 37, and 48 changing 5-2-see-the-right-room-for-each-node-type-legacy to done and updating timestamps.
+- [x] Verify git diff --check, bun run format:check, and bun run validate all exit zero after tracking edit.
+
+**Learnings**:
+- First lint OOM'd at ~4 GB heap; `NODE_OPTIONS='--max-old-space-size=8192'` made `bun run lint --max-warnings 0` and `bun run validate` exit 0.
+- GateRoom stays in its own Bun process; do not run `bun test` from repo root.
+- Commit only sprint-status.yaml for this story (`chore: mark legacy node rooms done`). Do not change generated, other stories, or epic status.
+
+---

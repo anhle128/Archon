@@ -16,8 +16,8 @@
       "technicalNotes": "Follow docs/superpowers/plans/2026-09-06-node-type-rooms-legacy.md:392-611 (Task 1). Refactor WorkflowRunCard.tsx:118-133 and line 193. Keep URL parsing strictly http: or https:.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/web/src/lib/approval-context.ts, packages/web/src/lib/approval-context.test.ts, packages/web/src/components/dashboard/WorkflowRunCard.tsx, packages/web/src/components/dashboard/WorkflowRunCard.test.tsx."
     },
     {
       "id": "US-002",
@@ -37,8 +37,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/web/src/components/workflows/resolve-room-kind.ts, packages/web/src/components/workflows/resolve-room-kind.test.ts."
     },
     {
       "id": "US-003",
@@ -59,8 +59,8 @@
         "US-001"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/components/workflows/select-room-data.ts, packages/web/src/components/workflows/select-room-data.test.ts."
     },
     {
       "id": "US-004",
@@ -80,8 +80,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/components/workflows/NodeRoom.tsx, packages/web/src/components/workflows/NodeRoom.test.tsx, packages/web/src/components/workflows/StdoutRoom.tsx, packages/web/src/components/workflows/StdoutRoom.test.tsx."
     },
     {
       "id": "US-005",
@@ -103,8 +103,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/components/workflows/GateRoom.tsx, packages/web/src/components/workflows/GateRoom.test.tsx."
     },
     {
       "id": "US-006",
@@ -126,8 +126,8 @@
         "US-004"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/components/workflows/ChildWorkflowRoom.tsx, packages/web/src/components/workflows/ChildWorkflowRoom.test.tsx."
     },
     {
       "id": "US-007",
@@ -148,8 +148,8 @@
         "US-004"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/components/workflows/RouteControllerRoom.tsx, packages/web/src/components/workflows/RouteControllerRoom.test.tsx."
     },
     {
       "id": "US-008",
@@ -158,7 +158,7 @@
       "acceptanceCriteria": [
         "Create packages/web/src/components/workflows/LoopGroupRoom.tsx wrapped in RoomRegion, accepting nodeId and chrome: LoopGroupChrome.",
         "Render heading 'Loop group' and section 'Body nodes' listing each body node ID with 'Start' (if no dependsOn) or 'After <deps>' (if dependsOn has elements).",
-        "Render <details> accordion elements for each iteration with summary text '×<iteration> <status>' (e.g. '×1 completed').",
+        "Render <details> accordion elements for each iteration with summary text '\u00d7<iteration> <status>' (e.g. '\u00d71 completed').",
         "Set the open attribute only on the details element matching chrome.selectedIteration.",
         "Inside each details body, render each qualified body node ID with its iteration status.",
         "When iterations array is empty, render RoomPlaceholder with exact text \"Node hasn't produced output\" below the body topology.",
@@ -171,8 +171,8 @@
         "US-004"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/src/components/workflows/LoopGroupRoom.tsx, packages/web/src/components/workflows/LoopGroupRoom.test.tsx."
     },
     {
       "id": "US-009",
@@ -198,8 +198,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/components/workflows/LegacyNodeRoom.tsx, packages/web/src/components/workflows/LegacyNodeRoom.test.tsx."
     },
     {
       "id": "US-010",
@@ -220,8 +220,8 @@
         "US-009"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/web/src/components/workflows/LegacyNodeLogs.tsx, packages/web/src/components/workflows/LegacyNodeLogs.test.tsx, packages/web/src/components/workflows/WorkflowExecution.tsx."
     },
     {
       "id": "US-011",
@@ -240,8 +240,8 @@
         "US-010"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml."
     }
   ]
 }
