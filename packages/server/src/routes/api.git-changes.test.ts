@@ -13,6 +13,7 @@ import type {
   FileAtSource,
   FileDiffRequest,
   FileDiffResult,
+  GitLogResult,
 } from '@archon/git';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
@@ -31,6 +32,13 @@ const mockChangedFiles = mock(
   async (_workingPath: string): Promise<ChangedFilesResult> => ({
     files: [],
     revision: REVISION,
+  })
+);
+const mockLog = mock(
+  async (_workingPath: string): Promise<GitLogResult> => ({
+    commits: [],
+    revision: REVISION,
+    truncated: false,
   })
 );
 const mockIsGitWorkTree = mock(async (_workingPath: string): Promise<boolean> => true);
@@ -108,6 +116,7 @@ mock.module('@archon/git', () => ({
   fileDiff: mockFileDiff,
   changedFiles: mockChangedFiles,
   isGitWorkTree: mockIsGitWorkTree,
+  log: mockLog,
 }));
 mock.module('@archon/paths', () => ({
   createLogger: (): typeof mockLogger => mockLogger,
@@ -231,6 +240,7 @@ beforeEach(async () => {
   mockGetById.mockReset();
   mockChangedFiles.mockReset();
   mockIsGitWorkTree.mockReset();
+  mockLog.mockReset();
   mockFileAt.mockReset();
   mockFileDiff.mockReset();
   mockGetWorkflowRun.mockImplementation(async (): Promise<WorkflowRun> => runRow());
@@ -242,6 +252,9 @@ beforeEach(async () => {
     async (): Promise<ChangedFilesResult> => ({ files: [], revision: REVISION })
   );
   mockIsGitWorkTree.mockImplementation(async (): Promise<boolean> => true);
+  mockLog.mockImplementation(
+    async (): Promise<GitLogResult> => ({ commits: [], revision: REVISION, truncated: false })
+  );
   mockFileAt.mockImplementation(async (): Promise<FileAtResult> => readyFileAt());
   mockFileDiff.mockImplementation(
     async (): Promise<FileDiffResult> => ({
