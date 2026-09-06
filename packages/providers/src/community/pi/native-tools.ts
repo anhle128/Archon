@@ -1,18 +1,67 @@
 import { Type, type TObject, type TSchema } from '@sinclair/typebox';
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent';
-import type { NativeTool } from '../../types';
+import {
+  AskHumanAwaitingError,
+  AskHumanNoStarterError,
+  type AskHumanControlError,
+  type NativeTool,
+} from '../../types';
 
 type PiDefineTool = typeof import('@earendil-works/pi-coding-agent').defineTool;
+
+export interface PiNativeToolRuntime {
+  sessionId(): string | undefined;
+  onControlError(error: AskHumanControlError): void;
+}
+
+const UNSUPPORTED_TYPE =
+  "native tool schema: unsupported type for '%s' (only string / string-enum / boolean / array)";
 
 function isString(v: unknown): v is string {
   return typeof v === 'string';
 }
 
+function isAskHumanControlError(error: unknown): error is AskHumanControlError {
+  return error instanceof AskHumanAwaitingError || error instanceof AskHumanNoStarterError;
+}
+
+/**
+ * Convert one JSON Schema property into a TypeBox schema. Same narrow subset as
+ * the Claude converter: string, string-enum, boolean, array-of-strings, and
+ * array-of-objects whose fields recursively use that subset.
+ */
+function jsonSchemaToTypeBoxType(prop: Record<string, unknown>, key: string): TSchema {
+  if (Array.isArray(prop.enum)) {
+    const values = prop.enum.filter(isString);
+    if (values.length === 0) {
+      throw new Error(`native tool schema: enum for '${key}' must be non-empty strings`);
+    }
+    return Type.Union(values.map(v => Type.Literal(v)));
+  }
+  if (prop.type === 'string') return Type.String();
+  if (prop.type === 'boolean') return Type.Boolean();
+  if (prop.type === 'array') {
+    if (typeof prop.items !== 'object' || prop.items === null || Array.isArray(prop.items)) {
+      throw new Error(UNSUPPORTED_TYPE.replace('%s', key));
+    }
+    const items = prop.items as Record<string, unknown>;
+    let itemType: TSchema;
+    if (items.type === 'string') {
+      itemType = Type.String();
+    } else if (items.type === 'object') {
+      itemType = jsonSchemaToTypeBox(items);
+    } else {
+      throw new Error(UNSUPPORTED_TYPE.replace('%s', key));
+    }
+    const minItems = prop.minItems;
+    return typeof minItems === 'number' ? Type.Array(itemType, { minItems }) : Type.Array(itemType);
+  }
+  throw new Error(UNSUPPORTED_TYPE.replace('%s', key));
+}
+
 /**
  * Convert a NativeTool's canonical JSON Schema into the TypeBox schema Pi's
- * `defineTool` expects. Same narrow subset as the Claude converter (flat object
- * of strings / string-enums / booleans with `required`); anything else throws
- * (fail-fast).
+ * `defineTool` expects.
  */
 function jsonSchemaToTypeBox(schema: Record<string, unknown>): TObject {
   if (
@@ -29,22 +78,7 @@ function jsonSchemaToTypeBox(schema: Record<string, unknown>): TObject {
 
   const shape: Record<string, TSchema> = {};
   for (const [key, prop] of Object.entries(props)) {
-    let field: TSchema;
-    if (Array.isArray(prop.enum)) {
-      const values = prop.enum.filter(isString);
-      if (values.length === 0) {
-        throw new Error(`native tool schema: enum for '${key}' must be non-empty strings`);
-      }
-      field = Type.Union(values.map(v => Type.Literal(v)));
-    } else if (prop.type === 'string') {
-      field = Type.String();
-    } else if (prop.type === 'boolean') {
-      field = Type.Boolean();
-    } else {
-      throw new Error(
-        `native tool schema: unsupported type for '${key}' (only string / string-enum / boolean)`
-      );
-    }
+    let field = jsonSchemaToTypeBoxType(prop, key);
     if (typeof prop.description === 'string') {
       field = Type.Unsafe<unknown>({ ...field, description: prop.description });
     }
@@ -56,10 +90,13 @@ function jsonSchemaToTypeBox(schema: Record<string, unknown>): TObject {
 /**
  * Adapt NativeTools to Pi `ToolDefinition`s for the `customTools` array. The
  * handler's text result becomes the tool's content; `details` is unused.
+ * Optional `runtime` supplies the live session id and reports branded AskHuman
+ * control errors. `_toolCallId` is always forwarded as `toolUseId`.
  */
 export function buildPiNativeToolDefinitions(
   nativeTools: NativeTool[],
-  defineTool: PiDefineTool
+  defineTool: PiDefineTool,
+  runtime?: PiNativeToolRuntime
 ): ToolDefinition[] {
   return nativeTools.map(spec =>
     defineTool({
@@ -70,12 +107,22 @@ export function buildPiNativeToolDefinitions(
       description: spec.description,
       parameters: jsonSchemaToTypeBox(spec.inputSchema),
       execute: async (
-        _toolCallId,
+        toolCallId,
         params
-      ): Promise<{ content: { type: 'text'; text: string }[]; details: undefined }> => ({
-        content: [{ type: 'text', text: await spec.handler(params as Record<string, unknown>) }],
-        details: undefined,
-      }),
+      ): Promise<{ content: { type: 'text'; text: string }[]; details: undefined }> => {
+        try {
+          const text = await spec.handler(params as Record<string, unknown>, {
+            toolUseId: toolCallId,
+            sessionId: runtime?.sessionId(),
+          });
+          return { content: [{ type: 'text', text }], details: undefined };
+        } catch (error) {
+          if (isAskHumanControlError(error)) {
+            runtime?.onControlError(error);
+          }
+          throw error;
+        }
+      },
     })
   );
 }
