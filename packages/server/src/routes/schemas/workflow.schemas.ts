@@ -10,6 +10,12 @@ import {
   routeLoopDecisionEventDataSchema,
 } from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
+import { pendingInteractionSchema } from '@archon/workflows/schemas/pending-interaction';
+import {
+  nodeMessageTextSchema,
+  nodeMessageToolSchema,
+  nodeMessageStatusSchema,
+} from '@archon/workflows/schemas/node-message';
 import { nullableUsageReportResponseSchema } from './usage.schemas';
 
 /** Workflow definition schema — derived from engine schema via direct subpath import. */
@@ -160,6 +166,40 @@ export const workflowNodeStateSchema = z
   })
   .openapi('WorkflowNodeState');
 
+export const pendingInteractionResponseSchema = pendingInteractionSchema
+  .safeExtend({
+    created_at: z.string(),
+    resolved_at: z.string().nullable(),
+  })
+  .openapi('PendingInteraction');
+
+const nodeMessageWireShape = { created_at: z.string() };
+export const workflowNodeMessageTextResponseSchema = nodeMessageTextSchema
+  .omit({ workflow_run_id: true, node_id: true })
+  .safeExtend(nodeMessageWireShape);
+export const workflowNodeMessageToolResponseSchema = nodeMessageToolSchema
+  .omit({ workflow_run_id: true, node_id: true })
+  .safeExtend(nodeMessageWireShape);
+export const workflowNodeMessageStatusResponseSchema = nodeMessageStatusSchema
+  .omit({ workflow_run_id: true, node_id: true })
+  .safeExtend(nodeMessageWireShape);
+export const workflowNodeMessageResponseSchema = z
+  .discriminatedUnion('kind', [
+    workflowNodeMessageTextResponseSchema,
+    workflowNodeMessageToolResponseSchema,
+    workflowNodeMessageStatusResponseSchema,
+  ])
+  .openapi('WorkflowNodeMessage');
+
+export const workflowNodeMessagesParamsSchema = z.object({
+  runId: z.string().min(1),
+  nodeId: z.string().min(1),
+});
+export const workflowNodeMessagesResponseSchema = z
+  .object({ messages: z.array(workflowNodeMessageResponseSchema) })
+  .strict()
+  .openapi('WorkflowNodeMessagesResponse');
+
 /** GET /api/workflows/runs/:runId response. */
 export const workflowRunDetailSchema = z
   .object({
@@ -170,6 +210,7 @@ export const workflowRunDetailSchema = z
     }),
     events: z.array(workflowEventSchema),
     nodeStates: z.array(workflowNodeStateSchema),
+    pending_interactions: z.array(pendingInteractionResponseSchema),
     /**
      * Direct-run usage grouped by node. Null when the usage query fails;
      * empty coverage (`hasRecordedUsage: false`) when the run has no usage events.

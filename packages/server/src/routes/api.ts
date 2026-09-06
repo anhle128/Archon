@@ -406,6 +406,7 @@ import type { UsageReport } from '@archon/core/schemas/usage-report';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import * as workflowEnvDb from '@archon/core/db/workflow-envs';
+import * as workflowNodeMessageDb from '@archon/core/db/workflow-node-messages';
 import {
   abandonWorkflow,
   approveWorkflow,
@@ -434,6 +435,8 @@ import {
   retryWorkflowNodeBodySchema,
   retryWorkflowNodePreviewResponseSchema,
   retryWorkflowNodeResponseSchema,
+  workflowNodeMessagesParamsSchema,
+  workflowNodeMessagesResponseSchema,
   dashboardRunsResponseSchema,
   dashboardRunsQuerySchema,
   workflowRunsQuerySchema,
@@ -1325,6 +1328,22 @@ const retryWorkflowNodeRoute = createRoute({
     403: jsonError('Forbidden'),
     404: jsonError('Not found'),
     409: jsonError('Conflict'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getWorkflowNodeMessagesRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs/{runId}/nodes/{nodeId}/messages',
+  tags: ['Workflows'],
+  summary: 'List one workflow node transcript',
+  request: { params: workflowNodeMessagesParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowNodeMessagesResponseSchema } },
+      description: 'Workflow node transcript in sequence order',
+    },
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -4877,6 +4896,36 @@ export function registerApiRoutes(
     }
   });
 
+  // GET /api/workflows/runs/:runId/nodes/:nodeId/messages - One node transcript
+  registerOpenApiRoute(getWorkflowNodeMessagesRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const nodeId = c.req.param('nodeId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) return apiError(c, 404, 'Workflow run not found');
+      const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId);
+      return c.json({
+        messages: rows.map(row => ({
+          id: row.id,
+          seq: row.seq,
+          kind: row.kind,
+          payload: row.payload,
+          created_at: toISOString(row.created_at),
+        })),
+      });
+    } catch (error) {
+      getLog().error(
+        {
+          runId,
+          nodeId,
+          errorType: error instanceof Error ? error.name : typeof error,
+        },
+        'workflow_node_messages_list_failed'
+      );
+      return apiError(c, 500, 'Failed to list workflow node messages');
+    }
+  });
+
   // GET /api/workflows/runs/:runId - Get run details with events
   registerOpenApiRoute(getWorkflowRunRoute, async c => {
     try {
@@ -4937,6 +4986,7 @@ export function registerApiRoutes(
           run.status,
           projectApiWorkflowNodeStates(events)
         ),
+        pending_interactions: [],
         usage,
       });
     } catch (error) {
