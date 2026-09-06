@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Compute Reload pending from incoming snapshots, not refs
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-tab.tsx` `onReload`
+- **Pattern**: `dispatch` does not update `snapshotRef` until the next render. Compute each reducer's pending with `pendingAfterReceive(current, incoming, same)` in the same turn as the three `Promise.all` refetches, then load `pendingViewer` from that pending file. Include `commitSnapshotState.pending` in `hasPending` and gate acceptance on a matching scoped viewer.
+- **Example**: `pendingListRequestRef.current = { id, runId, commitOid: expanded?.oid ?? null };`
+
 ### Set viewerScopeRef before starting a viewer request
 - **Where**: `packages/web/src/components/workflows/source-control/source-control-tab.tsx` `onOpenScopedFile`
 - **Pattern**: Assign `viewerScopeRef.current = scope` and `setViewerScope(scope)` synchronously before `beginRequest()`. Capture `fetchSpy` into a const before `waitFor` closures so tsc does not re-widen `let fetchSpy`.
@@ -217,5 +222,28 @@
 - `calledUrls(fetchSpy)` inside `waitFor` fails tsc because `let fetchSpy` is re-widened in closures; capture a const first.
 - Enter on History now fetches `?ref=`; Story 2.1 keyboard tests must stub `onCommitChanges`.
 - Leave scoped paging and 3-snapshot Reload to US-007.
+
+---
+
+## 2026-09-07 — US-007: Scope-safe paging, Reload freeze, and keyboard isolation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — scoped onLoadMore, three-snapshot Reload, Return-to-Now, CAP-6/missing-file accept, History collapse without closing commit viewer
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — Return-to-Now, commit Load more text/hunks, frozen Reload, nested History keyboard
+
+**Acceptance criteria verified**:
+- [x] onLoadMore reads viewerScopeRef.current; passes ref: scope.oid for commit diffs and source: rawSourceFor(file, scope) for commit text pages; validates matching ref and contentHash before appending.
+- [x] Selecting any file in Changes list synchronously resets viewerScope and viewerScopeRef to { kind: 'now' } (Return-to-Now).
+- [x] Implement atomic Reload: refetch Now changes, History log, and expanded commit changes (if any) concurrently; update pending snapshots and pendingViewer; do not overwrite displayed content until user clicks 'Changed on disk — Reload'.
+- [x] Implement onAcceptPending: if the open file is no longer present in the accepted snapshot, or if any snapshot is CAP-6, close viewer; otherwise accept all pending snapshots and replace viewer with matching pendingViewer.
+- [x] If accepted History list no longer contains the expanded commit, collapse the inline list but keep the open commit viewer readable.
+- [x] Ensure keyboard navigation in nested Commit files list (Arrow keys, Enter, Space) is isolated and does not trigger parent row collapse or double activation.
+- [x] Pass all remaining mounted integration tests in packages/web/src/component-integration/source-control-tab.test.tsx.
+
+**Learnings**:
+- After dispatch, snapshot refs still hold the pre-reload state until render; derive pending in-memory from the incoming snapshots.
+- Do not cancel ordinary commit expansion from abortCurrent; only cancel `['workflowRunGitChanges', runId, commitOid]` when that oid was stored on a Reload pendingListRequest.
+- Return-to-Now is only the Changes opener (`onOpenFile` → `{ kind: 'now' }`); collapsing History must not reset viewer scope.
 
 ---
