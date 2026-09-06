@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { installHappyDom, restoreHappyDom } from './install-happy-dom';
 
+function expectSameRef(actual: unknown, expected: unknown): void {
+  expect(actual === expected).toBe(true);
+}
+
 describe('installHappyDom', () => {
   afterEach(() => {
     restoreHappyDom();
@@ -20,8 +24,8 @@ describe('installHappyDom', () => {
     }).toThrow(/readonly property/i);
 
     const win = installHappyDom();
-    expect(globalThis.document).toBe(win.document);
-    expect(globalThis.Event).toBe(win.Event);
+    expectSameRef(globalThis.document, win.document);
+    expectSameRef(globalThis.Event, win.Event);
     expect(win.document.createElement('div').nodeName).toBe('DIV');
     win.close();
     restoreHappyDom();
@@ -35,7 +39,7 @@ describe('installHappyDom', () => {
   test('a second install in the same process does not throw', () => {
     const first = installHappyDom();
     const second = installHappyDom();
-    expect(globalThis.document).toBe(second.document);
+    expectSameRef(globalThis.document, second.document);
     expect(second).not.toBe(first);
     second.close();
     restoreHappyDom();
