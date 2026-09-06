@@ -2,19 +2,30 @@
  * Database operations for pending AskHuman / permission interactions.
  *
  * Inserts the pending row and the `node_awaiting` audit event in one
- * transaction. Corrupt stored JSON fails closed and never logs envelope
- * or answer bodies.
+ * transaction. Resolves an Ask answer in one transaction that may also resume
+ * the run. Corrupt stored JSON fails closed and never logs envelope or answer
+ * bodies.
  */
 import { createLogger } from '@archon/paths';
 import { AskHumanNoStarterError } from '@archon/providers/types';
 import {
+  askHumanQuestionSchema,
   insertPendingInteractionSchema,
   pendingInteractionSchema,
+  resolvePendingInteractionInputSchema,
+  type AskAnswerBody,
+  type AskHumanQuestion,
   type InsertPendingInteractionInput,
   type PendingInteraction,
+  type ResolvePendingInteractionInput,
+  type ResolvePendingInteractionResult,
 } from '@archon/workflows/schemas/pending-interaction';
 import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
+import {
+  resumeWorkflowRunInTransaction,
+  workflowRunLockClause,
+} from './workflow-resume-transition';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -30,6 +41,56 @@ export class PendingInteractionCorruptRowError extends Error {
   constructor(readonly rowId: string) {
     super(`Pending interaction row corrupt: ${rowId}`);
     this.name = 'PendingInteractionCorruptRowError';
+  }
+}
+
+export class PendingInteractionNotFoundError extends Error {
+  constructor(
+    readonly workflowRunId: string,
+    readonly toolUseId: string
+  ) {
+    super(`Pending interaction not found: ${workflowRunId}/${toolUseId}`);
+    this.name = 'PendingInteractionNotFoundError';
+  }
+}
+
+export class PendingInteractionAlreadyResolvedError extends Error {
+  constructor(
+    readonly workflowRunId: string,
+    readonly toolUseId: string,
+    readonly status: string
+  ) {
+    super(`Pending interaction already resolved: ${workflowRunId}/${toolUseId}`);
+    this.name = 'PendingInteractionAlreadyResolvedError';
+  }
+}
+
+export class PendingInteractionRunNotPausedError extends Error {
+  constructor(
+    readonly workflowRunId: string,
+    readonly status: string
+  ) {
+    super(`Workflow run is not paused: ${workflowRunId}`);
+    this.name = 'PendingInteractionRunNotPausedError';
+  }
+}
+
+export type PendingInteractionValidationCode =
+  | 'invalid_body'
+  | 'kind_not_ask'
+  | 'missing_question'
+  | 'unknown_question'
+  | 'duplicate_question'
+  | 'duplicate_envelope_id'
+  | 'invalid_single_value'
+  | 'invalid_multi_value'
+  | 'invalid_option'
+  | 'blank_other';
+
+export class PendingInteractionValidationError extends Error {
+  constructor(readonly code: PendingInteractionValidationCode) {
+    super(`Pending interaction validation failed: ${code}`);
+    this.name = 'PendingInteractionValidationError';
   }
 }
 
@@ -135,4 +196,183 @@ export async function listPendingInteractions(
     [workflowRunId]
   );
   return result.rows.map(parsePendingInteractionRow);
+}
+
+function isDecline(answer: AskAnswerBody): answer is { decline: true } {
+  return 'decline' in answer;
+}
+
+function throwValidation(code: PendingInteractionValidationCode): never {
+  throw new PendingInteractionValidationError(code);
+}
+
+function parseEnvelopeQuestions(
+  envelope: Record<string, unknown>,
+  rowId: string
+): AskHumanQuestion[] {
+  const questionsRaw = envelope.questions;
+  if (!Array.isArray(questionsRaw)) {
+    throwCorrupt(rowId, 'row_schema');
+  }
+  const questions: AskHumanQuestion[] = [];
+  const seen = new Set<string>();
+  for (const raw of questionsRaw) {
+    const parsed = askHumanQuestionSchema.safeParse(raw);
+    if (!parsed.success) throwCorrupt(rowId, 'row_schema');
+    if (seen.has(parsed.data.id)) throwValidation('duplicate_envelope_id');
+    seen.add(parsed.data.id);
+    questions.push(parsed.data);
+  }
+  return questions;
+}
+
+function validateOption(question: AskHumanQuestion, value: string): void {
+  if (question.options.includes(value)) return;
+  if (!question.allowOther) throwValidation('invalid_option');
+  if (value.trim() === '') throwValidation('blank_other');
+}
+
+function validateAskAnswers(
+  envelope: Record<string, unknown>,
+  answer: AskAnswerBody,
+  rowId: string
+): void {
+  if (isDecline(answer)) return;
+  const questions = parseEnvelopeQuestions(envelope, rowId);
+  const answers = answer.answers;
+  const answerIds = answers.map(item => item.questionId);
+  if (new Set(answerIds).size !== answerIds.length) throwValidation('duplicate_question');
+  const questionIds = new Set(questions.map(question => question.id));
+  for (const question of questions) {
+    if (!answerIds.includes(question.id)) throwValidation('missing_question');
+  }
+  for (const item of answers) {
+    if (!questionIds.has(item.questionId)) throwValidation('unknown_question');
+  }
+  const byId = new Map(questions.map(question => [question.id, question]));
+  for (const item of answers) {
+    const question = byId.get(item.questionId);
+    if (!question) throwValidation('unknown_question');
+    if (question.selection === 'single') {
+      if (typeof item.value !== 'string') throwValidation('invalid_single_value');
+      validateOption(question, item.value);
+      continue;
+    }
+    if (
+      !Array.isArray(item.value) ||
+      item.value.length === 0 ||
+      item.value.some(value => typeof value !== 'string')
+    ) {
+      throwValidation('invalid_multi_value');
+    }
+    for (const value of item.value) validateOption(question, value);
+  }
+}
+
+export async function resolvePendingInteraction(
+  input: ResolvePendingInteractionInput
+): Promise<ResolvePendingInteractionResult> {
+  const parsedInput = resolvePendingInteractionInputSchema.safeParse(input);
+  if (!parsedInput.success) throwValidation('invalid_body');
+
+  const workflowRunId = parsedInput.data.workflow_run_id;
+  const toolUseId = parsedInput.data.tool_use_id;
+  const answer = parsedInput.data.answer;
+  const resolvedBy = parsedInput.data.resolved_by;
+  const db = getDatabase();
+  const dialect = getDialect();
+  const lockSuffix = workflowRunLockClause();
+
+  return db.withTransaction(async query => {
+    const runResult = await query<{ status: string }>(
+      `SELECT status FROM remote_agent_workflow_runs WHERE id = $1${lockSuffix}`,
+      [workflowRunId]
+    );
+    const run = runResult.rows[0];
+    if (!run) {
+      throw new PendingInteractionNotFoundError(workflowRunId, toolUseId);
+    }
+
+    const interactionResult = await query<Record<string, unknown>>(
+      `SELECT ${COLUMNS}
+       FROM remote_agent_pending_interactions
+       WHERE workflow_run_id = $1 AND tool_use_id = $2${lockSuffix}`,
+      [workflowRunId, toolUseId]
+    );
+    const rawInteraction = interactionResult.rows[0];
+    if (!rawInteraction) {
+      throw new PendingInteractionNotFoundError(workflowRunId, toolUseId);
+    }
+    const current = parsePendingInteractionRow(rawInteraction);
+    if (current.status !== 'pending') {
+      throw new PendingInteractionAlreadyResolvedError(workflowRunId, toolUseId, current.status);
+    }
+    if (run.status !== 'paused') {
+      throw new PendingInteractionRunNotPausedError(workflowRunId, run.status);
+    }
+    if (current.kind !== 'ask') throwValidation('kind_not_ask');
+
+    validateAskAnswers(current.envelope, answer, current.id);
+
+    const cas = await query(
+      `UPDATE remote_agent_pending_interactions
+       SET status = 'answered',
+           answer = $2,
+           resolved_at = ${dialect.now()},
+           resolved_by = $3
+       WHERE id = $1 AND status = 'pending'`,
+      [current.id, JSON.stringify(answer), resolvedBy]
+    );
+    if (cas.rowCount === 0) {
+      throw new PendingInteractionAlreadyResolvedError(workflowRunId, toolUseId, current.status);
+    }
+
+    const remainingResult = await query<{ remaining: number | string }>(
+      `SELECT COUNT(*) AS remaining
+       FROM remote_agent_pending_interactions
+       WHERE workflow_run_id = $1 AND status = 'pending'`,
+      [workflowRunId]
+    );
+    const remainingPending = Number(remainingResult.rows[0]?.remaining ?? 0);
+    let resumed = false;
+    if (remainingPending === 0) {
+      const resumeResult = await resumeWorkflowRunInTransaction(
+        query,
+        workflowRunId,
+        dialect,
+        'paused-ask'
+      );
+      if (!resumeResult.resumed) {
+        throw new PendingInteractionRunNotPausedError(workflowRunId, run.status);
+      }
+      resumed = true;
+    }
+
+    await insertWorkflowEvent(query, {
+      workflow_run_id: workflowRunId,
+      event_type: 'interaction_resolved',
+      step_name: current.node_id,
+      data: {
+        node_id: current.node_id,
+        tool_use_id: toolUseId,
+        kind: 'ask',
+        declined: isDecline(answer),
+        resumed,
+      },
+    });
+
+    const resolvedRows = await query<Record<string, unknown>>(
+      `SELECT ${COLUMNS} FROM remote_agent_pending_interactions WHERE id = $1`,
+      [current.id]
+    );
+    const resolvedRow = resolvedRows.rows[0];
+    if (!resolvedRow) {
+      throw new Error(`Pending interaction vanished after resolve: ${current.id}`);
+    }
+    return {
+      interaction: parsePendingInteractionRow(resolvedRow),
+      resumed,
+      remaining_pending: remainingPending,
+    };
+  });
 }

@@ -3,6 +3,12 @@
  */
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
+import {
+  ORPHAN_RESUME_STALE_DAYS,
+  resumeWorkflowRunInTransaction,
+  resumableWorkflowStatusClause,
+  workflowRunLockClause,
+} from './workflow-resume-transition';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -98,65 +104,10 @@ async function cleanupRetryRefsForRun(run: {
 }
 
 /**
- * Days of inactivity after which a 'running' run is treated as an orphan (its
- * executor presumed dead) and becomes eligible for resume. Bound as a query
- * parameter — never interpolated — so both dialects handle it positionally.
- */
-const ORPHAN_RESUME_STALE_DAYS = 1;
-
-/**
- * SQL fragment matching a run that may be resumed: failed/paused/cancelled, or a stale
- * 'running' orphan (no activity for ORPHAN_RESUME_STALE_DAYS). `dayParamIndex`
- * is the 1-based placeholder position at which the caller MUST bind
- * ORPHAN_RESUME_STALE_DAYS. Shared by findResumableRun and resumeWorkflowRun so
- * the two predicates cannot drift — a hand-duplicated copy did drift and bound
- * the wrong placeholder, breaking resume (PR #1830 review C1).
- */
-function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
-  const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
-  return `(status IN ('failed', 'paused', 'cancelled') OR (status = 'running' AND (${staleOrphan})))`;
-}
-
-/**
- * `FOR UPDATE` on Postgres, empty on SQLite (which has no such syntax and does
- * not need it — the adapter serializes transactions on one connection, and a
- * cross-process writer that commits between our read and our write makes the
- * deferred BEGIN's read→write upgrade fail with SQLITE_BUSY rather than let a
- * stale snapshot through). Used by resumeWorkflowRun to pin the row across its
- * read-then-CAS pair so the value it reads is the value the CAS acts on.
- * Dialect-branched here rather than in SqlDialect: this is the only caller, and
- * the branch mirrors unresolvedGateClause's local getDatabaseType() check.
- */
-function rowLockClause(): string {
-  return getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
-}
-
-/**
- * Extract a non-empty `metadata.error` string from a raw column value, or null
- * when there is nothing worth preserving. SQLite stores metadata as JSON TEXT
- * and Postgres returns a parsed object (same split normalizeWorkflowRun handles),
- * so both shapes are accepted; absent / null / non-string / empty / unparseable
- * all collapse to null.
- */
-function readMetadataError(raw: unknown): string | null {
-  let metadata: unknown = raw;
-  if (typeof metadata === 'string') {
-    try {
-      metadata = JSON.parse(metadata);
-    } catch {
-      return null;
-    }
-  }
-  if (typeof metadata !== 'object' || metadata === null) return null;
-  const error = (metadata as Record<string, unknown>).error;
-  return typeof error === 'string' && error !== '' ? error : null;
-}
-
-/**
  * SQL predicate matching a run whose approval gate is still OPEN: the row is
  * 'paused' AND metadata.approval.resolved is JSON null or absent. Dialect-aware
  * (Postgres `->>`, SQLite `json_extract`) and kept in ONE place so the two forms
- * cannot drift — mirrors resumableStatusClause and the local jsonIntExtract
+ * cannot drift — mirrors resumableWorkflowStatusClause and the local jsonIntExtract
  * helper. `->>'resolved'` / `json_extract(...)` both return SQL NULL for a JSON
  * null AND for an absent key, so `IS NULL` matches exactly "not yet resolved".
  * This is the compare-and-swap guard resolveApprovalGate uses to serialize
@@ -208,7 +159,7 @@ export async function resolveApprovalGate(
   try {
     return await getDatabase().withTransaction(async query => {
       const currentResult = await query<WorkflowRun>(
-        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${workflowRunLockClause()}`,
         [id]
       );
       const currentRow = currentResult.rows[0];
@@ -255,7 +206,7 @@ export async function transitionPlannotatorGate(
   try {
     return await getDatabase().withTransaction(async query => {
       const currentResult = await query<WorkflowRun>(
-        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${workflowRunLockClause()}`,
         [input.runId]
       );
       const currentRow = currentResult.rows[0];
@@ -334,7 +285,7 @@ export async function resolveAndCancelApprovalGate(
   try {
     return await getDatabase().withTransaction(async query => {
       const currentResult = await query<WorkflowRun>(
-        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${workflowRunLockClause()}`,
         [id]
       );
       const currentRow = currentResult.rows[0];
@@ -844,7 +795,7 @@ export async function findResumableRun(
       `SELECT * FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND working_path = $2
-         AND ${resumableStatusClause(dialect, 3)}
+         AND ${resumableWorkflowStatusClause(dialect, 3)}
        ORDER BY started_at DESC
        LIMIT 1`,
       [workflowName, workingPath, ORPHAN_RESUME_STALE_DAYS]
@@ -910,7 +861,7 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
   // Split into UPDATE + SELECT to support both PostgreSQL and SQLite
   // (SQLite does not support RETURNING on UPDATE statements)
   // Each phase has its own try/catch to avoid string-sniffing own errors in a shared catch.
-  let updateResult: { rowCount: number };
+  let updateResult: { resumed: boolean };
   try {
     // Refresh started_at to NOW so the resumed row competes fairly with
     // currently-active rows in getActiveWorkflowRunByPath's older-wins
@@ -924,7 +875,7 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
     // The original creation time can be recovered from workflow_events
     // history if needed for analytics.
     // Compare-and-swap guard: flip to 'running' only if the row is STILL
-    // resumable (resumableStatusClause — shared with findResumableRun so the two
+    // resumable (resumableWorkflowStatusClause — shared with findResumableRun so the two
     // predicates can't drift). The exclusion mechanism is the atomic row-level
     // UPDATE: because it also refreshes last_activity_at, a second concurrent
     // resumer finds the row already 'running' with fresh activity, no longer
@@ -940,40 +891,13 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
     // cleared is first preserved as a `workflow_resumed` event, in the SAME
     // transaction as the clear, so the audit trail can never lose it. The read,
     // the CAS and the event INSERT are one transaction (mirroring
-    // resolveApprovalGate, #2146): the row is pinned by rowLockClause() so the
+    // resolveApprovalGate, #2146): the row is pinned by workflowRunLockClause() so the
     // value read is the value cleared, and the event is written ONLY by the
     // caller whose CAS matched — a losing concurrent resumer writes nothing.
     // Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
     // rejects RETURNING on UPDATE and points at exactly this pattern.
     updateResult = await getDatabase().withTransaction(async query => {
-      const priorRows = await query<{ metadata: unknown }>(
-        `SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
-        [id]
-      );
-      const clearedError = readMetadataError(priorRows.rows[0]?.metadata);
-
-      const result = await query(
-        `UPDATE remote_agent_workflow_runs
-         SET status = 'running',
-             completed_at = NULL,
-             started_at = ${dialect.now()},
-             last_activity_at = ${dialect.now()},
-             metadata = ${dialect.jsonMerge('metadata', 3)}
-         WHERE id = $1 AND ${resumableStatusClause(dialect, 2)}`,
-        [id, ORPHAN_RESUME_STALE_DAYS, JSON.stringify({ error: null })]
-      );
-
-      const rowCount = result.rowCount;
-      if (rowCount > 0 && clearedError !== null) {
-        // Same `{ error }` payload shape workflow_failed uses, so every consumer
-        // that already reads an error off a workflow_* event keeps working.
-        await insertWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_resumed',
-          data: { error: clearedError },
-        });
-      }
-      return { rowCount };
+      return resumeWorkflowRunInTransaction(query, id, dialect, 'standard');
     });
   } catch (error) {
     const err = error as Error;
@@ -981,7 +905,7 @@ export async function resumeWorkflowRun(id: string): Promise<WorkflowRun> {
     throw new Error(`Failed to resume workflow run: ${err.message}`);
   }
 
-  if (updateResult.rowCount === 0) {
+  if (!updateResult.resumed) {
     // CAS miss: the row is no longer resumable — deleted, terminal, or already
     // activated by another caller. Refuse rather than double-claim the worktree.
     // Probe the current status for an actionable error (informational only; the
