@@ -1,0 +1,245 @@
+## Codebase Patterns
+
+### bun run validate needs extra Node heap on this runner
+- **Where**: root `package.json` `validate` script (eslint)
+- **Pattern**: First `bun run validate` OOM'd ESLint (`FATAL ERROR: Reached heap limit`, ~4GB). Re-run with `NODE_OPTIONS=--max-old-space-size=8192 bun run validate`. That env is a runner workaround, not a committed script change.
+- **Example**: `NODE_OPTIONS=--max-old-space-size=8192 bun run validate`
+
+### Pre-existing prettier mockup drift blocked validate
+- **Where**: `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/{app.js,console-app.js,styles.css}`
+- **Pattern**: `bun run format:check` failed on these three files on a clean stash (not in the spike File Map). UNBLOCK PROTOCOL: stash story work, format only those paths, `chore(unblock):` commit, then restore. Fingerprint is prettier warn on those three paths.
+- **Example**: commit `97442681`
+
+### Ralph YAML effort vs contract tests blocked validate
+- **Where**: `packages/workflows/src/dag-executor.test.ts:6901`, `packages/workflows/src/loader.test.ts`
+- **Pattern**: Native Ralph YAML `ralph-loop-run` is `effort: high` / `omp` / `xai-oauth/grok-4.5`; tests expected `xhigh`. Same fingerprint on clean base. UNBLOCK: update tests to match YAML, not YAML to match tests. Commit `chore(unblock):` with zero story files.
+- **Example**: commit `ae532e0e`
+
+### Prettier eats unquoted markdown underscores
+- **Where**: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/6-1-askhuman-resume-spike.md`
+- **Pattern**: lint-staged prettier converts `mcp__archon__AskHuman` to `mcp**archon**AskHuman`. Wrap the tool name in backticks before commit so the exact AD-6 CONFIRM statement keeps the custom MCP id.
+- **Example**: `` `mcp__archon__AskHuman` ``
+
+### Isolated 0.3.261 comparison must not touch the pin
+- **Where**: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/evidence/6-1-claude-0.3.261.json`
+- **Pattern**: Copy the self-contained harness into `mktemp -d`, `bun add --exact @anthropic-ai/claude-agent-sdk@0.3.261 zod@4.4.3`, run with `EXPECTED_CLAUDE_SDK_VERSION=0.3.261`, redirect stdout only, then `rm -rf` only after a non-root safety check. A differing 0.3.261 protocol is comparison evidence; keep exact 0.3.209.
+- **Example**: `0.3.209 host-abort-new-user-message` vs `0.3.261 tool-deferred-reissue`
+
+### Claude 0.3.209 evidence is a redacted live JSON document
+- **Where**: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/evidence/6-1-claude-0.3.209.json`
+- **Pattern**: Run `bun run spike:askhuman:claude` with CLAUDE_SPIKE_MODELS=sonnet,opus and EXPECTED_CLAUDE_SDK_VERSION=0.3.209. Redirect stdout only. Validate with the plan jq expression plus the rg secrecy scan. Do not upgrade the pin when defer is incomplete.
+- **Example**: `"protocol": "host-abort-new-user-message"`
+
+### Pi durable resume uses real lifecycle plus faux transport
+- **Where**: `packages/providers/src/community/pi/askhuman-resume.characterization.test.ts`
+- **Pattern**: Prove AskHuman continue with real SessionManager / AgentSession / session.agent.continue(). Replace only the model transport via registerFauxProvider. Cleanup must prefix-check the temp dir before rmSync.
+- **Example**: `await second.agent.continue()`
+
+### Live Claude harness is copyable and gated
+- **Where**: `packages/providers/src/claude/askhuman-resume-spike.ts`, `packages/providers/package.json`
+- **Pattern**: Keep the file self-contained (SDK + zod + Node built-ins). Guard live `query()` with `import.meta.main`. Expose `spike:askhuman:claude` only as a manual script. Host-abort uses one shared handler counter snapshotted after the first query.
+- **Example**: `if (import.meta.main) { await main(); }`
+
+### Fail-closed Claude classifier is diagnostic-only
+- **Where**: `packages/providers/src/claude/askhuman-resume-spike.ts`
+- **Pattern**: Keep this module out of production exports and SDK types. Decision order is load-bearing: `requiresActionSeen` / `failureCategory` → same-id defer round trip → host abort → `inconclusive`. Prefer host abort first and the defer-preference test fails.
+- **Example**: `if (deferredProved) return 'tool-deferred-reissue';`
+
+### Exact Claude SDK pin for the AskHuman spike
+- **Where**: `package.json:76`, `packages/providers/package.json:38`, `bun.lock` workspace specs
+- **Pattern**: Spike evidence requires the literal version `0.3.209` (no caret). `bun install --lockfile-only` updates only the two workspace specs; the resolved package stays `0.3.209`. Do not upgrade to `0.3.261` on this branch.
+- **Example**: `"@anthropic-ai/claude-agent-sdk": "0.3.209"`
+
+### Provider test isolation
+- **Where**: `packages/providers/package.json:34`
+- **Pattern**: Provider tests must run as separate `bun test <file>` invocations in the package `test` script. Do not run unscoped `bun test` from the repo root.
+
+---
+
+## 2026-09-06 — US-001: Pin Claude SDK reproducibly
+
+**Status**: PASSED
+**Files changed**:
+- `package.json` — pinned `@anthropic-ai/claude-agent-sdk` from `^0.3.209` to `0.3.209`
+- `packages/providers/package.json` — same exact pin
+- `bun.lock` — workspace dependency specs lost the caret; resolved Claude package remained `0.3.209`; Pi packages remained `0.80.6`
+
+**Acceptance criteria verified**:
+- [x] The root package.json and packages/providers/package.json dependency values for @anthropic-ai/claude-agent-sdk are both the literal string 0.3.209, with no caret or other range.
+- [x] bun.lock workspace dependency specifications match both exact manifest values while the resolved Claude SDK package remains 0.3.209 and Pi lockfile packages remain at 0.80.6.
+- [x] The prescribed exact-pin check fails before the edit and exits zero after it.
+- [x] bun install --lockfile-only and bun install --frozen-lockfile both exit zero after the manifest and lockfile update.
+- [x] The diff is limited to the two dependency specifications and their corresponding lockfile metadata; no automatic upgrade to 0.3.261 occurs.
+
+**Learnings**:
+- Exact-pin check failed on caret as expected before the edit.
+- `bun install --lockfile-only` changed only the two workspace specs (4-line lockfile diff).
+- Frozen install resolved `@anthropic-ai/claude-agent-sdk@0.3.209`.
+
+---
+
+## 2026-09-06 — US-002: Test the fail-closed Claude classifier
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/claude/askhuman-resume-spike.ts` — diagnostic-only types plus fail-closed classifyClaudeModel / classifyClaudeVersion
+- `packages/providers/src/claude/askhuman-resume-spike.test.ts` — five literal fixtures covering defer preference, host abort, third mechanism, timeout, incomplete models
+- `packages/providers/package.json` — registered the classifier test as its own `bun test` process
+
+**Acceptance criteria verified**:
+- [x] A new askhuman-resume-spike.test.ts first asserts that a complete defer round trip beats a working host-abort workaround, a fully proved host-abort path is selected only when defer is unproved, and third-mechanism, environment-failure, and incomplete-model cases are inconclusive.
+- [x] The new askhuman-resume-spike.ts defines ClaudeProtocol, ClaudeFailureCategory, and ClaudeModelEvidence exactly for the observed host-abort and deferred facts, without any production provider export or any type copied from an SDK.
+- [x] The intentional stub implementation produces the prescribed behavioral RED result before the minimum decision logic is added.
+- [x] classifyClaudeModel returns inconclusive when requires_action is observed or a failure category is present, selects tool-deferred-reissue only after every required same-id defer fact passes, otherwise selects host-abort-new-user-message only after every same-session host-abort fact passes.
+- [x] classifyClaudeVersion returns a protocol only for exactly sonnet and opus with the same non-inconclusive result; all split, duplicate, missing, or partial evidence is inconclusive.
+- [x] The focused classifier test runs from packages/providers and passes after implementation; temporarily preferring host abort before defer makes the defer-preference test fail, then the restored implementation passes.
+- [x] packages/providers/package.json registers this test as its own bun test process, and no live model call occurs when the test imports the module.
+
+**Learnings**:
+- Stub RED was exactly the first assertion: Expected `tool-deferred-reissue`, Received `inconclusive`.
+- Mutation that returned host abort before defer failed that same first test with Received `host-abort-new-user-message`.
+- Prettier collapsed the version-classifier signature and one expect onto one line; eslint ignores `*.test.ts`.
+- Do not export this module from `packages/providers/src/index.ts`.
+
+---
+
+## 2026-09-06 — US-003: Build the manual Claude protocol harness
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/claude/askhuman-resume-spike.ts` — self-contained live host-abort and PreToolUse-defer harness plus existing fail-closed classifier
+- `packages/providers/package.json` — added `spike:askhuman:claude`; classifier test remains an isolated bun test process
+
+**Acceptance criteria verified**:
+- [x] askhuman-resume-spike.ts remains self-contained, imports Claude types and createSdkMcpServer/query/tool from the owning SDK plus z from zod, and uses only Node built-ins and declared provider dependencies
+- [x] Both host-abort and PreToolUse-defer experiments target only mcp__archon__AskHuman, use fresh server instances when required, instruct exactly one AskHuman call, and never wrap or expose AskUserQuestion
+- [x] The collector consumes the entire SDK iterator and retains only session identifier, stop/terminal reason, deferred tool id/name, requires_action observation, completion boolean, and generated-marker boolean
+- [x] The defer experiment proves only matching custom-tool same-id reissue, redacted updatedInput.archonResume delivery exactly once, successful resumed handling, and tool_deferred_unavailable detection; requires_action is recorded as inconclusive
+- [x] The host-abort experiment verifies a captured session id, same-session resume with a generated answer marker, completion marker, and absence of a reissued AskHuman call
+- [x] The harness defaults CLAUDE_SPIKE_MODELS to sonnet,opus, verifies its installed SDK version using Bun.resolveSync and the adjacent manifest, bounds each model experiment to 120 seconds, and serializes failures only as allowed redacted failure categories
+- [x] When executed manually it prints exactly one JSON document, exits nonzero for inconclusive protocol evidence, and is guarded by import.meta.main so focused tests do not call a vendor API
+- [x] packages/providers/package.json exposes spike:askhuman:claude but does not add it to test, validate, or CI; focused classifier test and provider type-check pass without making a live call
+
+**Learnings**:
+- `import.meta.main` plus importing the module from bun test / bun -e does not invoke query(); the classifier tests finished in ~100ms
+- Host-abort proof requires a shared handler counter snapshotted after the first query: afterResume is the same total, so a missing reissue stays at 1 and a reissued Ask becomes 2
+- Do not add the live script to the providers test chain; US-002 already registered the isolated classifier test
+
+---
+
+## 2026-09-06 — US-004: Characterize Pi durable reopen and continue
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/pi/askhuman-resume.characterization.test.ts` — real Pi SessionManager dispose, reopen, ToolResultMessage append, and session.agent.continue() with a faux transport
+- `packages/providers/package.json` — registered the characterization as its own bun test process
+
+**Acceptance criteria verified**:
+- [x] Isolated Bun test creates a real SessionManager transcript ending in an assistant AskHuman tool call with a known tool-use id, then disposes the first AgentSession
+- [x] Reopens through SessionManager.open, appends a matching ToolResultMessage, recreates a real AgentSession, and proves the appended tool result is the tail of session.agent.state.messages
+- [x] Calls session.agent.continue(), not AgentSession.continue(), and the faux provider receives the matching ToolResultMessage as the final context message
+- [x] Continuation assistant message is persisted and remains present after a second SessionManager.open
+- [x] Only the external model transport is faux; lifecycle, persistence, disposal, reopening, and continuation use real Pi SDK objects; no vendor API request
+- [x] Cleanup removes only the verified temporary test directory; focused test is registered as its own process in packages/providers/package.json
+- [x] Changing the persisted answer toolCallId to a different literal failed the focused assertion; restoring the matching id made the characterization test and provider type-check pass
+
+**Learnings**:
+- The plan's 0.80.6 recipe succeeded without order changes: SessionManager.create -> append -> dispose -> SessionManager.open -> appendMessage(ToolResultMessage) -> createAgentSession -> session.agent.continue()
+- The mismatch-id mutation failed at capturedContext.messages.at(-1).toolCallId, proving the faux transport saw the persisted answer id
+- Do not add this test to an unscoped root bun test; keep it as its own providers process
+
+---
+
+## 2026-09-06 — US-005: Record exact 0.3.209 Claude evidence
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/evidence/6-1-claude-0.3.209.json` — live sonnet+opus evidence for exact SDK 0.3.209; protocol host-abort-new-user-message
+
+**Acceptance criteria verified**:
+- [x] Manual spike ran with ambient auth, CLAUDE_SPIKE_MODELS=sonnet,opus, EXPECTED_CLAUDE_SDK_VERSION=0.3.209, writing one JSON document to the prescribed 6-1-claude-0.3.209.json path
+- [x] Evidence is valid JSON with schemaVersion 1, sdkVersion 0.3.209, exactly sonnet and opus records, and protocol host-abort-new-user-message
+- [x] Plan rg secrecy check found no credentials, tokens, prompts, answer payloads, transcript text, or environment values
+- [x] Evidence records both host-abort and deferred facts per model; protocol came from the fail-closed classifier (defer incomplete, host abort proved on both models)
+- [x] Manifest version was not upgraded or relaxed
+
+**Learnings**:
+- bun run prints the `$ bun ...` banner on stderr, so stdout redirect is a single JSON document
+- lint-staged prettier rewrote the one-line JSON into a 53-line file on commit; jq and rg still passed
+- Deferred first stop was tool_deferred with deferredToolUsePresent, but only one PreToolUse id and no updatedInput/handler on resume, so classifier correctly selected host-abort-new-user-message
+- Ambient ~/.claude oauth credentials were enough; ANTHROPIC_API_KEY was unset
+
+---
+
+## 2026-09-06 — US-006: Record isolated 0.3.261 comparison evidence
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/evidence/6-1-claude-0.3.261.json` — isolated sonnet+opus evidence for SDK 0.3.261; protocol tool-deferred-reissue
+
+**Acceptance criteria verified**:
+- [x] Harness copied to a validated temp directory, run with exact @anthropic-ai/claude-agent-sdk@0.3.261 and zod@4.4.3, temp dir removed after non-root safety check
+- [x] Evidence is valid JSON with schemaVersion 1, sdkVersion 0.3.261, exactly sonnet and opus records, protocol tool-deferred-reissue
+- [x] Plan rg secrecy check found no credentials, tokens, prompts, answer payloads, transcript text, or environment values
+- [x] Top-level protocols compared: 0.3.209 host-abort-new-user-message vs 0.3.261 tool-deferred-reissue; 0.3.261 is comparison only and does not override or upgrade the pin
+- [x] Repository manifests and bun.lock remain exact Claude SDK 0.3.209
+
+**Learnings**:
+- On 0.3.261 both models completed the same-id PreToolUse defer round trip (two matching hook ids, updatedInput reached handler, resumedHandlerCalls=1), so the classifier prefers tool-deferred-reissue over a also-proved host abort
+- bun init + bun add in the isolated dir takes ~60s; the live spike itself was ~40s
+- Keep stdout redirect on the isolated bun run; bun add banners go to stderr
+
+---
+
+## 2026-09-06 — US-007: Write outcome and reconcile architecture
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/6-1-askhuman-resume-spike.md` — Story 6.1 outcome with required section order; Claude CONFIRM host abort on 0.3.209; Pi CONFIRM durable order; 0.3.261 comparison; story gate INCONCLUSIVE until validate
+- `_bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md` — AD-6, Claude version rows, and deferred-spike rows reconciled to one host-abort protocol plus proved Pi order
+- `_bmad-output/specs/spec-workflow-run-view-hitl/architecture-diagrams.md` — removed VERIFIED claims; named host abort 0.3.209 and Pi durable recipe
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — epic-6 and 6-1 set in-progress, not done
+
+**Acceptance criteria verified**:
+- [x] Outcome Markdown exists with the exact required section order and cites both repository-relative Claude evidence JSON files plus the focused Pi test command
+- [x] One Claude decision: CONFIRM host abort/new-user-message; no prompts, answers, transcripts, credentials, or environment data
+- [x] Pi CONFIRM records SessionManager.open -> appendMessage(ToolResultMessage) -> createAgentSession -> session.agent.continue()
+- [x] AskUserQuestion rejected as a product channel; selected mechanism only on custom mcp__archon__AskHuman; version section names exact 0.3.209 without calling a caret range pinned
+- [x] ARCHITECTURE-SPINE.md changed only AD-6, Claude-version, and deferred-spike material; review-version-reality.md unchanged; one active Claude protocol
+- [x] architecture-diagrams.md has no VERIFIED claims and names the selected protocol and Pi durable order
+- [x] sprint-status.yaml uses the existing timestamp format and remains in-progress
+
+**Learnings**:
+- Required 0.3.209 proof is host-abort-new-user-message; 0.3.261 tool-deferred-reissue must not appear as a second active protocol in AD-6 or diagrams
+- Completion Gate still requires bun run validate, so story gate stays INCONCLUSIVE and 6.3 stays blocked until US-008
+- lint-staged prettier converts unquoted mcp__archon__AskHuman to mcp**archon**AskHuman; wrap the id in backticks
+
+---
+
+## 2026-09-06 — US-008: Validate the spike and apply the final gate
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/6-1-askhuman-resume-spike.md` — story gate COMPLETE after bun run validate
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — epic-6 in-progress, 6-1-prove-claude-and-pi-can-resume-after-askhuman done, last_updated 2026-09-06 14:29:08 +0700
+
+**Acceptance criteria verified**:
+- [x] Focused Claude classifier and Pi characterization tests pass from packages/providers
+- [x] packages/providers bun run test and bun run type-check pass; new tests remain isolated bun test processes
+- [x] bun run validate passed (NODE_OPTIONS=--max-old-space-size=8192); spike:askhuman:claude is not in test/validate/CI
+- [x] Both Claude evidence files exist, redacted, jq protocol != inconclusive on 0.3.209; git diff --check clean; git status limited to File Map plus Ralph planning artifacts
+- [x] Audit: exact 0.3.209 pin, custom AskHuman-only, real Pi lifecycle, one Claude protocol (host-abort-new-user-message), diagrams/outcome/spine/sprint agree
+- [x] Completion Gate all true: sprint-status epic-6 in-progress and 6-1 done; story gate COMPLETE
+- [x] No production HITL feature added; 6.3 remains backlog (unblocked by 6.1 complete)
+
+**Learnings**:
+- bun run validate OOM'd ESLint without NODE_OPTIONS=--max-old-space-size=8192 on this runner
+- Two UNBLOCK PROTOCOL commits were required before validate could pass: prettier mockup drift and stale Ralph YAML contract tests
+- Do not empty-commit; US-008 story files are outcome + sprint-status only
+
+BLOCKER US-008 | gate=bun run validate | cause=prettier warn on ux-mockup app.js,console-app.js,styles.css also present on clean stash | action=chore(unblock) 97442681 format those three files | 2026-09-06
+BLOCKER US-008 | gate=bun run validate | cause=packages/workflows/src/dag-executor.test.ts:6901 Expected xhigh Received high (YAML ralph-loop-run effort high) also present on clean stash | action=chore(unblock) ae532e0e align dag-executor and loader tests to YAML | 2026-09-06
+BLOCKER US-008 | gate=bun run validate | cause=ESLint FATAL ERROR Reached heap limit (~4GB) | action=runner workaround NODE_OPTIONS=--max-old-space-size=8192; no committed script change | 2026-09-06
+
+---
+
