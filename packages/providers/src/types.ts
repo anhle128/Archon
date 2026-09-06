@@ -871,3 +871,23 @@ export interface IAgentProvider {
    */
   getCapabilities(): ProviderCapabilities;
 }
+
+export class AskHumanAwaitingError extends Error {
+  readonly name = 'AskHumanAwaitingError';
+  constructor(
+    readonly toolUseId: string,
+    readonly nodeId: string,
+    readonly workflowRunId: string
+  ) {
+    super(`AskHuman awaiting input for ${toolUseId}`);
+  }
+}
+
+export class AskHumanNoStarterError extends Error {
+  readonly name = 'AskHumanNoStarterError';
+  constructor(readonly workflowRunId: string) {
+    super(`AskHuman requires workflow_runs.user_id (run ${workflowRunId})`);
+  }
+}
+
+export type AskHumanControlError = AskHumanAwaitingError | AskHumanNoStarterError;

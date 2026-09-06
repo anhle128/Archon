@@ -26,3 +26,16 @@ export const pendingInteractionSchema = z
   .strict();
 
 export type PendingInteraction = z.infer<typeof pendingInteractionSchema>;
+
+export const insertPendingInteractionSchema = pendingInteractionSchema
+  .pick({
+    workflow_run_id: true,
+    node_id: true,
+    tool_use_id: true,
+    kind: true,
+    envelope: true,
+    provider_session_id: true,
+  })
+  .strict();
+
+export type InsertPendingInteractionInput = z.infer<typeof insertPendingInteractionSchema>;
