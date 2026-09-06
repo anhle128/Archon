@@ -83,6 +83,7 @@ import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { WorkflowEventDispatcher } from './workflow-events/dispatcher';
 import { registerApiRoutes } from './routes/api';
+import { requestLogPath } from './request-log-path';
 import { registerGithubWebhookRoute } from './routes/webhooks';
 import {
   handleMessage,
@@ -688,7 +689,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Global error handler for unhandled exceptions
   app.onError((err, c) => {
-    getLog().error({ err, path: c.req.path, method: c.req.method }, 'unhandled_request_error');
+    getLog().error(
+      { err, path: requestLogPath(c.req.path), method: c.req.method },
+      'unhandled_request_error'
+    );
     return c.json({ error: 'Internal server error' }, 500);
   });
 

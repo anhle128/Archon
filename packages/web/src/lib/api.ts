@@ -441,8 +441,14 @@ export type GitFileClientResult =
   | { kind: 'binary'; contentHash: string }
   | { kind: 'text'; text: string; contentHash: string };
 
-export async function getWorkflowRunGitChanges(runId: string): Promise<GitChangesResponse> {
-  return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}/git/changes`);
+export async function getWorkflowRunGitChanges(
+  runId: string,
+  options?: { signal?: AbortSignal }
+): Promise<GitChangesResponse> {
+  return fetchJSON(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/git/changes`,
+    options?.signal ? { signal: options.signal } : undefined
+  );
 }
 
 export async function getWorkflowRunGitDiff(

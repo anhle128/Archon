@@ -3,5 +3,6 @@ export function isValidGitFilePath(raw: string): boolean {
   if (raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(raw)) {
     return false;
   }
-  return !raw.split(/[\\/]/).some(segment => segment === '..');
+  const segments = raw.split(/[\\/]/);
+  return !segments.some(segment => segment === '..') && segments[0]?.toLowerCase() !== '.git';
 }

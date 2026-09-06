@@ -177,7 +177,10 @@ function createDeferred<T>(): {
 }
 
 function mockGitRoutes(options: {
-  onChanges: (call: number) => GitChangesResponse | Response;
+  onChanges: (
+    call: number,
+    init?: RequestInit
+  ) => GitChangesResponse | Response | Promise<GitChangesResponse | Response>;
   onDiff?: (url: string, call: number, init?: RequestInit) => Response | Promise<Response>;
   onFile?: (url: string, call: number, init?: RequestInit) => Response | Promise<Response>;
 }): Mock<typeof fetch> {
@@ -191,7 +194,7 @@ function mockGitRoutes(options: {
     const url = requestUrl(input);
     if (url.includes('/git/changes')) {
       changesCall += 1;
-      const result = options.onChanges(changesCall);
+      const result = await options.onChanges(changesCall, init);
       return result instanceof Response ? result : jsonResponse(result);
     }
     if (url.includes('/git/diff')) {
@@ -324,7 +327,9 @@ describe('SourceControlTab', () => {
     expect(host.textContent).toContain('src/live.ts');
     expect(host.textContent).toContain('M');
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/changes');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/changes', {
+      signal: expect.any(AbortSignal),
+    });
 
     await act(async () => {
       await new Promise<void>(resolve => {
@@ -680,6 +685,45 @@ describe('SourceControlTab', () => {
     expect(host.textContent).toContain('two.ts');
     expect(host.textContent).toContain('two-new');
     expect(host.textContent).not.toContain('one-new');
+  });
+
+  test('starting another reload aborts the earlier changes request', async () => {
+    const pendingChanges = createDeferred<Response>();
+    let pendingSignal: AbortSignal | undefined;
+    fetchSpy = mockGitRoutes({
+      onChanges: (call, init) => {
+        if (call === 1) {
+          return {
+            files: [{ path: 'one.ts', status: 'M' }],
+            revision: REVISION_A,
+          };
+        }
+        if (call === 2) {
+          pendingSignal = init?.signal ?? undefined;
+          return pendingChanges.promise;
+        }
+        return {
+          files: [{ path: 'two.ts', status: 'A' }],
+          revision: REVISION_B,
+        };
+      },
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('one.ts'), 'initial list');
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    await waitFor(() => pendingSignal !== undefined, 'pending changes signal');
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+
+    expect(pendingSignal?.aborted).toBe(true);
+    await waitFor(
+      () => (host.textContent ?? '').includes('Changed on disk — Reload'),
+      'replacement candidate'
+    );
   });
 
   test('Cancel aborts the request, removes the skeleton, clears selection, and focuses the list', async () => {
@@ -1055,6 +1099,115 @@ describe('SourceControlTab', () => {
     expect(host.textContent).not.toContain('added-body');
     expect(host.querySelector('[aria-label="Before"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="After"]')).not.toBeNull();
+  });
+
+  test('accepting a same-hash binary status change updates the download source', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: call =>
+        call === 1
+          ? { files: [{ path: 'same.bin', status: 'M' }], revision: REVISION_A }
+          : { files: [{ path: 'same.bin', status: 'D' }], revision: REVISION_B },
+      onDiff: () => jsonResponse(binaryDiff('same.bin')),
+      onFile: url => {
+        if (!url.includes('same.bin')) throw new Error(`Unexpected file URL ${url}`);
+        return binaryFileResponse(new Uint8Array([0, 1, 2]), HASH_A);
+      },
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('same.bin'), 'binary file');
+    await clickOption('same.bin');
+    await waitFor(
+      () => (host.textContent ?? '').includes('Binary file. Download to inspect.'),
+      'binary viewer'
+    );
+    expect(host.querySelector('a')?.getAttribute('href')).toContain('source=worktree');
+
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    await waitFor(
+      () => (host.textContent ?? '').includes('Changed on disk — Reload'),
+      'status divergence'
+    );
+    await act(async () => {
+      requireButton('Changed on disk — Reload').click();
+    });
+
+    expect(host.querySelector('[role="option"]')?.textContent).toContain('D');
+    expect(host.querySelector('a')?.getAttribute('href')).toContain('source=head');
+  });
+
+  test('accepting a pending list after opening another file keeps its status-keyed viewer atomic', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: call =>
+        call === 1
+          ? {
+              files: [
+                { path: 'first.ts', status: 'A' },
+                { path: 'second.ts', status: 'M' },
+              ],
+              revision: REVISION_A,
+            }
+          : {
+              files: [
+                { path: 'first.ts', status: 'A' },
+                { path: 'second.ts', status: 'D' },
+              ],
+              revision: REVISION_B,
+            },
+      onDiff: () => jsonResponse(readyDiff('second.ts', 'old-line', 'modified-line')),
+      onFile: url => {
+        if (url.includes('first.ts') && url.includes('source=worktree')) {
+          return textFileResponse('first-body', HASH_A);
+        }
+        if (url.includes('second.ts') && url.includes('source=head')) {
+          return textFileResponse('deleted-body', HASH_B);
+        }
+        throw new Error(`Unexpected file URL ${url}`);
+      },
+    });
+
+    await renderTab('run-1');
+    await waitFor(() => host.textContent?.includes('second.ts'), 'both files');
+    await clickOption('first.ts');
+    await waitFor(() => (host.textContent ?? '').includes('first-body'), 'first viewer');
+    await act(async () => {
+      requireButton('Reload').click();
+    });
+    await waitFor(
+      () => (host.textContent ?? '').includes('Changed on disk — Reload'),
+      'list divergence'
+    );
+
+    await clickOption('second.ts');
+    await waitFor(
+      () => (host.textContent ?? '').includes('modified-line'),
+      'displayed status viewer'
+    );
+    const activeFetchSpy = fetchSpy;
+    if (!activeFetchSpy) throw new Error('Missing fetch spy');
+    await waitFor(
+      () =>
+        calledUrls(activeFetchSpy).some(
+          url => url.includes('second.ts') && url.includes('source=head')
+        ),
+      'matching pending status viewer'
+    );
+    await waitFor(
+      () => (host.textContent ?? '').includes('Changed on disk — Reload'),
+      'atomic stale affordance'
+    );
+    await act(async () => {
+      requireButton('Changed on disk — Reload').click();
+    });
+    await waitFor(
+      () => (host.textContent ?? '').includes('deleted-body'),
+      'accepted deleted viewer'
+    );
+
+    expect(host.querySelector('[aria-label="Before"]')).toBeNull();
+    expect(host.querySelector('[role="option"][aria-selected="true"]')?.textContent).toContain('D');
   });
 
   test('a mocked viewport below 900 yields list-above-viewer and before-over-after', async () => {

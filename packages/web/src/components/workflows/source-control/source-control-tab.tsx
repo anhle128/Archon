@@ -7,7 +7,7 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   getWorkflowRunGitChanges,
@@ -112,17 +112,31 @@ function selectedFileInSnapshot(
   return snapshot.files.find(file => file.path === selected.path);
 }
 
+function sameSnapshot(left: SourceControlSnapshot, right: SourceControlSnapshot): boolean {
+  return left.emptyReason === right.emptyReason && left.revision === right.revision;
+}
+
+function pendingViewerMatchesFile(
+  pending: PendingViewer | null,
+  file: GitChangedFile | undefined
+): boolean {
+  if (!pending || !file) return false;
+  return pending.file.path === file.path && pending.file.status === file.status;
+}
+
 export function SourceControlTab({ runId }: { runId: string }): ReactElement {
   const [snapshotState, dispatch] = useReducer(
     sourceControlSnapshotReducer,
     INITIAL_SOURCE_CONTROL_STATE
   );
+  const queryClient = useQueryClient();
   const stacked = useStackedViewport();
   const listRef = useRef<HTMLDivElement | null>(null);
   const requestRef = useRef<{ id: number; controller: AbortController | null }>({
     id: 0,
     controller: null,
   });
+  const pendingListRequestRef = useRef<{ id: number; runId: string } | null>(null);
   const snapshotRef = useRef(snapshotState);
   snapshotRef.current = snapshotState;
   const selectedFileRef = useRef<GitChangedFile | null>(null);
@@ -139,7 +153,7 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
 
   const { data, isError, isFetching, refetch } = useQuery({
     queryKey: ['workflowRunGitChanges', runId],
-    queryFn: () => getWorkflowRunGitChanges(runId),
+    queryFn: ({ signal }) => getWorkflowRunGitChanges(runId, { signal }),
     retry: false,
     refetchInterval: false,
     refetchOnReconnect: false,
@@ -148,9 +162,17 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
   });
 
   const abortCurrent = useCallback((): void => {
+    const pendingListRequest = pendingListRequestRef.current;
+    if (pendingListRequest?.id === requestRef.current.id) {
+      void queryClient.cancelQueries({
+        queryKey: ['workflowRunGitChanges', pendingListRequest.runId],
+        exact: true,
+      });
+      pendingListRequestRef.current = null;
+    }
     requestRef.current.controller?.abort();
     requestRef.current.controller = null;
-  }, []);
+  }, [queryClient]);
 
   const beginRequest = useCallback((): { id: number; signal: AbortSignal } => {
     abortCurrent();
@@ -182,9 +204,9 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
 
   useEffect(() => {
     return (): void => {
-      requestRef.current.controller?.abort();
+      abortCurrent();
     };
-  }, []);
+  }, [abortCurrent]);
 
   useEffect(() => {
     if (!data) return;
@@ -197,6 +219,9 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
 
   const onOpenFile = useCallback(
     (file: GitChangedFile): void => {
+      const pendingFile = snapshotRef.current.pending
+        ? selectedFileInSnapshot(snapshotRef.current.pending, file)
+        : undefined;
       setPendingViewer(null);
       setSelectedFile(file);
       setViewerState({ kind: 'loading', file });
@@ -211,35 +236,52 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
           setViewerState({ kind: 'error', file });
         }
       );
+      if (pendingFile) {
+        void loadViewerFile(runId, pendingFile, signal).then(
+          (state): void => {
+            if (!isCurrent(id, signal)) return;
+            setPendingViewer({ file: pendingFile, state });
+          },
+          (): void => undefined
+        );
+      }
     },
     [beginRequest, isCurrent, runId]
   );
 
   const onReload = useCallback((): void => {
     const { id, signal } = beginRequest();
+    pendingListRequestRef.current = { id, runId };
     void (async (): Promise<void> => {
-      const result = await refetch();
-      if (!isCurrent(id, signal)) return;
-      if (!result.isSuccess || result.data === undefined) return;
-      const candidate = toSourceControlSnapshot(result.data);
-      const candidateFile = selectedFileInSnapshot(candidate, selectedFileRef.current);
-      if (!candidateFile) {
-        dispatch({ type: 'received', snapshot: candidate });
-        return;
-      }
       try {
+        const result = await refetch();
+        if (!isCurrent(id, signal)) return;
+        if (!result.isSuccess || result.data === undefined) return;
+        const candidate = toSourceControlSnapshot(result.data);
+        const candidateFile = selectedFileInSnapshot(candidate, selectedFileRef.current);
+        if (!candidateFile) {
+          dispatch({ type: 'received', snapshot: candidate });
+          return;
+        }
         const loaded = await loadViewerFile(runId, candidateFile, signal);
         if (!isCurrent(id, signal)) return;
         const displayedFp = viewerFingerprint(viewerStateRef.current);
         const candidateFp = viewerFingerprint(loaded);
+        const displayedSnapshot = snapshotRef.current.displayed;
+        const listChanged =
+          displayedSnapshot === null || !sameSnapshot(displayedSnapshot, candidate);
         dispatch({ type: 'received', snapshot: candidate });
-        if (candidateFp === displayedFp) {
+        if (candidateFp === displayedFp && !listChanged) {
           setPendingViewer(null);
         } else {
           setPendingViewer({ file: candidateFile, state: loaded });
         }
       } catch (error: unknown) {
         if (isAbortError(error) || !isCurrent(id, signal)) return;
+      } finally {
+        if (pendingListRequestRef.current?.id === id) {
+          pendingListRequestRef.current = null;
+        }
       }
     })();
   }, [beginRequest, isCurrent, refetch, runId]);
@@ -269,11 +311,14 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     const pendingView = pendingViewerRef.current;
     const acceptedList = pendingList ?? snapshotRef.current.displayed;
     const selected = selectedFileRef.current;
-    if (pendingList) dispatch({ type: 'accept_pending' });
     const acceptedFile = selectedFileInSnapshot(
       acceptedList ?? { files: [], revision: '' },
       selected
     );
+    if (pendingList && acceptedFile && !pendingViewerMatchesFile(pendingView, acceptedFile)) {
+      return;
+    }
+    if (pendingList) dispatch({ type: 'accept_pending' });
     if (!acceptedList || acceptedList.emptyReason !== undefined || !acceptedFile) {
       setSelectedFile(null);
       setViewerState({ kind: 'idle' });
@@ -295,7 +340,18 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
   };
 
   const loadState: SourceControlLoadState = isError ? 'error' : isFetching ? 'loading' : 'idle';
-  const stale = snapshotState.pending !== null || pendingViewer !== null;
+  const pendingListFile = snapshotState.pending
+    ? selectedFileInSnapshot(snapshotState.pending, selectedFile)
+    : undefined;
+  const pendingListNeedsViewer =
+    snapshotState.pending?.emptyReason === undefined &&
+    snapshotState.pending !== null &&
+    selectedFile !== null &&
+    pendingListFile !== undefined;
+  const stale =
+    snapshotState.pending !== null
+      ? !pendingListNeedsViewer || pendingViewerMatchesFile(pendingViewer, pendingListFile)
+      : pendingViewer !== null;
 
   return (
     <div className="h-full min-h-0" onKeyDown={onKeyDown}>

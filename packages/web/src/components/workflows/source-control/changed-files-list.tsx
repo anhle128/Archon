@@ -48,6 +48,7 @@ export function ChangedFilesList(props: ChangedFilesListProps): ReactElement {
     count: props.files.length,
     getScrollElement: (): HTMLDivElement | null => parentRef.current,
     estimateSize: estimateChangedFileSize,
+    initialRect: { width: 0, height: 280 },
     overscan: 8,
   });
 

@@ -151,4 +151,21 @@ describe('SourceControlPanel', () => {
     expect(selectedOption).toContain('data-active="false"');
     expect(selectedOption).toContain('aria-selected="true"');
   });
+
+  test('uses an initial virtual range instead of mounting a large list in full', () => {
+    const files = Array.from({ length: 200 }, (_, index) => ({
+      path: `initial-${String(index)}.ts`,
+      status: 'M' as const,
+    }));
+
+    const html = renderPanel({
+      snapshot: { files, revision: 'a'.repeat(64) },
+    });
+    const renderedOptions = html.match(/role="option"/g) ?? [];
+
+    expect(renderedOptions.length).toBeGreaterThan(0);
+    expect(renderedOptions.length).toBeLessThan(files.length);
+    expect(html).toContain('height:5600px');
+    expect(html).not.toContain('initial-199.ts');
+  });
 });

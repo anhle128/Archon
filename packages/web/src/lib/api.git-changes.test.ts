@@ -70,6 +70,17 @@ describe('getWorkflowRunGitChanges', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/changes');
     expect(String(fetchSpy.mock.calls[0]?.[0])).not.toContain('working_path');
   });
+
+  test('forwards the exact AbortSignal in RequestInit', async () => {
+    fetchSpy = mockFetchSuccess();
+    const signal = new AbortController().signal;
+
+    await getWorkflowRunGitChanges('run/one', { signal });
+
+    expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/changes', {
+      signal,
+    });
+  });
 });
 
 describe('getWorkflowRunGitDiff', () => {

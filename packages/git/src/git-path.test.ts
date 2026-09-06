@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { containLivePath, GitPathError, parseGitFilePath } from './git-path';
+import {
+  containLiveGitFilePath,
+  containLivePath,
+  GitPathError,
+  parseGitFilePath,
+} from './git-path';
 
 describe('parseGitFilePath', () => {
   test('accepts server-issued special relative names', () => {
@@ -29,6 +34,8 @@ describe('parseGitFilePath', () => {
       '../x',
       'a/../x',
       'a\\..\\x',
+      '.git/config',
+      '.GIT\\config',
     ]) {
       expect(() => parseGitFilePath(path)).toThrow(GitPathError);
     }
@@ -64,4 +71,25 @@ describe('containLivePath', () => {
       code: 'escape',
     });
   });
+});
+
+describe('containLiveGitFilePath', () => {
+  test.skipIf(process.platform === 'win32')(
+    'rejects an in-checkout alias that resolves into Git metadata',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'archon-git-metadata-'));
+      const checkout = join(root, 'checkout');
+      await mkdir(join(checkout, '.git'), { recursive: true });
+      await writeFile(join(checkout, '.git', 'config'), 'secret\n');
+      await symlink('.git', join(checkout, 'metadata'));
+      try {
+        await expect(containLiveGitFilePath(checkout, 'metadata/config')).rejects.toMatchObject({
+          name: 'GitPathError',
+          code: 'escape',
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
 });

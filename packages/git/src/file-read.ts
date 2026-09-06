@@ -1,9 +1,9 @@
 import { createHash } from 'crypto';
-import { lstat, readFile, readlink } from 'fs/promises';
+import { lstat, open, readlink } from 'fs/promises';
 import { join } from 'path';
 
 import * as exec from './exec';
-import { containLivePath, GitPathError, parseGitFilePath } from './git-path';
+import { containLiveGitFilePath, GitPathError, parseGitFilePath } from './git-path';
 import type { RepoPath, WorktreePath } from './types';
 
 export type DiffChange =
@@ -63,12 +63,27 @@ function hashBytes(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+async function readVerifiedWorktreeFile(
+  canonicalPath: string,
+  expected: Awaited<ReturnType<typeof lstat>>
+): Promise<Buffer> {
+  const handle = await open(canonicalPath, 'r');
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino) {
+      throw new GitPathError('escape');
+    }
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
+}
+
 export function hasNulInFirst8k(bytes: Uint8Array): boolean {
   return bytes.subarray(0, Math.min(8192, bytes.byteLength)).includes(0);
 }
 
 export function parseUnifiedDiff(stdout: string): DiffHunk[] {
-  if (stdout.includes('Binary files ') || stdout.includes('GIT binary patch')) return [];
   const hunks: DiffHunk[] = [];
   let current: DiffHunk | null = null;
   let oldLine = 0;
@@ -123,14 +138,14 @@ export async function fileAt(
     }
     let canonical: string;
     try {
-      canonical = await containLivePath(workingPath, path);
+      canonical = await containLiveGitFilePath(workingPath, path);
     } catch (error) {
       if (isMissing(error)) throw new GitFileError('not_found');
       throw error;
     }
     const buffer = entry.isSymbolicLink()
       ? Buffer.from(await readlink(candidate))
-      : await readFile(canonical);
+      : await readVerifiedWorktreeFile(canonical, entry);
     bytes = new Uint8Array(buffer);
   } else {
     if (
@@ -221,6 +236,7 @@ export async function fileDiff(
     'diff',
     '--no-color',
     '--no-ext-diff',
+    '--no-textconv',
     '--text',
     '-U3',
     'HEAD',

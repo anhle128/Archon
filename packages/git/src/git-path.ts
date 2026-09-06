@@ -22,6 +22,9 @@ export function parseGitFilePath(raw: string): string {
   if (raw.split(/[\\/]/).some((segment: string) => segment === '..')) {
     throw new GitPathError('dotdot');
   }
+  if (raw.split(/[\\/]/)[0]?.toLowerCase() === '.git') {
+    throw new GitPathError('escape');
+  }
   return raw;
 }
 
@@ -31,6 +34,19 @@ export async function containLivePath(checkoutRoot: string, relativePath: string
   const canonicalCandidate = await realpath(join(canonicalRoot, parsed));
   const fromRoot = relative(canonicalRoot, canonicalCandidate);
   if (fromRoot === '..' || fromRoot.startsWith('..' + sep) || isAbsolute(fromRoot)) {
+    throw new GitPathError('escape');
+  }
+  return canonicalCandidate;
+}
+
+export async function containLiveGitFilePath(
+  checkoutRoot: string,
+  relativePath: string
+): Promise<string> {
+  const canonicalRoot = await realpath(checkoutRoot);
+  const canonicalCandidate = await containLivePath(canonicalRoot, relativePath);
+  const fromRoot = relative(canonicalRoot, canonicalCandidate);
+  if (fromRoot.split(sep)[0]?.toLowerCase() === '.git') {
     throw new GitPathError('escape');
   }
   return canonicalCandidate;

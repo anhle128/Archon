@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
+import { access, chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -37,6 +37,40 @@ describe('parseUnifiedDiff and hasNulInFirst8k', () => {
     ]);
   });
 
+  test('keeps ordinary text lines that resemble git binary markers', () => {
+    const stdout = [
+      'diff --git a/x b/x',
+      '--- a/x',
+      '+++ b/x',
+      '@@ -1 +1 @@',
+      '-Binary files are ordinary text here',
+      '+GIT binary patch is ordinary text here too',
+      '',
+    ].join('\n');
+
+    expect(parseUnifiedDiff(stdout)).toEqual([
+      {
+        oldStart: 1,
+        oldLines: 1,
+        newStart: 1,
+        newLines: 1,
+        header: '@@ -1 +1 @@',
+        changes: [
+          {
+            type: 'delete',
+            content: 'Binary files are ordinary text here',
+            oldLine: 1,
+          },
+          {
+            type: 'insert',
+            content: 'GIT binary patch is ordinary text here too',
+            newLine: 1,
+          },
+        ],
+      },
+    ]);
+  });
+
   test('detects NUL only within the first 8192 bytes', () => {
     expect(hasNulInFirst8k(new Uint8Array([1, 0, 2]))).toBe(true);
     const late = new Uint8Array(9000).fill(1);
@@ -69,6 +103,7 @@ describe('fileAt and fileDiff', () => {
     await writeFile(join(repoPath, 'path with space.ts'), 'space-head\n');
     await writeFile(join(repoPath, 'line\nbreak.ts'), 'nl-head\n');
     await writeFile(join(repoPath, 'inside.ts'), 'target-contents\n');
+    await writeFile(join(repoPath, 'textconv.ts'), 'textconv-head\n');
     await symlink('inside.ts', join(repoPath, 'in-link.ts'));
 
     nulFixture = new Uint8Array(NUL_FIXTURE_BYTES);
@@ -84,6 +119,7 @@ describe('fileAt and fileDiff', () => {
     await writeFile(join(repoPath, ':colon.ts'), 'colon-work\n');
     await writeFile(join(repoPath, 'foo*.ts'), 'glob-work\n');
     await writeFile(join(repoPath, 'added.ts'), 'added-body\n');
+    await writeFile(join(repoPath, 'textconv.ts'), 'textconv-worktree\n');
     await writeFile(join(repoPath, 'nul-new.bin'), new Uint8Array([0, 2, 3]));
     await rm(join(repoPath, '-dash.ts'));
   });
@@ -174,6 +210,31 @@ describe('fileAt and fileDiff', () => {
     }
   );
 
+  test.skipIf(process.platform === 'win32')(
+    'rejects a worktree path swapped outward between containment and open',
+    async () => {
+      const fsPromises = await import('fs/promises');
+      const originalOpen = fsPromises.open;
+      const candidate = join(repoPath, 'race.ts');
+      await writeFile(candidate, 'inside\n');
+      const openSpy = spyOn(fsPromises, 'open').mockImplementation(
+        async (...args: Parameters<typeof originalOpen>): ReturnType<typeof originalOpen> => {
+          await rm(candidate);
+          await symlink(join(outsidePath, 'secret.txt'), candidate);
+          return originalOpen(...args);
+        }
+      );
+      try {
+        await expect(
+          fileAt(toWorktreePath(repoPath), 'race.ts', { kind: 'worktree' })
+        ).rejects.toMatchObject({ name: 'GitPathError', code: 'escape' });
+      } finally {
+        openSpy.mockRestore();
+        await rm(candidate, { force: true });
+      }
+    }
+  );
+
   test('missing worktree and tree files reject with GitFileError not_found', async () => {
     await expect(
       fileAt(toWorktreePath(repoPath), 'missing.ts', { kind: 'worktree' })
@@ -214,6 +275,30 @@ describe('fileAt and fileDiff', () => {
     expect(changes).toContainEqual({ type: 'delete', content: 'old line', oldLine: 1 });
     expect(changes).toContainEqual({ type: 'insert', content: 'new line', newLine: 1 });
   });
+
+  test.skipIf(process.platform === 'win32')(
+    'fileDiff disables configured textconv commands',
+    async () => {
+      const marker = join(root, 'textconv-ran');
+      const textconv = join(root, 'textconv.sh');
+      await writeFile(textconv, `#!/bin/sh\ntouch "${marker}"\ncat "$1"\n`);
+      await chmod(textconv, 0o700);
+      await writeFile(join(repoPath, '.gitattributes'), 'textconv.ts diff=archon-review\n');
+      await exec.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'config',
+        'diff.archon-review.textconv',
+        textconv,
+      ]);
+
+      const result = await fileDiff(toWorktreePath(repoPath), 'textconv.ts');
+
+      expect(result.binary).toBe(false);
+      expect(result.hunks.length).toBeGreaterThan(0);
+      await expect(access(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  );
 
   test('NUL file returns binary true and no hunks', async () => {
     const result = await fileDiff(toWorktreePath(repoPath), 'nul-new.bin');

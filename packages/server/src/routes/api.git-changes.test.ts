@@ -695,6 +695,17 @@ test('rejects an encoded NUL path before git', async () => {
   expect(expectFileLogPair('git.file_failed').errorType).toBe('invalid_path');
 });
 
+test('rejects direct Git metadata on the raw file route', async () => {
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/file/.git%2Fconfig?source=worktree'
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid file path' });
+  expect(mockFileAt).not.toHaveBeenCalled();
+  expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+  expect(expectFileLogPair('git.file_failed').errorType).toBe('invalid_path');
+});
+
 test('rejects malformed percent encoding before git', async () => {
   const response = await makeApp().request(
     '/api/workflows/runs/run-1/git/file/src%ZZ.ts?source=worktree'

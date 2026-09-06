@@ -12,10 +12,12 @@ import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
 // the X-Archon-User header, threaded into the DB query as a userId filter).
 // ---------------------------------------------------------------------------
 
+const mockLogWarn = mock(() => undefined);
+
 const noopLogger = () => ({
   fatal: mock(() => undefined),
   error: mock(() => undefined),
-  warn: mock(() => undefined),
+  warn: mockLogWarn,
   info: mock(() => undefined),
   debug: mock(() => undefined),
   trace: mock(() => undefined),
@@ -223,6 +225,7 @@ describe('server-side /api/* gate', () => {
     apiGateEnabled = false;
     authInstance = null;
     mockFindOrCreateUser.mockClear();
+    mockLogWarn.mockClear();
   });
   afterEach(() => {
     apiGateEnabled = false; // don't leak the gate into other describes
@@ -287,6 +290,30 @@ describe('server-side /api/* gate', () => {
     };
     const res = await makeApp().request('/api/conversations');
     expect(res.status).toBe(401);
+  });
+
+  test('session failure logs redact the wildcard git filename', async () => {
+    apiGateEnabled = true;
+    authEnabled = true;
+    authInstance = {
+      api: {
+        getSession: async () => {
+          throw new Error('PG connection refused');
+        },
+      },
+    };
+
+    const res = await makeApp().request(
+      '/api/workflows/runs/run-1/git/file/private%20folder/secret.ts'
+    );
+
+    expect(res.status).toBe(401);
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/api/workflows/runs/run-1/git/file/*' }),
+      'web.session_resolve_failed'
+    );
+    expect(JSON.stringify(mockLogWarn.mock.calls)).not.toContain('secret.ts');
+    expect(JSON.stringify(mockLogWarn.mock.calls)).not.toContain('private%20folder');
   });
 });
 

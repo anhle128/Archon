@@ -13,6 +13,7 @@ import { existsSync, readFileSync } from 'fs';
 import { normalize, join, sep, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
+import { requestLogPath } from '../request-log-path';
 import type {
   ConversationLockManager,
   AttachedFile,
@@ -2121,7 +2122,10 @@ export function registerApiRoutes(
         // — it returns undefined rather than throwing. The /api/* gate maps that
         // undefined to a 401 (fail-closed); requireWebUser is the strict variant
         // that distinguishes a backend 503 from a missing identity.
-        getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
+        getLog().warn(
+          { err: err as Error, path: requestLogPath(c.req.path) },
+          'web.session_resolve_failed'
+        );
       }
     }
 
@@ -2137,7 +2141,7 @@ export function registerApiRoutes(
       // failed (e.g. DB outage). Fall back to NULL attribution rather than
       // failing the request. headerPresent distinguishes this from "no header".
       getLog().warn(
-        { err: err as Error, headerPresent: true, path: c.req.path },
+        { err: err as Error, headerPresent: true, path: requestLogPath(c.req.path) },
         'web.user_resolve_failed'
       );
       return undefined;
