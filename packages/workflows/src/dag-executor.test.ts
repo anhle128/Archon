@@ -24946,18 +24946,66 @@ describe('executeDagWorkflow -- AskHuman pause', () => {
     );
   }
 
-  function wireAskPause(store: IWorkflowStore): void {
-    let status: 'running' | 'paused' = 'running';
+  function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolvePromise: (() => void) | undefined;
+    const promise = new Promise<void>(resolve => {
+      resolvePromise = resolve;
+    });
+    return {
+      promise,
+      resolve: () => {
+        if (!resolvePromise) throw new Error('Deferred resolver was not initialized');
+        resolvePromise();
+      },
+    };
+  }
+
+  function wireAskPause(store: IWorkflowStore, onPause?: () => void): void {
+    let status: WorkflowRun['status'] = 'running';
     store.getWorkflowRunStatus = mock(async () => status);
-    store.pauseWorkflowRun = mock(async () => {
+    store.pauseWorkflowRun = mock(async (_runId, approvalContext) => {
+      if (approvalContext !== undefined) {
+        throw new Error('AskHuman pause must not supply approval context');
+      }
+      if (status !== 'running' && status !== 'paused') {
+        throw new Error(`Cannot pause AskHuman run from ${status}`);
+      }
       status = 'paused';
+      onPause?.();
     });
   }
 
-  async function invokeInjectedAskHuman(options: SendQueryOptions | undefined): Promise<void> {
+  async function invokeInjectedAskHuman(
+    options: SendQueryOptions | undefined,
+    toolUseId = 'toolu_1',
+    sessionId = 'sess-1'
+  ): Promise<void> {
     const ask = options?.nativeTools?.find(tool => tool.name === 'AskHuman');
     if (!ask) throw new Error('AskHuman was not injected');
-    await ask.handler({ questions: askQuestions }, { toolUseId: 'toolu_1', sessionId: 'sess-1' });
+    await ask.handler({ questions: askQuestions }, { toolUseId, sessionId });
+  }
+
+  async function executeAskDag(
+    store: IWorkflowStore,
+    workflowRun: WorkflowRun,
+    nodes: DagNode[]
+  ): Promise<void> {
+    await executeDagWorkflow(
+      createMockDeps(store),
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      { name: 'ask-several-outstanding', nodes },
+      workflowRun,
+      'claude',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
   }
 
   it.each([
@@ -25326,6 +25374,149 @@ describe('executeDagWorkflow -- AskHuman pause', () => {
     });
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('persists a second sibling Ask after the first Ask has paused the run', async () => {
+    const firstPause = deferred();
+    mockSendQueryDag.mockImplementation(async function* (
+      prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      if (prompt.includes('alpha asks')) {
+        await invokeInjectedAskHuman(options, 'toolu_alpha', 'sess-alpha');
+        return;
+      }
+      await firstPause.promise;
+      await invokeInjectedAskHuman(options, 'toolu_beta', 'sess-beta');
+    });
+
+    const inserted: Array<{ node_id: string; tool_use_id: string }> = [];
+    const store = createMockStore();
+    store.insertPendingInteraction = mock(async input => {
+      inserted.push({ node_id: input.node_id, tool_use_id: input.tool_use_id });
+      return {
+        id: `pending-${input.tool_use_id}`,
+        ...input,
+        status: 'pending' as const,
+        answer: null,
+        created_at: new Date(),
+        resolved_at: null,
+        resolved_by: null,
+      };
+    });
+    wireAskPause(store, firstPause.resolve);
+    const workflowRun = makeWorkflowRun('ask-two-nodes-run');
+
+    await executeAskDag(store, workflowRun, [
+      { id: 'alpha', prompt: 'alpha asks' },
+      { id: 'beta', prompt: 'beta asks' },
+      { id: 'after', depends_on: ['alpha', 'beta'], prompt: 'must not run' },
+    ]);
+
+    expect(inserted).toEqual([
+      { node_id: 'alpha', tool_use_id: 'toolu_alpha' },
+      { node_id: 'beta', tool_use_id: 'toolu_beta' },
+    ]);
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(2);
+    expect((store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls).toEqual([
+      [workflowRun.id],
+      [workflowRun.id],
+    ]);
+    const nodeEvents = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+      call => call[0] as { event_type: string; step_name?: string }
+    );
+    expect(nodeEvents.filter(event => event.event_type === 'node_completed')).toEqual([]);
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets an already-started sibling finish streaming after another node pauses the run', async () => {
+    const firstPause = deferred();
+    mockSendQueryDag.mockImplementation(async function* (
+      prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      if (prompt.includes('alpha asks')) {
+        await invokeInjectedAskHuman(options, 'toolu_alpha', 'sess-alpha');
+        return;
+      }
+      await firstPause.promise;
+      yield { type: 'assistant', content: 'beta finished after pause' };
+      yield { type: 'result', sessionId: 'sess-beta' };
+    });
+
+    const store = createMockStore();
+    wireAskPause(store, firstPause.resolve);
+    const workflowRun = makeWorkflowRun('ask-streaming-sibling-run');
+
+    await executeAskDag(store, workflowRun, [
+      { id: 'alpha', prompt: 'alpha asks' },
+      { id: 'beta', prompt: 'beta streams' },
+      { id: 'after', depends_on: ['alpha', 'beta'], prompt: 'must not run' },
+    ]);
+
+    const betaRows = await store.listNodeMessages(workflowRun.id, 'beta');
+    expect(
+      betaRows.some(row => row.kind === 'text' && row.payload.text === 'beta finished after pause')
+    ).toBe(true);
+    expect(betaRows.some(row => row.kind === 'status' && row.payload.state === 'completed')).toBe(
+      true
+    );
+    expect(storedEventTypes(store).filter(type => type === 'node_completed')).toEqual([
+      'node_completed',
+    ]);
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+  });
+
+  it('persists two Ask calls from one node before unwinding it as awaiting', async () => {
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      const attempts = await Promise.allSettled([
+        invokeInjectedAskHuman(options, 'toolu_one', 'sess-one'),
+        invokeInjectedAskHuman(options, 'toolu_two', 'sess-two'),
+      ]);
+      const rejected = attempts.find(
+        (attempt): attempt is PromiseRejectedResult => attempt.status === 'rejected'
+      );
+      if (!rejected) throw new Error('Expected AskHuman to unwind the provider invocation');
+      if (rejected.reason instanceof Error) throw rejected.reason;
+      throw new Error(String(rejected.reason));
+    });
+
+    const insertedToolUseIds: string[] = [];
+    const store = createMockStore();
+    store.insertPendingInteraction = mock(async input => {
+      insertedToolUseIds.push(input.tool_use_id);
+      return {
+        id: `pending-${input.tool_use_id}`,
+        ...input,
+        status: 'pending' as const,
+        answer: null,
+        created_at: new Date(),
+        resolved_at: null,
+        resolved_by: null,
+      };
+    });
+    wireAskPause(store);
+    const workflowRun = makeWorkflowRun('ask-two-same-node-run');
+
+    await executeAskDag(store, workflowRun, [{ id: 'review', prompt: 'ask twice' }]);
+
+    expect(insertedToolUseIds.sort()).toEqual(['toolu_one', 'toolu_two']);
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(2);
+    const rows = await store.listNodeMessages(workflowRun.id, 'review');
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'awaiting')).toBe(true);
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'completed')).toBe(
+      false
+    );
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'failed')).toBe(false);
   });
 });
 

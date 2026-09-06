@@ -1,8 +1,9 @@
 /**
  * Workflow-owned AskHuman native tool.
  *
- * Validates structured questions, persists a pending interaction, then throws
- * AskHumanAwaitingError so the DAG executor can pause without completing the node.
+ * Validates structured questions, persists a pending interaction, idempotently
+ * pauses the run, then throws AskHumanAwaitingError so the DAG executor can
+ * unwind the node without completing it.
  */
 import { createLogger } from '@archon/paths';
 import {
@@ -94,6 +95,8 @@ export function createAskHumanTool(input: CreateAskHumanToolInput): NativeTool {
       });
 
       getLog().info({ workflowRunId, nodeId, toolUseId, kind: 'ask' }, 'workflow.ask_pending');
+
+      await store.pauseWorkflowRun(workflowRunId);
 
       throw new AskHumanAwaitingError(toolUseId, nodeId, workflowRunId);
     },

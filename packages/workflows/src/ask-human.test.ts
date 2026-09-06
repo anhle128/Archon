@@ -32,6 +32,7 @@ const questions = [
 
 function store(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
+    pauseWorkflowRun: mock(async () => {}),
     insertPendingInteraction: mock(async input => ({
       id: 'pending-1',
       status: 'pending' as const,
@@ -85,6 +86,8 @@ describe('AskHuman tool', () => {
       envelope: { questions },
       provider_session_id: 'sess-1',
     });
+    expect(s.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect((s.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0]).toEqual(['run-1']);
     expect(JSON.stringify(infoLogs)).toContain('workflow.ask_pending');
     expect(JSON.stringify(infoLogs)).toContain('toolu_1');
     expect(JSON.stringify(infoLogs)).not.toContain('Ship it?');
