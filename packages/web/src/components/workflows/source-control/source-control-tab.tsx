@@ -15,10 +15,13 @@ import {
   getWorkflowRunGitFile,
   gitFileUrl,
   type GitChangedFile,
+  type GitFileClientResult,
   type GitFileSource,
+  type GitReadyDiffResponse,
 } from '@/lib/api';
 
 import { FileViewer, type FileViewerState } from './file-viewer';
+import { formatHexPeek } from './hex-peek';
 import { SourceControlPanel, type SourceControlLoadState } from './source-control-panel';
 import { SourceControlSplit } from './source-control-split';
 import {
@@ -44,10 +47,14 @@ function viewerFingerprint(state: FileViewerState): string {
   switch (state.kind) {
     case 'text':
       return `text:${state.contentHash}`;
-    case 'binary':
-      return `binary:${state.contentHash}`;
+    case 'image':
+      return `image:${state.contentHash}`;
+    case 'hex':
+      return `hex:${state.contentHash}`;
+    case 'download':
+      return `download:${state.contentHash}`;
     case 'diff':
-      return `diff:${JSON.stringify(state.response)}`;
+      return `diff:${state.reloadFingerprint}`;
     case 'unavailable':
       return `unavailable:${state.emptyReason}`;
     case 'error':
@@ -56,6 +63,45 @@ function viewerFingerprint(state: FileViewerState): string {
       return 'idle';
     case 'loading':
       return `loading:${state.file.status}:${state.file.path}`;
+  }
+}
+
+function diffReloadFingerprint(response: GitReadyDiffResponse): string {
+  return response.truncated && response.cursor !== '' ? response.cursor : JSON.stringify(response);
+}
+
+function fromRawFile(
+  runId: string,
+  file: GitChangedFile,
+  source: GitFileSource,
+  raw: Exclude<GitFileClientResult, { kind: 'empty' | 'text' }>
+): LoadedViewerState {
+  const downloadHref = gitFileUrl(runId, file.path, source);
+  switch (raw.kind) {
+    case 'image':
+      return {
+        kind: 'image',
+        file,
+        contentHash: raw.contentHash,
+        bytes: raw.bytes,
+        mediaType: raw.mediaType,
+        downloadHref,
+      };
+    case 'hex':
+      return {
+        kind: 'hex',
+        file,
+        contentHash: raw.contentHash,
+        hex: formatHexPeek(raw.bytes),
+        downloadHref,
+      };
+    case 'download':
+      return {
+        kind: 'download',
+        file,
+        contentHash: raw.contentHash,
+        downloadHref,
+      };
   }
 }
 
@@ -69,18 +115,20 @@ async function loadViewerFile(
     if ('emptyReason' in response) {
       return { kind: 'unavailable', file, emptyReason: response.emptyReason };
     }
-    if (!response.binary) return { kind: 'diff', file, response };
+    if (!response.binary) {
+      return {
+        kind: 'diff',
+        file,
+        response,
+        reloadFingerprint: diffReloadFingerprint(response),
+      };
+    }
     const raw = await getWorkflowRunGitFile(runId, file.path, 'worktree', { signal });
     if (raw.kind === 'empty') {
       return { kind: 'unavailable', file, emptyReason: raw.emptyReason };
     }
     if (raw.kind === 'text') throw new Error('Invalid binary git file response');
-    return {
-      kind: 'binary',
-      file,
-      contentHash: raw.contentHash,
-      downloadHref: gitFileUrl(runId, file.path, 'worktree'),
-    };
+    return fromRawFile(runId, file, 'worktree', raw);
   }
 
   const source: GitFileSource = file.status === 'A' ? 'worktree' : 'head';
@@ -94,14 +142,11 @@ async function loadViewerFile(
       file,
       text: response.text,
       contentHash: response.contentHash,
+      truncated: response.truncated,
+      cursor: response.cursor,
     };
   }
-  return {
-    kind: 'binary',
-    file,
-    contentHash: response.contentHash,
-    downloadHref: gitFileUrl(runId, file.path, source),
-  };
+  return fromRawFile(runId, file, source, response);
 }
 
 function selectedFileInSnapshot(

@@ -879,7 +879,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => host.textContent?.includes('blob.bin'), 'list');
     await clickOption('blob.bin');
     await waitFor(
-      () => (host.textContent ?? '').includes('Binary file. Download to inspect.'),
+      () => (host.textContent ?? '').includes('This file is too large to open here.'),
       'binary copy'
     );
 
@@ -1120,7 +1120,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => host.textContent?.includes('same.bin'), 'binary file');
     await clickOption('same.bin');
     await waitFor(
-      () => (host.textContent ?? '').includes('Binary file. Download to inspect.'),
+      () => (host.textContent ?? '').includes('This file is too large to open here.'),
       'binary viewer'
     );
     expect(host.querySelector('a')?.getAttribute('href')).toContain('source=worktree');

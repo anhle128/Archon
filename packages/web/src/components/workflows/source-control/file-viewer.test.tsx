@@ -74,6 +74,7 @@ function renderViewer(
       onCancel={(): void => undefined}
       onReload={(): void => undefined}
       onClose={(): void => undefined}
+      onLoadMore={(): void => undefined}
     />
   );
 }
@@ -110,9 +111,33 @@ function assertQuietChrome(html: string): void {
 const STATES: readonly FileViewerState[] = [
   { kind: 'idle' },
   { kind: 'loading', file: MODIFIED },
-  { kind: 'diff', file: MODIFIED, response: MARKER_HUNK_DIFF },
-  { kind: 'text', file: ADDED, text: 'const x = 1;\n', contentHash: 'a'.repeat(64) },
-  { kind: 'binary', file: BINARY, contentHash: 'b'.repeat(64), downloadHref: DOWNLOAD_HREF },
+  {
+    kind: 'diff',
+    file: MODIFIED,
+    response: MARKER_HUNK_DIFF,
+    reloadFingerprint: JSON.stringify(MARKER_HUNK_DIFF),
+  },
+  {
+    kind: 'text',
+    file: ADDED,
+    text: 'const x = 1;\n',
+    contentHash: 'a'.repeat(64),
+    truncated: false,
+    cursor: '',
+  },
+  {
+    kind: 'hex',
+    file: BINARY,
+    contentHash: 'b'.repeat(64),
+    hex: '00000000  00 41 ff                                         |.A.             |',
+    downloadHref: DOWNLOAD_HREF + '&download=1',
+  },
+  {
+    kind: 'download',
+    file: BINARY,
+    contentHash: 'b'.repeat(64),
+    downloadHref: DOWNLOAD_HREF + '&download=1',
+  },
   { kind: 'unavailable', file: MODIFIED, emptyReason: 'no_checkout' },
   { kind: 'unavailable', file: MODIFIED, emptyReason: 'container' },
   { kind: 'error', file: MODIFIED },
@@ -139,7 +164,12 @@ describe('FileViewer', () => {
   });
 
   test('modified text has labelled Before and After panes, one minus, one plus, and no Snapshot', () => {
-    const html = renderViewer({ kind: 'diff', file: MODIFIED, response: MARKER_HUNK_DIFF });
+    const html = renderViewer({
+      kind: 'diff',
+      file: MODIFIED,
+      response: MARKER_HUNK_DIFF,
+      reloadFingerprint: JSON.stringify(MARKER_HUNK_DIFF),
+    });
     const before = pane(html, 'Before').innerHTML;
     const after = pane(html, 'After').innerHTML;
     expect(html).toContain('Before');
@@ -155,7 +185,12 @@ describe('FileViewer', () => {
   });
 
   test('a normal context line renders oldLine 4 in Before and newLine 9 in After', () => {
-    const html = renderViewer({ kind: 'diff', file: MODIFIED, response: LINE_TRAP_DIFF });
+    const html = renderViewer({
+      kind: 'diff',
+      file: MODIFIED,
+      response: LINE_TRAP_DIFF,
+      reloadFingerprint: JSON.stringify(LINE_TRAP_DIFF),
+    });
     const beforeGutters = pane(html, 'Before').querySelectorAll(
       '.diff-gutter:not(.diff-gutter-omit)'
     );
@@ -172,9 +207,19 @@ describe('FileViewer', () => {
   });
 
   test('wide modified mode is side-by-side and stacked mode is before-over-after', () => {
-    const wide = renderViewer({ kind: 'diff', file: MODIFIED, response: MARKER_HUNK_DIFF });
+    const wide = renderViewer({
+      kind: 'diff',
+      file: MODIFIED,
+      response: MARKER_HUNK_DIFF,
+      reloadFingerprint: JSON.stringify(MARKER_HUNK_DIFF),
+    });
     const stacked = renderViewer(
-      { kind: 'diff', file: MODIFIED, response: MARKER_HUNK_DIFF },
+      {
+        kind: 'diff',
+        file: MODIFIED,
+        response: MARKER_HUNK_DIFF,
+        reloadFingerprint: JSON.stringify(MARKER_HUNK_DIFF),
+      },
       { stacked: true }
     );
     expect(wide).toContain('flex-row');
@@ -182,7 +227,12 @@ describe('FileViewer', () => {
   });
 
   test('each modified pane has its own two-axis scroll container and tabIndex 0', () => {
-    const html = renderViewer({ kind: 'diff', file: MODIFIED, response: MARKER_HUNK_DIFF });
+    const html = renderViewer({
+      kind: 'diff',
+      file: MODIFIED,
+      response: MARKER_HUNK_DIFF,
+      reloadFingerprint: JSON.stringify(MARKER_HUNK_DIFF),
+    });
     const before = pane(html, 'Before');
     const after = pane(html, 'After');
     expect(before.getAttribute('tabindex')).toBe('0');
@@ -198,12 +248,16 @@ describe('FileViewer', () => {
       file: ADDED,
       text: 'function greet(name: string): string {\n  return name;\n}',
       contentHash: 'a'.repeat(64),
+      truncated: false,
+      cursor: '',
     });
     const deleted = renderViewer({
       kind: 'text',
       file: DELETED,
       text: 'const gone = true;\n',
       contentHash: 'c'.repeat(64),
+      truncated: false,
+      cursor: '',
     });
     expect(added).toContain('class="hljs"');
     expect(added).toContain('<pre');
@@ -224,6 +278,8 @@ describe('FileViewer', () => {
       file: ADDED,
       text: ATTACKER,
       contentHash: 'a'.repeat(64),
+      truncated: false,
+      cursor: '',
     });
     const diffHtml = renderViewer({
       kind: 'diff',
@@ -241,28 +297,13 @@ describe('FileViewer', () => {
           },
         ],
       },
+      reloadFingerprint: JSON.stringify(MARKER_HUNK_DIFF),
     });
     expect(textHtml).toContain('&lt;');
     expect(textHtml).not.toContain('<img');
     expect(parseDocument(textHtml).querySelector('img')).toBeNull();
     expect(diffHtml).toContain('&lt;');
     expect(parseDocument(diffHtml).querySelector('img')).toBeNull();
-  });
-
-  test('binary never renders content and offers a same-origin Download link', () => {
-    const html = renderViewer({
-      kind: 'binary',
-      file: BINARY,
-      contentHash: 'b'.repeat(64),
-      downloadHref: DOWNLOAD_HREF,
-    });
-    expect(html).toContain('Binary file. Download to inspect.');
-    expect(html).toContain(`href="${DOWNLOAD_HREF}"`);
-    expect(html).toContain('>Download<');
-    expect(html).not.toContain('<pre');
-    expect(html).not.toContain('sc-diff-before');
-    expect(html).not.toContain('class="hljs"');
-    assertQuietChrome(html);
   });
 
   test('no_checkout has distinct copy with Reload while container has none', () => {
@@ -302,5 +343,88 @@ describe('FileViewer', () => {
       expect(html).toContain('type="button"');
       assertQuietChrome(html);
     }
+  });
+
+  test('a truncated text page and truncated diff expose Load more', () => {
+    const text = renderViewer({
+      kind: 'text',
+      file: ADDED,
+      text: 'hello\n',
+      contentHash: 'a'.repeat(64),
+      truncated: true,
+      cursor: 'next',
+    });
+    expect(text).toContain('>Load more<');
+    const diff = renderViewer({
+      kind: 'diff',
+      file: MODIFIED,
+      response: { ...MARKER_HUNK_DIFF, truncated: true, cursor: 'next' },
+      reloadFingerprint: 'next',
+    });
+    expect(diff).toContain('>Load more<');
+  });
+
+  test('loadingMore replaces Load more with Cancel without hiding painted text', () => {
+    const html = renderToStaticMarkup(
+      <FileViewer
+        state={{
+          kind: 'text',
+          file: ADDED,
+          text: 'painted\n',
+          contentHash: 'a'.repeat(64),
+          truncated: true,
+          cursor: 'next',
+        }}
+        stacked={false}
+        loadingMore={true}
+        onCancel={(): void => undefined}
+        onReload={(): void => undefined}
+        onClose={(): void => undefined}
+        onLoadMore={(): void => undefined}
+      />
+    );
+    expect(html).toContain('painted');
+    expect(html).toContain('>Cancel<');
+    expect(html).not.toContain('>Load more<');
+  });
+
+  test('image state offers Download without highlighting or inline SVG markup', () => {
+    const html = renderViewer({
+      kind: 'image',
+      file: { path: 'tiny.svg', status: 'A' },
+      contentHash: 'b'.repeat(64),
+      bytes: Buffer.from('<svg><script>bad()</script></svg>'),
+      mediaType: 'image/svg+xml',
+      downloadHref: DOWNLOAD_HREF + '&download=1',
+    });
+    expect(html).toContain('>Download<');
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('class="hljs"');
+  });
+
+  test('hex renders a plain preformatted peek and a download link', () => {
+    const html = renderViewer({
+      kind: 'hex',
+      file: BINARY,
+      contentHash: 'b'.repeat(64),
+      hex: '00000000  00 41 ff                                         |.A.             |',
+      downloadHref: DOWNLOAD_HREF + '&download=1',
+    });
+    expect(html).toContain('00000000');
+    expect(html).toContain('>Download<');
+    expect(html).not.toContain('class="hljs"');
+    expect(html).not.toContain('sc-diff-before');
+  });
+
+  test('download-only has no preformatted body', () => {
+    const html = renderViewer({
+      kind: 'download',
+      file: BINARY,
+      contentHash: 'b'.repeat(64),
+      downloadHref: DOWNLOAD_HREF + '&download=1',
+    });
+    expect(html).toContain('This file is too large to open here.');
+    expect(html).toContain('>Download<');
+    expect(html).not.toContain('<pre');
   });
 });
