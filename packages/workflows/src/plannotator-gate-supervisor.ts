@@ -547,6 +547,13 @@ async function waitForReviewUrl(readyFilePath: string, exited: Promise<number>):
       if (!isMissingFileError(err)) throw err;
     }
     if (processExited) {
+      // The child can write the ready file and exit in the window after the
+      // ENOENT above. Re-read once before treating that as a missing publish.
+      try {
+        return parseReviewUrl(await readFile(readyFilePath, 'utf8'));
+      } catch (err) {
+        if (!isMissingFileError(err)) throw err;
+      }
       throw new Error('plannotator annotate exited before publishing its review URL');
     }
     if (Date.now() >= deadline) {
