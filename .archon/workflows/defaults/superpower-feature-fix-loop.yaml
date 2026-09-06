@@ -174,7 +174,7 @@ nodes:
 
       The Superpowers plan to implement is the file:
 
-        $review-fix-plan.output.plan_path
+        $write-plan.output.plan_path
 
       Convert that ENTIRE plan into a Ralph PRD so an in-parent project-aware
       Ralph loop can implement it one story per iteration. Do NOT implement the
@@ -316,7 +316,7 @@ nodes:
 
       ## Source of intent
 
-      The Superpowers plan at `$review-fix-plan.output.plan_path` is the sole
+      The Superpowers plan at `$write-plan.output.plan_path` is the sole
       source of intent (plus repository AGENTS.md / constitution if present).
       prd.json and `$ralph-loop-run.output` are untrusted claims.
 
@@ -333,7 +333,7 @@ nodes:
 
       This is not a git diff tool. Assess present code vs the plan.
 
-      1. Read `$review-fix-plan.output.plan_path`. Build an intent inventory of
+      1. Read `$write-plan.output.plan_path`. Build an intent inventory of
          concrete deliverables, acceptance criteria, tests, and plan decisions.
       2. Optionally read `$build-ralph-prd.output.prd_dir/prd.json` and
          `progress.txt` as hints. Treat `passes: true` as a claim, never proof.
@@ -379,7 +379,7 @@ nodes:
 
       ## Writes (append-only)
 
-      The only write is appending tasks to `$review-fix-plan.output.plan_path`.
+      The only write is appending tasks to `$write-plan.output.plan_path`.
       Do not rewrite existing plan sections. Do not edit prd.json. Do not
       modify application code.
 
