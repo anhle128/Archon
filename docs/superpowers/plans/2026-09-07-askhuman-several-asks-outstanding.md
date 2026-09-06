@@ -1,340 +1,200 @@
-# Keep Several Asks Outstanding Implementation Plan
+# AskHuman Several Asks Outstanding Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
-> Track each checkbox in order, and do not combine RED, GREEN, REFACTOR, or commit steps.
+> **For Grok:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Keep several AskHuman interactions outstanding on one paused run without a second scheduler, so two asking nodes or two Asks on one node stay independent, run-level awaiting input clears only on the last pending row in that run, and a child-run Ask is answered on the child.
+**Goal:** Prove and preserve the Story 6.4 contract for multiple outstanding `AskHuman` interactions across concurrent nodes, repeated asks from one node, and child runs without introducing per-node scheduling or a second pause model.
 
-**Architecture:** Reuse the existing run-level pause.
-A second persist is success while the run is already `paused`.
-Each asking node tears down only its own `sendQuery`.
-In-flight siblings may finish because `shouldContinueStreamingForStatus('paused')` is true.
-`runLayers` must not start the next DAG layer.
-`resolvePendingInteraction` resumes only when `remaining_pending === 0` for that run.
-`projectLatestEffectiveNodeStates` keeps a node `awaiting` while any pending row remains for `(run_id, node_id)`.
-Pending rows for a `workflow:` child live on the child `run_id`.
-The parent follows existing `pauseParentOnChild` behavior.
-Do not add per-node scheduling or a new run status.
+**Architecture:** Keep the existing run-scoped model in which every `AskHuman` call persists one pending-interaction row and idempotently pauses the workflow run.
+The database remains the source of truth for the run-wide pending count, the retry-state projector derives each node's `awaiting` overlay from pending rows owned by that node, and the DAG executor continues already-started siblings while refusing to schedule another layer after any node awaits input.
+Child workflow asks stay keyed to the child `workflow_run_id`; the existing sub-run policy propagates that child pause to its parent without copying the pending row.
+The implementation is predominantly characterization coverage because the accepted Story 6.1 through Story 6.3 code already contains these mechanics; the only known behavior defect is in the stateful sub-run test double, which currently writes approval metadata for an Ask-only pause.
 
-**Tech Stack:** Bun, strict TypeScript, Zod from `@hono/zod-openapi`, SQLite and PostgreSQL, OpenAPIHono, Bun Test, Claude Agent SDK `0.3.209`, and Pi `0.80.6`.
+**Tech Stack:** Bun test runner, TypeScript strict mode, Hono route tests, SQLite through the real `SqliteAdapter`, workflow DAG executor, Claude native-tool injection, and the stateful in-memory sub-run harness.
 
-**Spec:** `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md`, Story 6.4.
+**Issue:** [GitHub #89](https://github.com/anhle128/Archon/issues/89).
 
-**Approved design inputs:** `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md` CAP-5, `_bmad-output/specs/spec-workflow-run-view-hitl/hitl-contract.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/brownfield.md`, `_bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md` AD-1, AD-2, and AD-8, and Stories 6.2 and 6.3.
+**Canonical Specification:** `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md`, especially CAP-5, together with `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md`, especially Story 6.4.
 
-**Issue:** https://github.com/anhle128/Archon/issues/89
-
-## Global Constraints
-
-- Stories 6.1, 6.2, and 6.3 are complete prerequisites.
-- Preserve their characterization coverage.
-- Do not add a second scheduler, a per-node run status, or mixed `running` plus `awaiting` run status.
-- Run status stays `paused` while any `status = 'pending'` interaction exists on that run.
-- `awaiting` is a node/UI projection only.
-- Ask pause must not write `metadata.approval`.
-- Do not write `node_completed` for an asking node.
-- In-flight siblings may finish their current turn.
-- The next DAG layer must not start until the run is `running` again.
-- A node stays `awaiting` until every pending row for `(workflow_run_id, node_id)` is resolved.
-- Run chrome "awaiting input" equals `status === 'paused'` AND `count(pending) > 0` on that same run.
-- That formula clears only when the last pending row in the run is resolved.
-- `count(pending)` includes every `status = 'pending'` row, including `kind: permission`.
-- Child Ask pending rows live on the child `run_id`.
-- The operator answers the child, not the parent.
-- The parent follows existing `workflow:` child-paused behavior (`pauseParentOnChild`).
-- Fan-out children that pause remain cancelled by existing `#2180` behavior.
-- Per-node independent scheduling is out of scope.
-- Do not implement Ask cards, teammate copy, composer HITL, or Permission confirmation.
-- Those belong to Stories 6.5, 6.6, and 6.7.
-- Do not add CLI, chat, or `manage_run` answer UX.
-- Do not add a workflow YAML field or parse assistant prose as an Ask.
-- `NativeTool.handler` remains `(input, context?) => Promise<string>`.
-- `pendingInteractionSchema` remains canonical in `packages/workflows/src/schemas/pending-interaction.ts`.
-- The executor must not call `resumeWorkflowRun` for an Ask pause.
-- `workflow-operations` remains the only Ask-resume owner, and only when persistence reports `resumed: true`.
-- Claude stays pinned to `0.3.209`.
-- Pi stays on lockfile `0.80.6`.
-- Do not use `any`.
-- Do not run unscoped `bun test` from the repository root.
-- Run focused tests from the package directory.
-- Each behavior slice follows RED, observed expected failure or characterization miss, minimal GREEN, explicit REFACTOR, focused GREEN, and commit.
-- If a new characterization test is already green against current production code, do not change production code in that task.
-- Keep each full Markdown sentence in this plan on its own physical line.
-
-## Verified Repository Baseline
-
-- `insertPendingInteraction` already accepts `running` or `paused` and rejects terminal statuses at `packages/core/src/db/workflow-pending-interactions.ts`.
-- `packages/core/src/db/workflow-pending-interactions.test.ts` already covers a second insert on an already-paused run.
-- `pauseWorkflowRun` without `approvalContext` is already idempotent when the run is `paused` at `packages/core/src/db/workflows.ts`.
-- `resolvePendingInteraction` already resumes only when `remaining_pending === 0`.
-- The same file already tests a sibling pending row on the **same** node.
-- `shouldContinueStreamingForStatus('paused')` is already `true` at `packages/workflows/src/dag-executor.ts`.
-- `pauseOnAskHuman` already calls `pauseWorkflowRun(runId)` with no approval context.
-- An asking node already returns `{ state: 'pending' }` and does not write `node_completed`.
-- `runLayers` already returns `'pending'` when any node in the layer is pending, and it also stops between layers when status is not `running`.
-- Hydrate already re-enters every unfinished node that has answered Ask rows, including two sibling nodes, in `executeDagWorkflow -- AskHuman resume re-entry`.
-- `projectLatestEffectiveNodeStates` already overlays pending rows to `awaiting` and ignores `interaction_resolved` as completion.
-- GET `/api/workflows/runs/:runId` already embeds `pending_interactions` and projects `awaiting`.
-- POST answer already skips auto-dispatch when `remaining_pending > 0`.
-- `InMemoryStore.pauseWorkflowRun` in `packages/workflows/src/subrun.test.ts` currently writes `metadata.approval` even when `approvalContext` is omitted.
-- There is no DAG-layer test where two in-flight agent nodes each persist an Ask.
-- There is no projector test where one of two pending rows on the same node is answered.
-- There is no GET test where two nodes are independently `awaiting`.
-- There is no child-run test that pending rows live on the child `run_id`.
-- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` currently has merge-conflict markers on `last_updated`.
-- Story key `6-4-keep-several-asks-outstanding-without-a-second-scheduler` is `backlog`.
-
-## File Map
-
-### Modify for projection
-
-- Modify `packages/workflows/src/retry-state.test.ts` for remaining-pending overlay on one node and independent sibling nodes.
-- Modify `packages/workflows/src/retry-state.ts` only if those tests fail.
-
-### Modify for persistence
-
-- Modify `packages/core/src/db/workflow-pending-interactions.test.ts` for last-pending-in-run across two node ids.
-- Modify `packages/core/src/db/workflow-pending-interactions.ts` only if those tests fail.
-
-### Modify for executor concurrency
-
-- Modify `packages/workflows/src/dag-executor.test.ts` for two in-flight Asks, two Asks on one node, sibling streaming, and no next-layer start.
-- Modify `packages/workflows/src/dag-executor.ts` only if those tests fail, except the streaming-status comment which this plan updates in Task 4's REFACTOR.
-
-### Modify for the sub-run store and child Ask
-
-- Modify `packages/workflows/src/subrun.test.ts` so `InMemoryStore.pauseWorkflowRun` omits `metadata.approval` when `approvalContext` is omitted, and so a child Ask persists on the child run.
-
-### Modify for HTTP contract
-
-- Modify `packages/server/src/routes/api.workflow-runs.test.ts` for independent pending rows, the awaiting-input formula, parent/child embed isolation, and parent answer 404.
-- Modify `packages/server/src/routes/api.ts` only if those tests fail.
-
-### Modify at completion
-
-- Modify `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` only after every validation gate passes.
-- Resolve the existing `last_updated` conflict by writing one new timestamp, not by stacking both sides.
-
-## Authoritative Contracts
-
-### Concurrent persist and tear-down
-
-Two in-flight agent nodes in one topological layer may each call `AskHuman`.
-Each handler inserts its own pending row keyed by `(workflow_run_id, tool_use_id)`.
-Each wrapper aborts **that** node's `sendQuery` and rejects with `AskHumanAwaitingError`.
-`pauseOnAskHuman` then calls `pauseWorkflowRun(runId)` with no approval argument.
-The first Ask flips `running` to `paused`.
-The second Ask must succeed because already-paused Ask pause is idempotent.
-The second node must not fail.
-`node_completed` must not be written for either asking node.
-
-### Same-node dual Ask
-
-One node may persist two pending rows in one turn when two `AskHuman` tool uses run before `sendQuery` rejects.
-Both rows share `node_id` and `provider_session_id` and differ in `tool_use_id`.
-Answering one row leaves the node `awaiting` while the other row is `pending`.
-Hydrate later maps both answered rows in `created_at ASC, id ASC` order, which Story 6.3 already covers.
-
-### Streaming siblings and next layer
-
-`shouldContinueStreamingForStatus` remains:
-
-```ts
-export function shouldContinueStreamingForStatus(status: string | null): boolean {
-  return status === 'running' || status === 'paused';
-}
-```
-
-A non-asking sibling in the same layer may finish its current `sendQuery` and may write `node_completed`.
-A later layer must not start.
-Do not keep the run `running` so a sibling can enter a new layer.
-
-### Last-clears
-
-`resolvePendingInteraction` counts remaining rows with `status = 'pending'` on that `workflow_run_id` only.
-If the count is greater than zero, `resumed` is false and run status stays `paused`.
-If the count is zero, the paused-ask resume CAS runs in the same transaction.
-`answerAskHuman` must not call `resumeWorkflowRun`.
-HTTP auto-dispatch happens only when `resumed === true`.
-
-### Node awaiting
-
-`projectLatestEffectiveNodeStates(events, pending)` overlay:
-
-```ts
-for (const row of pending ?? []) {
-  if (row.status !== 'pending') continue;
-  // force that node_id to awaiting
-}
-```
-
-`interaction_resolved` does not complete the node.
-A node with a remaining pending row is `awaiting`.
-A node whose last pending row was answered still stays `awaiting` from `node_awaiting` until hydrate re-enters it and later writes `node_completed`.
-
-### Run chrome formula
-
-Surfaces compute awaiting input from GET run:
-
-```ts
-const awaitingInput =
-  run.status === 'paused' &&
-  pending_interactions.some(row => row.status === 'pending');
-```
-
-Do not add a new GET field.
-Do not add run status `awaiting`.
-Story 6.5 owns warning chrome and copy.
-This story owns the data that makes that formula true and false.
-
-### Child Ask
-
-`createAskHumanTool({ store, workflowRunId, nodeId })` receives the executing run id.
-A `workflow:` child therefore inserts on the child `run_id`.
-GET parent lists only parent rows.
-GET child lists child rows.
-POST `/api/workflows/runs/{parentId}/ask/{childToolUseId}/answer` returns 404.
-POST on the child run id is the answer path from Story 6.3.
-Parent pause uses existing `pauseParentOnChild`, which still writes `ApprovalContext` of type `child_workflow`.
-Do not invent a second parent scheduler.
-
-## NOT Building
-
-- Ask cards, Submit/Decline controls, teammate copy, and composer HITL.
-- Permission confirmation POST and permission cards.
-- Per-node independent scheduling while the run stays `running`.
-- Fan-out child Ask as a supported concurrent-gate case.
-- Changing `pauseParentOnChild` copy away from `/workflow approve` in this story.
-- CLI, chat, or `manage_run` answer commands.
-- Schema migrations, SDK upgrades, YAML fields, and prose-as-ask detection.
+**Approved Design Inputs:** `_bmad-output/specs/spec-workflow-run-view-hitl/hitl-contract.md`, `_bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/brownfield.md`, and `_bmad-output/project-context.md`.
 
 ---
 
-## Task 1: Projector keeps a node awaiting until every pending row for that node is gone
+## Scope and Constraints
+
+- [ ] Preserve the single run-status scheduling boundary: already-started nodes in a `Promise.allSettled` layer may finish, but no later layer may start after an Ask pauses the run.
+- [ ] Preserve one pending-interaction row per tool call, keyed by `(workflow_run_id, tool_use_id)` and attributed to its owning `node_id`.
+- [ ] Preserve the database transaction in `resolvePendingInteraction()` as the sole owner of the answer write, run-wide pending count, `interaction_resolved` event, and transition back to `running` when the count reaches zero.
+- [ ] Preserve `answerAskHuman()` as the service entry point and preserve the HTTP route's current rule that automatic continuation is dispatched only when the resolver returns `resumed: true`.
+- [ ] Preserve the child run as the owner of a child Ask row, while the existing child-pause policy controls the parent run's paused state and explanatory approval copy.
+- [ ] Do not add per-node pause state, a node-local resume scheduler, provider-native resume behavior, a second Ask endpoint, a new run-status enum value, or a new workflow YAML field.
+- [ ] Do not change the production database schema, OpenAPI schema, generated web API types, provider wrappers, or workflow public interfaces.
+- [ ] Do not infer run chrome from `nodeStates`; the UI contract remains `run.status === 'paused' && pending_interactions.some(row => row.status === 'pending')`.
+- [ ] Treat pending rows of every interaction kind as run blockers, even though this story's new end-to-end coverage creates Ask rows.
+- [ ] Use `import type` for type-only imports, add no `any`, and keep every new helper and callback explicitly typed.
+- [ ] Never run unscoped `bun test` from the repository root; use the focused package commands in this plan and finish with `bun run validate`.
+
+## Verified Repository Baseline
+
+- [ ] Confirm `packages/workflows/src/retry-state.ts` overlays `awaiting` once per row whose status is `pending`, keyed by that row's `node_id`, after replaying workflow events.
+- [ ] Confirm `packages/core/src/db/workflow-pending-interactions.ts` permits insertions while a run is `running` or `paused`, counts every pending row for the same `workflow_run_id`, and changes the run back to `running` only when that count is zero.
+- [ ] Confirm `packages/workflows/src/dag-executor.ts` recognizes `AskHumanAwaitingError`, returns a pending node result without `node_completed`, evaluates a whole layer with `Promise.allSettled`, and allows an already-started stream to continue while run status is `paused`.
+- [ ] Confirm `packages/workflows/src/ask-human.ts` persists with the current `workflowRunId` and `nodeId`, calls `pauseWorkflowRun(workflowRunId)` without approval metadata, emits the awaiting status, and throws `AskHumanAwaitingError` to unwind that node's provider stream.
+- [ ] Confirm `packages/server/src/routes/api.ts` lists pending interactions for the requested run, passes the complete list to `projectLatestEffectiveNodeStates()`, and dispatches continuation after an answer only when `result.resumed` is true.
+- [ ] Confirm `packages/workflows/src/subrun.test.ts` is the only known mismatch: its `InMemoryStore.pauseWorkflowRun()` unconditionally creates `metadata.approval` even when `approvalContext` is `undefined`.
+- [ ] Confirm `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` has Story 6.3 marked `done` and Story 6.4 marked `backlog`, but also has two registered virtual conflicts between the older `2026-09-06 23:44:20 +0700` timestamp and the newer `2026-09-07 01:23:49 +0700` timestamp.
+- [ ] Preserve the `theirs` side of both registered conflicts because it is the side from commit `c25ea00c` that records the accepted Story 6.3 completion.
+
+## Files in Scope
+
+### Modify
+
+- `packages/workflows/src/retry-state.test.ts` adds projector characterization for mixed rows on one node and independent overlays on sibling nodes.
+- `packages/core/src/db/workflow-pending-interactions.test.ts` adds real-SQLite characterization for run-wide remaining counts, interaction-kind blocking, and parent-versus-child ownership.
+- `packages/workflows/src/dag-executor.test.ts` adds deterministic concurrency coverage for two simultaneous Ask nodes, an already-started streaming sibling, and two Ask calls from one provider invocation.
+- `packages/workflows/src/dag-executor.ts` updates three stale comments that currently describe paused-stream continuation as approval-only.
+- `packages/workflows/src/subrun.test.ts` first repairs the Ask-only pause semantics of the stateful test store under a failing test, then adds the child-run Ask characterization.
+- `packages/server/src/routes/api.workflow-runs.test.ts` adds a run-detail characterization proving that all sibling and same-node rows feed node projection and remain embedded in the response.
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` resolves the two registered timestamp conflicts and moves Story 6.4 from `backlog` to `done` only after every required validation command passes.
+
+### Read and Rely On Without Editing
+
+- `packages/workflows/src/retry-state.ts` already implements the row-driven per-node `awaiting` overlay.
+- `packages/core/src/db/workflow-pending-interactions.ts` already implements run-scoped pending counting and last-answer resume in one transaction.
+- `packages/core/src/db/workflows.ts` already makes Ask-only pause a status-only, idempotent write.
+- `packages/core/src/operations/workflow-operations.ts` already delegates Ask resolution to the transactional pending-interaction resolver.
+- `packages/workflows/src/ask-human.ts` already persists before pausing and unwinds through the branded awaiting error.
+- `packages/workflows/src/dag-executor.ts` already performs layer-level scheduling and permits a paused stream to finish.
+- `packages/server/src/routes/api.ts` already exposes all rows and uses the resolver's `resumed` result to gate continuation dispatch.
+- `packages/server/src/routes/schemas/workflow.schemas.ts` already defines the pending-interaction response shape.
+
+## Existing Regression Coverage That Must Stay Green
+
+- `packages/core/src/db/workflows.test.ts` covers an idempotent second Ask-only pause and preservation of approval metadata for genuine approval pauses.
+- `packages/core/src/operations/workflow-operations.test.ts` covers the non-final answer path and proves that service code does not resume while another interaction is pending.
+- `packages/server/src/routes/api.workflow-runs.test.ts` already covers a missing request ID as HTTP 404 and prevents automatic dispatch for an intermediate answer.
+- `packages/workflows/src/dag-executor.test.ts` already covers a single Ask unwind, no downstream advance after an answer-versus-pause race, persist failure, no-starter failure, and Pi loop Ask behavior.
+- `packages/providers/src/claude/native-tools.test.ts` and `packages/providers/src/community/pi/native-tools.test.ts` already cover provider-boundary Ask tool metadata.
+
+## Implementation Order
+
+The tasks proceed from pure projection, through the transactional store, through scheduler concurrency, into recursive child execution, and finally into the HTTP read model.
+This order localizes a failure to the narrowest owning layer before a broader integration test depends on it.
+Tasks 1, 2, 3, and 5 add characterization tests that are expected to pass against the verified baseline and therefore must not trigger speculative production changes.
+Task 4 contains the one required test-harness red-green cycle; its code change is limited to the test-only `InMemoryStore`.
+If an expected-green characterization fails, stop, record the observed repository drift, and repair this plan before changing production behavior.
+
+---
+
+## Task 1: Characterize Pending-Row Projection Per Node
 
 **Files:**
-- Modify: `packages/workflows/src/retry-state.test.ts`
-- Modify only if RED stays red: `packages/workflows/src/retry-state.ts`
-- Test: `packages/workflows/src/retry-state.test.ts`
 
-**Interfaces:**
-- Consumes: `projectLatestEffectiveNodeStates(events, pending?: readonly { node_id: string; status: string }[])`
-- Produces: unchanged `Map<string, RetryNodeProjection>` whose `state` is `'awaiting'` while any pending row remains for that `node_id`
+- Modify: `packages/workflows/src/retry-state.test.ts`.
+- Read only: `packages/workflows/src/retry-state.ts`.
 
-- [ ] **Step 1: Write the failing tests**
+**Why this task comes first:** The GET route and run-view UI consume this projector, so the smallest unit must prove the same-node and sibling-node invariants without relying on stale `node_awaiting` events.
 
-Append these tests after `answered pending rows do not overlay awaiting` in `packages/workflows/src/retry-state.test.ts`:
+### Step 1: Add a same-node mixed-row characterization
+
+- [ ] Append this test beside the existing pending-row overlay tests.
 
 ```ts
-test('keeps a node awaiting while any pending row remains for that node', () => {
+test('keeps a node awaiting while one of its two Ask rows remains pending', () => {
   const states = projectLatestEffectiveNodeStates(
-    [
-      { event_type: 'node_started', step_name: 'review', data: {} },
-      {
-        event_type: 'node_awaiting',
-        step_name: 'review',
-        data: { node_id: 'review', tool_use_id: 'toolu_1' },
-      },
-      {
-        event_type: 'interaction_resolved',
-        step_name: 'review',
-        data: { node_id: 'review', tool_use_id: 'toolu_1' },
-      },
-    ],
+    [{ event_type: 'node_started', step_name: 'review', data: {} }],
     [
       { node_id: 'review', status: 'answered' },
       { node_id: 'review', status: 'pending' },
     ]
   );
+
   expect(states.get('review')?.state).toBe('awaiting');
 });
+```
 
-test('projects two sibling asking nodes independently', () => {
+This fixture intentionally omits `node_awaiting`; deleting the pending-row overlay must make the assertion fail as `running`.
+
+### Step 2: Add a sibling-ownership characterization
+
+- [ ] Append this test after the same-node test.
+
+```ts
+test('overlays awaiting only onto the sibling node that owns a pending Ask row', () => {
   const states = projectLatestEffectiveNodeStates(
     [
       { event_type: 'node_started', step_name: 'alpha', data: {} },
       { event_type: 'node_started', step_name: 'beta', data: {} },
-      {
-        event_type: 'node_awaiting',
-        step_name: 'alpha',
-        data: { node_id: 'alpha', tool_use_id: 'toolu_alpha' },
-      },
-      {
-        event_type: 'node_awaiting',
-        step_name: 'beta',
-        data: { node_id: 'beta', tool_use_id: 'toolu_beta' },
-      },
-      {
-        event_type: 'interaction_resolved',
-        step_name: 'alpha',
-        data: { node_id: 'alpha', tool_use_id: 'toolu_alpha' },
-      },
     ],
     [
       { node_id: 'alpha', status: 'answered' },
       { node_id: 'beta', status: 'pending' },
     ]
   );
-  expect(states.get('alpha')?.state).toBe('awaiting');
-  expect(states.get('beta')?.state).toBe('awaiting');
-});
 
-test('a pending permission row also forces awaiting', () => {
-  const states = projectLatestEffectiveNodeStates(
-    [{ event_type: 'node_started', step_name: 'review', data: {} }],
-    [{ node_id: 'review', status: 'pending' }]
-  );
-  expect(states.get('review')?.state).toBe('awaiting');
+  expect(states.get('alpha')?.state).toBe('running');
+  expect(states.get('beta')?.state).toBe('awaiting');
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails or characterize**
+This fixture catches an implementation that treats one run-wide pending row as an `awaiting` overlay for every active node.
 
-Run: `cd packages/workflows && bun test src/retry-state.test.ts`
-Expected: the new tests fail if overlay ignores remaining pending rows.
-If they pass against current overlay plus `node_awaiting` persistence, record that as characterization and do not edit `retry-state.ts`.
+### Step 3: Run the focused projector test
 
-- [ ] **Step 3: Write minimal implementation**
-
-If RED, keep the pending overlay loop that sets `state: 'awaiting'` for every `status === 'pending'` row and continue to ignore `interaction_resolved`.
-Do not complete a node when one of several pending rows is answered.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `cd packages/workflows && bun test src/retry-state.test.ts`
-Expected: PASS, including the older `node_awaiting` and overlay tests.
-
-- [ ] **Step 5: Refactor**
-
-Keep the overlay loop as a single pass.
-Do not add a helper that 6.5 console cannot import.
-
-- [ ] **Step 6: Commit**
+- [ ] Run the test from the workflows package.
 
 ```bash
-git add packages/workflows/src/retry-state.test.ts packages/workflows/src/retry-state.ts
-git commit -m "test(workflows): keep a node awaiting until every Ask on it is resolved"
+cd packages/workflows
+bun test src/retry-state.test.ts
+```
+
+Expected result: PASS, including both new test names.
+
+### Step 4: Commit the characterization
+
+- [ ] Commit only the projector test file.
+
+```bash
+git add packages/workflows/src/retry-state.test.ts
+git commit -m "test(workflows): cover multiple pending ask projections"
 ```
 
 ---
 
-## Task 2: Persistence resumes only the last pending row in the run
+## Task 2: Characterize Run-Wide Resolution and Run Ownership in Real SQLite
 
 **Files:**
-- Modify: `packages/core/src/db/workflow-pending-interactions.test.ts`
-- Modify only if RED stays red: `packages/core/src/db/workflow-pending-interactions.ts`
-- Test: `packages/core/src/db/workflow-pending-interactions.test.ts`
 
-**Interfaces:**
-- Consumes: `resolvePendingInteraction(input: ResolvePendingInteractionInput): Promise<ResolvePendingInteractionResult>`
-- Produces: `{ resumed: boolean; remaining_pending: number }` where `resumed` is true only when no `status = 'pending'` row remains on that `workflow_run_id`
+- Modify: `packages/core/src/db/workflow-pending-interactions.test.ts`.
+- Read only: `packages/core/src/db/workflow-pending-interactions.ts`.
+- Read only: `packages/core/src/db/workflows.ts`.
 
-- [ ] **Step 1: Write the failing tests**
+**Why real SQLite:** The acceptance criteria depend on transaction boundaries, run-scoped counting, status changes, and row lookup predicates, which a mocked store would not prove.
 
-Append after `does not resume while a sibling interaction is pending`:
+### Step 1: Import the ownership error
+
+- [ ] Add `PendingInteractionNotFoundError` to the existing destructured dynamic import from `./workflow-pending-interactions`.
 
 ```ts
-test('does not resume while a pending Ask remains on another node', async () => {
+const {
+  insertPendingInteraction,
+  listPendingInteractions,
+  resolvePendingInteraction,
+  purgePendingInteractionsInTransaction,
+  PendingInteractionCorruptRowError,
+  PendingInteractionAlreadyResolvedError,
+  PendingInteractionNotFoundError,
+  PendingInteractionRunNotPausedError,
+  PendingInteractionValidationError,
+} = await import('./workflow-pending-interactions');
+```
+
+### Step 2: Add the independent-node count characterization
+
+- [ ] Add this test inside `describe('resolvePendingInteraction', ...)` after the existing sibling-interaction test.
+
+```ts
+test('keeps two Ask nodes blocked until the last run-wide pending row is answered', async () => {
   await insertPendingInteraction({
     ...baseInput,
     node_id: 'alpha',
@@ -356,27 +216,16 @@ test('does not resume while a pending Ask remains on another node', async () => 
   expect(first.remaining_pending).toBe(1);
   expect(await runStatus()).toBe('paused');
 
-  const listed = await listPendingInteractions('run-1');
-  const byNode = Object.fromEntries(listed.map(row => [row.node_id, row.status]));
-  expect(byNode).toEqual({ alpha: 'answered', beta: 'pending' });
-});
+  const halfway = await listPendingInteractions('run-1');
+  expect(
+    halfway
+      .map(row => ({ nodeId: row.node_id, status: row.status }))
+      .sort((left, right) => left.nodeId.localeCompare(right.nodeId))
+  ).toEqual([
+    { nodeId: 'alpha', status: 'answered' },
+    { nodeId: 'beta', status: 'pending' },
+  ]);
 
-test('resumes when the last pending Ask in the run is on a different node', async () => {
-  await insertPendingInteraction({
-    ...baseInput,
-    node_id: 'alpha',
-    tool_use_id: 'toolu_alpha',
-    envelope: mixedEnvelope,
-  });
-  await insertPendingInteraction({
-    ...baseInput,
-    node_id: 'beta',
-    tool_use_id: 'toolu_beta',
-    envelope: mixedEnvelope,
-  });
-  await pauseRun();
-
-  await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_alpha' }));
   const last = await resolvePendingInteraction(
     resolveInput({ tool_use_id: 'toolu_beta' })
   );
@@ -386,73 +235,450 @@ test('resumes when the last pending Ask in the run is on a different node', asyn
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails or characterize**
+This test must fail if the count is scoped to a node instead of the whole workflow run, or if the first answer resumes the run prematurely.
 
-Run: `cd packages/core && bun test src/db/workflow-pending-interactions.test.ts`
-Expected: FAIL only if remaining count is scoped to `node_id` instead of `workflow_run_id`.
-Current SQL counts `WHERE workflow_run_id = $1 AND status = 'pending'`, so this should characterize green.
+### Step 3: Add the cross-kind blocker characterization
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] Add this test immediately after the independent-node count test.
 
-If RED, keep the remaining-pending query on `workflow_run_id` only.
-Do not add a node-scoped resume.
+```ts
+test('counts a pending permission interaction when an Ask answer is resolved', async () => {
+  await insertPendingInteraction({
+    ...baseInput,
+    node_id: 'alpha',
+    tool_use_id: 'toolu_ask',
+    envelope: mixedEnvelope,
+  });
+  await insertPendingInteraction({
+    ...baseInput,
+    node_id: 'beta',
+    tool_use_id: 'toolu_permission',
+    kind: 'permission',
+    envelope: { intent: 'write repository files' },
+  });
+  await pauseRun();
 
-- [ ] **Step 4: Run test to verify it passes**
+  const result = await resolvePendingInteraction(
+    resolveInput({ tool_use_id: 'toolu_ask' })
+  );
 
-Run: `cd packages/core && bun test src/db/workflow-pending-interactions.test.ts`
-Expected: PASS, including the existing same-node sibling test.
+  expect(result.resumed).toBe(false);
+  expect(result.remaining_pending).toBe(1);
+  expect(await runStatus()).toBe('paused');
+  const listed = await listPendingInteractions('run-1');
+  expect(listed.find(row => row.tool_use_id === 'toolu_permission')).toMatchObject({
+    tool_use_id: 'toolu_permission',
+    kind: 'permission',
+    status: 'pending',
+  });
+});
+```
 
-- [ ] **Step 5: Refactor**
+This test pins the accepted rule that the last-pending-row transaction counts all interaction kinds rather than Ask rows only.
 
-Do not extract a second resume path.
+### Step 4: Add the parent-versus-child ownership characterization
 
-- [ ] **Step 6: Commit**
+- [ ] Add this test immediately after the cross-kind test.
+
+```ts
+test('resolves a child Ask only through the child workflow run id', async () => {
+  await seedRun({
+    runId: 'child-run-1',
+    userId: 'child-user-1',
+    conversationId: 'child-conversation-1',
+  });
+  await db.query(
+    'UPDATE remote_agent_workflow_runs SET parent_run_id = $1 WHERE id = $2',
+    ['run-1', 'child-run-1']
+  );
+  await insertPendingInteraction({
+    ...baseInput,
+    workflow_run_id: 'child-run-1',
+    node_id: 'child-review',
+    tool_use_id: 'toolu_child',
+    envelope: mixedEnvelope,
+  });
+  await pauseRun('run-1');
+  await pauseRun('child-run-1');
+
+  await expect(
+    resolvePendingInteraction(
+      resolveInput({
+        workflow_run_id: 'run-1',
+        tool_use_id: 'toolu_child',
+      })
+    )
+  ).rejects.toBeInstanceOf(PendingInteractionNotFoundError);
+  expect((await listPendingInteractions('child-run-1'))[0]?.status).toBe('pending');
+
+  const result = await resolvePendingInteraction(
+    resolveInput({
+      workflow_run_id: 'child-run-1',
+      tool_use_id: 'toolu_child',
+      resolved_by: 'child-user-1',
+    })
+  );
+
+  expect(result.resumed).toBe(true);
+  expect(result.remaining_pending).toBe(0);
+  expect(await runStatus('child-run-1')).toBe('running');
+  expect(await runStatus('run-1')).toBe('paused');
+});
+```
+
+This test must fail if row lookup uses `tool_use_id` without `workflow_run_id`, if answering the child mutates the parent row, or if the child Ask is copied into the parent run.
+
+### Step 5: Run the focused database test
+
+- [ ] Run this file in its own process because it mocks `./connection` at module scope.
 
 ```bash
-git add packages/core/src/db/workflow-pending-interactions.test.ts packages/core/src/db/workflow-pending-interactions.ts
-git commit -m "test(core): resume an Ask pause only after the last pending row in the run"
+cd packages/core
+bun test src/db/workflow-pending-interactions.test.ts
+```
+
+Expected result: PASS, including all three new characterizations.
+
+### Step 6: Commit the transaction coverage
+
+- [ ] Commit only the database test file.
+
+```bash
+git add packages/core/src/db/workflow-pending-interactions.test.ts
+git commit -m "test(core): cover run-wide ask resolution"
 ```
 
 ---
 
-## Task 3: Sub-run store Ask pause must not stamp approval
+## Task 3: Characterize Concurrent DAG Ask Scheduling
 
 **Files:**
-- Modify: `packages/workflows/src/subrun.test.ts`
-- Test: `packages/workflows/src/subrun.test.ts`
 
-**Interfaces:**
-- Consumes: `IWorkflowStore.pauseWorkflowRun(id: string, approvalContext?: ApprovalContext, extraMetadata?: Record<string, unknown>): Promise<void>`
-- Produces: `InMemoryStore` matches production Ask pause: status `paused`, `metadata.approval` unchanged when `approvalContext` is omitted
+- Modify: `packages/workflows/src/dag-executor.test.ts`.
+- Modify comments only: `packages/workflows/src/dag-executor.ts`.
+- Read only: `packages/workflows/src/ask-human.ts`.
 
-- [ ] **Step 1: Write the failing test**
+**Why deterministic barriers:** A test that lets every fake provider yield immediately can pass without ever observing a sibling stream or second Ask after the run becomes paused.
+The barrier below forces those operations to occur after the first pause while keeping the test independent of timers.
 
-Add this test in `describe('workflow: sub-run e2e (#2121 Phase 2)')` before the child Ask test in Task 7, using the existing `InMemoryStore`:
+### Step 1: Generalize the Ask test helpers
+
+- [ ] In `describe('executeDagWorkflow -- AskHuman pause', ...)`, replace `wireAskPause()` and `invokeInjectedAskHuman()` with the following helpers, and update existing callers to use the default arguments.
 
 ```ts
-it('Ask pause without approvalContext does not write metadata.approval', async () => {
-  const store = new InMemoryStore();
-  const run = await store.createWorkflowRun({
-    workflow_name: 'ask-pause-store',
-    conversation_id: 'conv-db',
-    user_message: 'go',
-    working_path: cwd,
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>(resolve => {
+    resolvePromise = resolve;
   });
-  await store.pauseWorkflowRun(run.id);
-  const paused = await store.getWorkflowRun(run.id);
-  expect(paused?.status).toBe('paused');
-  expect(paused?.metadata.approval).toBeUndefined();
+  return {
+    promise,
+    resolve: () => {
+      if (!resolvePromise) throw new Error('Deferred resolver was not initialized');
+      resolvePromise();
+    },
+  };
+}
+
+function wireAskPause(store: IWorkflowStore, onPause?: () => void): void {
+  let status: WorkflowRun['status'] = 'running';
+  store.getWorkflowRunStatus = mock(async () => status);
+  store.pauseWorkflowRun = mock(async (_runId, approvalContext) => {
+    if (approvalContext !== undefined) {
+      throw new Error('AskHuman pause must not supply approval context');
+    }
+    if (status !== 'running' && status !== 'paused') {
+      throw new Error(`Cannot pause AskHuman run from ${status}`);
+    }
+    status = 'paused';
+    onPause?.();
+  });
+}
+
+async function invokeInjectedAskHuman(
+  options: SendQueryOptions | undefined,
+  toolUseId = 'toolu_1',
+  sessionId = 'sess-1'
+): Promise<void> {
+  const ask = options?.nativeTools?.find(tool => tool.name === 'AskHuman');
+  if (!ask) throw new Error('AskHuman was not injected');
+  await ask.handler({ questions: askQuestions }, { toolUseId, sessionId });
+}
+
+async function executeAskDag(
+  store: IWorkflowStore,
+  workflowRun: WorkflowRun,
+  nodes: DagNode[]
+): Promise<void> {
+  await executeDagWorkflow(
+    createMockDeps(store),
+    createMockPlatform(),
+    'conv-dag',
+    testDir,
+    { name: 'ask-several-outstanding', nodes },
+    workflowRun,
+    'claude',
+    undefined,
+    join(testDir, 'artifacts'),
+    join(testDir, 'state'),
+    join(testDir, 'logs'),
+    'main',
+    'docs/',
+    minimalConfig
+  );
+}
+```
+
+The repository already imports `WorkflowRun`, `DagNode`, `SendQueryOptions`, and `IWorkflowStore` in this file, so do not introduce duplicate imports.
+
+### Step 2: Add the two-node Ask characterization
+
+- [ ] Add this test after the existing single-Ask cases.
+
+```ts
+it('persists a second sibling Ask after the first Ask has paused the run', async () => {
+  const firstPause = deferred();
+  mockSendQueryDag.mockImplementation(async function* (
+    prompt: string,
+    _cwd: string,
+    _resume?: string,
+    options?: SendQueryOptions
+  ) {
+    if (prompt.includes('alpha asks')) {
+      await invokeInjectedAskHuman(options, 'toolu_alpha', 'sess-alpha');
+      return;
+    }
+    await firstPause.promise;
+    await invokeInjectedAskHuman(options, 'toolu_beta', 'sess-beta');
+  });
+
+  const inserted: Array<{ node_id: string; tool_use_id: string }> = [];
+  const store = createMockStore();
+  store.insertPendingInteraction = mock(async input => {
+    inserted.push({ node_id: input.node_id, tool_use_id: input.tool_use_id });
+    return {
+      id: `pending-${input.tool_use_id}`,
+      ...input,
+      status: 'pending' as const,
+      answer: null,
+      created_at: new Date(),
+      resolved_at: null,
+      resolved_by: null,
+    };
+  });
+  wireAskPause(store, firstPause.resolve);
+  const workflowRun = makeWorkflowRun('ask-two-nodes-run');
+
+  await executeAskDag(store, workflowRun, [
+    { id: 'alpha', prompt: 'alpha asks' },
+    { id: 'beta', prompt: 'beta asks' },
+    { id: 'after', depends_on: ['alpha', 'beta'], prompt: 'must not run' },
+  ]);
+
+  expect(inserted).toEqual([
+    { node_id: 'alpha', tool_use_id: 'toolu_alpha' },
+    { node_id: 'beta', tool_use_id: 'toolu_beta' },
+  ]);
+  expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(2);
+  expect((store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls).toEqual([
+    [workflowRun.id],
+    [workflowRun.id],
+  ]);
+  const nodeEvents = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+    call => call[0] as { event_type: string; step_name?: string }
+  );
+  expect(nodeEvents.filter(event => event.event_type === 'node_completed')).toEqual([]);
+  expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+The explicit re-pause assertion proves the second native-tool handler completes its persist-and-pause teardown while the run is already paused.
+The two provider calls and absence of `node_completed` prove the later `after` layer never starts and neither asking node is reported complete.
 
-Run: `cd packages/workflows && bun test src/subrun.test.ts`
-Expected: FAIL because current `InMemoryStore.pauseWorkflowRun` always assigns `approval: { ...approvalContext, resolved: null }`.
+### Step 3: Add the paused-stream sibling characterization
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] Add this test immediately after the two-node Ask test.
 
-Replace `InMemoryStore.pauseWorkflowRun` with:
+```ts
+it('lets an already-started sibling finish streaming after another node pauses the run', async () => {
+  const firstPause = deferred();
+  mockSendQueryDag.mockImplementation(async function* (
+    prompt: string,
+    _cwd: string,
+    _resume?: string,
+    options?: SendQueryOptions
+  ) {
+    if (prompt.includes('alpha asks')) {
+      await invokeInjectedAskHuman(options, 'toolu_alpha', 'sess-alpha');
+      return;
+    }
+    await firstPause.promise;
+    yield { type: 'assistant', content: 'beta finished after pause' };
+    yield { type: 'result', sessionId: 'sess-beta' };
+  });
+
+  const store = createMockStore();
+  wireAskPause(store, firstPause.resolve);
+  const workflowRun = makeWorkflowRun('ask-streaming-sibling-run');
+
+  await executeAskDag(store, workflowRun, [
+    { id: 'alpha', prompt: 'alpha asks' },
+    { id: 'beta', prompt: 'beta streams' },
+    { id: 'after', depends_on: ['alpha', 'beta'], prompt: 'must not run' },
+  ]);
+
+  const betaRows = await store.listNodeMessages(workflowRun.id, 'beta');
+  expect(betaRows.some(row => row.kind === 'text' && row.payload.text === 'beta finished after pause')).toBe(
+    true
+  );
+  expect(
+    betaRows.some(row => row.kind === 'status' && row.payload.state === 'completed')
+  ).toBe(true);
+  expect(storedEventTypes(store).filter(type => type === 'node_completed')).toEqual([
+    'node_completed',
+  ]);
+  expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+});
+```
+
+Removing `paused` from `shouldContinueStreamingForStatus()` must prevent beta's text or completion from being recorded and fail this test.
+
+### Step 4: Add the same-node two-Ask characterization
+
+- [ ] Add this test immediately after the paused-stream sibling test.
+
+```ts
+it('persists two Ask calls from one node before unwinding it as awaiting', async () => {
+  mockSendQueryDag.mockImplementation(async function* (
+    _prompt: string,
+    _cwd: string,
+    _resume?: string,
+    options?: SendQueryOptions
+  ) {
+    const attempts = await Promise.allSettled([
+      invokeInjectedAskHuman(options, 'toolu_one', 'sess-one'),
+      invokeInjectedAskHuman(options, 'toolu_two', 'sess-two'),
+    ]);
+    const rejected = attempts.find(
+      (attempt): attempt is PromiseRejectedResult => attempt.status === 'rejected'
+    );
+    if (!rejected) throw new Error('Expected AskHuman to unwind the provider invocation');
+    if (rejected.reason instanceof Error) throw rejected.reason;
+    throw new Error(String(rejected.reason));
+  });
+
+  const insertedToolUseIds: string[] = [];
+  const store = createMockStore();
+  store.insertPendingInteraction = mock(async input => {
+    insertedToolUseIds.push(input.tool_use_id);
+    return {
+      id: `pending-${input.tool_use_id}`,
+      ...input,
+      status: 'pending' as const,
+      answer: null,
+      created_at: new Date(),
+      resolved_at: null,
+      resolved_by: null,
+    };
+  });
+  wireAskPause(store);
+  const workflowRun = makeWorkflowRun('ask-two-same-node-run');
+
+  await executeAskDag(store, workflowRun, [{ id: 'review', prompt: 'ask twice' }]);
+
+  expect(insertedToolUseIds.sort()).toEqual(['toolu_one', 'toolu_two']);
+  expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(2);
+  const rows = await store.listNodeMessages(workflowRun.id, 'review');
+  expect(rows.some(row => row.kind === 'status' && row.payload.state === 'awaiting')).toBe(true);
+  expect(rows.some(row => row.kind === 'status' && row.payload.state === 'completed')).toBe(
+    false
+  );
+  expect(rows.some(row => row.kind === 'status' && row.payload.state === 'failed')).toBe(false);
+});
+```
+
+Do not swallow both branded rejections in the fake provider; rethrowing one after both handlers settle models SDK teardown while still allowing both inserts to finish.
+
+### Step 5: Run the focused executor test
+
+- [ ] Run the DAG executor file from the workflows package.
+
+```bash
+cd packages/workflows
+bun test src/dag-executor.test.ts
+```
+
+Expected result: PASS, including all three new characterizations.
+
+### Step 6: Correct the stale production comments
+
+- [ ] In `packages/workflows/src/dag-executor.ts`, change the `shouldContinueStreamingForStatus()` comment from “a concurrent approval node” to “a concurrent approval or AskHuman node”.
+- [ ] In the `executeNodeInternal()` event-loop comment, change “an approval node can transition the run” to “an approval or AskHuman node can transition the run”.
+- [ ] In the loop-node event-loop comment, change “a sibling approval node may pause” to “a sibling approval or AskHuman node may pause”.
+- [ ] Do not change any function body because the characterized scheduler behavior is already implemented.
+
+### Step 7: Re-run and commit
+
+- [ ] Re-run the focused executor test after the comment-only source edit.
+
+```bash
+cd packages/workflows
+bun test src/dag-executor.test.ts
+```
+
+- [ ] Commit the executor coverage and comment correction.
+
+```bash
+git add packages/workflows/src/dag-executor.test.ts packages/workflows/src/dag-executor.ts
+git commit -m "test(workflows): cover concurrent ask scheduling"
+```
+
+---
+
+## Task 4: Repair the Stateful Sub-Run Harness and Characterize Child Ask Ownership
+
+**Files:**
+
+- Modify: `packages/workflows/src/subrun.test.ts`.
+
+**Why this task has a red-green cycle:** The current test-only `InMemoryStore.pauseWorkflowRun()` writes `metadata.approval` for every pause, while the real store intentionally leaves metadata unchanged for Ask-only pauses.
+The child-run characterization would otherwise pass with an impossible production state.
+
+### Step 1: Write the failing test for test-store parity
+
+- [ ] Add this test near the `InMemoryStore` harness tests, before the sub-run end-to-end cases.
+
+```ts
+it('keeps approval metadata absent for an Ask-only pause in the stateful test store', async () => {
+  const store = new InMemoryStore();
+  const run = await store.createWorkflowRun({
+    workflow_name: 'ask-only',
+    conversation_id: 'conversation-1',
+    user_message: 'go',
+    user_id: 'starter-1',
+  });
+
+  await store.pauseWorkflowRun(run.id);
+
+  expect((await store.getWorkflowRun(run.id))?.status).toBe('paused');
+  expect((await store.getWorkflowRun(run.id))?.metadata.approval).toBeUndefined();
+});
+```
+
+### Step 2: Verify the expected failure
+
+- [ ] Run the sub-run test file in its own workflows-package process.
+
+```bash
+cd packages/workflows
+bun test src/subrun.test.ts
+```
+
+Expected result: FAIL only at the new assertion because the current test double creates an `approval` object whose fields are undefined.
+
+### Step 3: Make the minimal test-harness repair
+
+- [ ] Replace only `InMemoryStore.pauseWorkflowRun()` with this implementation.
 
 ```ts
 pauseWorkflowRun: IWorkflowStore['pauseWorkflowRun'] = (id, approvalContext, extraMetadata) => {
@@ -471,323 +697,200 @@ pauseWorkflowRun: IWorkflowStore['pauseWorkflowRun'] = (id, approvalContext, ext
 };
 ```
 
-Do not start throwing on a second approval pause.
-That would change the existing `#2180` characterization limitation documented in this file.
+This is test infrastructure, not a production lifecycle change.
+It deliberately preserves the existing approval path while making Ask-only pause status-only, matching `packages/core/src/db/workflows.ts`.
 
-- [ ] **Step 4: Run test to verify it passes**
+### Step 4: Verify green before adding the child scenario
 
-Run: `cd packages/workflows && bun test src/subrun.test.ts`
-Expected: PASS, including existing child-paused approval tests that pass `approvalContext`.
+- [ ] Re-run the sub-run test file.
 
-- [ ] **Step 5: Refactor**
+```bash
+cd packages/workflows
+bun test src/subrun.test.ts
+```
 
-Keep the production comment in `pauseWorkflowRun` in `workflows.ts` as the source of truth.
-Do not share `InMemoryStore` with `dag-executor.test.ts`.
+Expected result: PASS.
 
-- [ ] **Step 6: Commit**
+### Step 5: Add an exact provider type import
+
+- [ ] Add this import with the other type-only imports at the top of `packages/workflows/src/subrun.test.ts`.
+
+```ts
+import type { SendQueryOptions } from '@archon/providers/types';
+```
+
+Do not use `Function`, `any`, or a hand-written copy of the provider callback type.
+
+### Step 6: Add the child-run Ask end-to-end characterization
+
+- [ ] Add this test inside `describe('workflow: sub-run e2e (#2121 Phase 2)', ...)`.
+
+```ts
+it('stores an Ask on the child run and pauses its parent without copying the row', async () => {
+  await writeWorkflow(
+    'child-asks',
+    `
+name: child-asks
+description: child that asks the starter
+nodes:
+  - id: child-review
+    prompt: "ask starter"
+`
+  );
+  await writeWorkflow(
+    'parent-of-ask',
+    `
+name: parent-of-ask
+description: parent that invokes the asking child
+nodes:
+  - id: child
+    workflow: child-asks
+`
+  );
+
+  const store = new InMemoryStore();
+  const provider = {
+    ...makeProvider(),
+    sendQuery: mock(async function* (
+      prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      if (prompt.includes('ask starter')) {
+        const ask = options?.nativeTools?.find(tool => tool.name === 'AskHuman');
+        if (!ask) throw new Error('AskHuman was not injected into the child node');
+        await ask.handler(
+          {
+            questions: [
+              {
+                id: 'ship',
+                prompt: 'Ship it?',
+                selection: 'single' as const,
+                options: ['yes', 'no'],
+                allowOther: false,
+              },
+            ],
+          },
+          { toolUseId: 'toolu_child', sessionId: 'sess-child' }
+        );
+        return;
+      }
+      yield { type: 'assistant', content: 'ai-output' };
+      yield { type: 'result', sessionId: 'sess-parent' };
+    }),
+  };
+  const deps: WorkflowDeps = {
+    ...makeDeps(store),
+    getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+  };
+  const parent = await discover('parent-of-ask');
+
+  const result = await executeWorkflow(
+    deps,
+    makePlatform(),
+    'conv-plat',
+    cwd,
+    parent,
+    'go',
+    'conv-db',
+    { userId: 'starter-1' }
+  );
+
+  expect(result.success && 'paused' in result && result.paused).toBe(true);
+  const parentRun = [...store.runs.values()].find(
+    run => run.workflow_name === 'parent-of-ask'
+  );
+  const childRun = [...store.runs.values()].find(run => run.workflow_name === 'child-asks');
+  if (!parentRun || !childRun) throw new Error('Expected parent and child workflow runs');
+
+  expect(childRun.parent_run_id).toBe(parentRun.id);
+  expect(childRun.user_id).toBe('starter-1');
+  expect(childRun.status).toBe('paused');
+  expect(childRun.metadata.approval).toBeUndefined();
+  expect(parentRun.status).toBe('paused');
+  expect(parentRun.metadata.approval).toMatchObject({
+    type: 'child_workflow',
+    nodeId: 'child',
+    childRunId: childRun.id,
+  });
+
+  expect(await store.listPendingInteractions(childRun.id)).toEqual([
+    expect.objectContaining({
+      workflow_run_id: childRun.id,
+      node_id: 'child-review',
+      tool_use_id: 'toolu_child',
+      kind: 'ask',
+      status: 'pending',
+      provider_session_id: 'sess-child',
+    }),
+  ]);
+  expect(await store.listPendingInteractions(parentRun.id)).toEqual([]);
+  expect(
+    store.events.some(
+      event =>
+        event.workflow_run_id === childRun.id &&
+        event.step_name === 'child-review' &&
+        event.event_type === 'node_completed'
+    )
+  ).toBe(false);
+});
+```
+
+The explicit `userId` keeps the harness aligned with the real store's no-starter policy.
+The guarded run lookup avoids non-null assertions, and the pending-row assertions prove ownership rather than merely proving that a child run exists.
+
+### Step 7: Run the child characterization
+
+- [ ] Run the sub-run file again.
+
+```bash
+cd packages/workflows
+bun test src/subrun.test.ts
+```
+
+Expected result: PASS, including the parity test and the child-run Ask test.
+
+### Step 8: Commit the test-harness repair and child coverage
+
+- [ ] Commit only the sub-run test file.
 
 ```bash
 git add packages/workflows/src/subrun.test.ts
-git commit -m "fix(workflows): omit approval metadata on Ask pause in the sub-run store"
+git commit -m "test(workflows): cover child run ask ownership"
 ```
 
 ---
 
-## Task 4: Two in-flight Asks share one paused run without failing the second node
+## Task 5: Characterize the Run-Detail Read Model for Several Outstanding Asks
 
 **Files:**
-- Modify: `packages/workflows/src/dag-executor.test.ts`
-- Modify: `packages/workflows/src/dag-executor.ts` (comment only unless tests fail)
-- Test: `packages/workflows/src/dag-executor.test.ts`
 
-**Interfaces:**
-- Consumes: `pauseOnAskHuman` → `pauseWorkflowRun(runId)` with no approval; `shouldContinueStreamingForStatus`; asking node result `{ state: 'pending' }`
-- Produces: two persisted Asks, two torn-down `sendQuery` calls, no `node_completed` for asking nodes, no next-layer start
+- Modify: `packages/server/src/routes/api.workflow-runs.test.ts`.
+- Read only: `packages/server/src/routes/api.ts`.
+- Read only: `packages/server/src/routes/schemas/workflow.schemas.ts`.
 
-- [ ] **Step 1: Write the failing tests**
+**Why one route test is enough:** The projector unit tests own the state algorithm and the SQLite tests own resume transitions.
+This route test only needs to prove that the server supplies all rows to the projector and returns those rows unchanged apart from timestamp serialization.
 
-In `describe('executeDagWorkflow -- AskHuman pause')`, reuse `askQuestions`, `storedEventTypes`, and `invokeInjectedAskHuman`.
-Add these helpers next to `wireAskPause`:
+### Step 1: Add the run-detail characterization
 
-```ts
-function wireIdempotentAskPause(store: IWorkflowStore): void {
-  let status: 'running' | 'paused' = 'running';
-  store.getWorkflowRunStatus = mock(async () => status);
-  store.pauseWorkflowRun = mock(async (_id: string, approvalContext?: unknown) => {
-    if (approvalContext !== undefined) {
-      if (status !== 'running') {
-        throw new Error('Workflow run not found or not in running state');
-      }
-      status = 'paused';
-      return;
-    }
-    if (status === 'running' || status === 'paused') {
-      status = 'paused';
-      return;
-    }
-    throw new Error('Workflow run not found or not in running state');
-  });
-}
-
-async function invokeAsk(
-  options: SendQueryOptions | undefined,
-  toolUseId: string,
-  sessionId: string
-): Promise<void> {
-  const ask = options?.nativeTools?.find(tool => tool.name === 'AskHuman');
-  if (!ask) throw new Error('AskHuman was not injected');
-  await ask.handler({ questions: askQuestions }, { toolUseId, sessionId });
-}
-```
-
-Add tests:
+- [ ] Add this test inside the existing GET run-detail describe block after the current single-pending-row projection test.
 
 ```ts
-it('persists a second sibling Ask after the run is already paused without completing either node', async () => {
-  mockSendQueryDag.mockImplementation(async function* (
-    prompt: string,
-    _cwd: string,
-    _resume?: string,
-    options?: SendQueryOptions
-  ) {
-    const text = String(prompt);
-    if (text.includes('ask alpha')) {
-      await invokeAsk(options, 'toolu_alpha', 'sess-alpha');
-    }
-    if (text.includes('ask beta')) {
-      await invokeAsk(options, 'toolu_beta', 'sess-beta');
-    }
-  });
-
-  const store = createMockStore();
-  wireIdempotentAskPause(store);
-  const inserted: Array<{ node_id: string; tool_use_id: string }> = [];
-  store.insertPendingInteraction = mock(async input => {
-    inserted.push({ node_id: input.node_id, tool_use_id: input.tool_use_id });
-    return {
-      ...input,
-      id: `pending-${inserted.length}`,
-      status: 'pending' as const,
-      answer: null,
-      created_at: new Date(),
-      resolved_at: null,
-      resolved_by: null,
-    };
-  });
-
-  await executeDagWorkflow(
-    createMockDeps(store),
-    createMockPlatform(),
-    'conv-dag',
-    testDir,
-    {
-      name: 'ask-siblings',
-      nodes: [
-        { id: 'alpha', prompt: 'ask alpha', allowed_tools: ['AskHuman'] },
-        { id: 'beta', prompt: 'ask beta', allowed_tools: ['AskHuman'] },
-        { id: 'after', depends_on: ['alpha', 'beta'], prompt: 'must not run' },
-      ],
-    },
-    makeWorkflowRun('ask-sibling-run'),
-    'claude',
-    undefined,
-    join(testDir, 'artifacts'),
-    join(testDir, 'state'),
-    join(testDir, 'logs'),
-    'main',
-    'docs/',
-    minimalConfig
-  );
-
-  expect(inserted).toEqual(
-    expect.arrayContaining([
-      { node_id: 'alpha', tool_use_id: 'toolu_alpha' },
-      { node_id: 'beta', tool_use_id: 'toolu_beta' },
-    ])
-  );
-  expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(2);
-  expect(
-    (store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls.every(
-      call => call.length === 1 || call[1] === undefined
-    )
-  ).toBe(true);
-  expect(store.failWorkflowRun).not.toHaveBeenCalled();
-  const types = storedEventTypes(store);
-  expect(types).not.toContain('node_completed');
-  expect(types).not.toContain('node_failed');
-  expect(mockSendQueryDag.mock.calls.length).toBe(2);
-});
-
-it('lets a non-asking sibling finish streaming while the asking node stays incomplete', async () => {
-  mockSendQueryDag.mockImplementation(async function* (
-    prompt: string,
-    _cwd: string,
-    _resume?: string,
-    options?: SendQueryOptions
-  ) {
-    if (String(prompt).includes('ask alpha')) {
-      await invokeAsk(options, 'toolu_alpha', 'sess-alpha');
-    }
-    yield { type: 'assistant', content: 'beta finished' };
-    yield { type: 'result', sessionId: 'sess-beta' };
-  });
-
-  const store = createMockStore();
-  wireIdempotentAskPause(store);
-
-  await executeDagWorkflow(
-    createMockDeps(store),
-    createMockPlatform(),
-    'conv-dag',
-    testDir,
-    {
-      name: 'ask-stream-sibling',
-      nodes: [
-        { id: 'alpha', prompt: 'ask alpha', allowed_tools: ['AskHuman'] },
-        { id: 'beta', prompt: 'finish beta' },
-        { id: 'after', depends_on: ['alpha', 'beta'], prompt: 'must not run' },
-      ],
-    },
-    makeWorkflowRun('ask-stream-run'),
-    'claude',
-    undefined,
-    join(testDir, 'artifacts'),
-    join(testDir, 'state'),
-    join(testDir, 'logs'),
-    'main',
-    'docs/',
-    minimalConfig
-  );
-
-  const types = storedEventTypes(store);
-  expect(types.filter(type => type === 'node_completed')).toEqual(['node_completed']);
-  const completed = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
-    .map(call => call[0] as { event_type: string; step_name?: string })
-    .filter(event => event.event_type === 'node_completed')
-    .map(event => event.step_name);
-  expect(completed).toEqual(['beta']);
-  expect(mockSendQueryDag.mock.calls.length).toBe(2);
-  expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-});
-
-it('persists two AskHuman tool uses on one node before tearing down sendQuery', async () => {
-  mockSendQueryDag.mockImplementation(async function* (
-    _prompt: string,
-    _cwd: string,
-    _resume?: string,
-    options?: SendQueryOptions
-  ) {
-    const first = invokeAsk(options, 'toolu_a', 'sess-shared');
-    const second = invokeAsk(options, 'toolu_b', 'sess-shared');
-    await Promise.allSettled([first, second]);
-  });
-
-  const store = createMockStore();
-  wireIdempotentAskPause(store);
-  const toolUseIds: string[] = [];
-  store.insertPendingInteraction = mock(async input => {
-    toolUseIds.push(input.tool_use_id);
-    return {
-      ...input,
-      id: `pending-${toolUseIds.length}`,
-      status: 'pending' as const,
-      answer: null,
-      created_at: new Date(),
-      resolved_at: null,
-      resolved_by: null,
-    };
-  });
-
-  await executeDagWorkflow(
-    createMockDeps(store),
-    createMockPlatform(),
-    'conv-dag',
-    testDir,
-    {
-      name: 'ask-dual',
-      nodes: [{ id: 'review', prompt: 'ask twice', allowed_tools: ['AskHuman'] }],
-    },
-    makeWorkflowRun('ask-dual-run'),
-    'claude',
-    undefined,
-    join(testDir, 'artifacts'),
-    join(testDir, 'state'),
-    join(testDir, 'logs'),
-    'main',
-    'docs/',
-    minimalConfig
-  );
-
-  expect(toolUseIds.sort()).toEqual(['toolu_a', 'toolu_b']);
-  expect(storedEventTypes(store)).not.toContain('node_completed');
-  expect(store.failWorkflowRun).not.toHaveBeenCalled();
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails or characterize**
-
-Run: `cd packages/workflows && bun test src/dag-executor.test.ts`
-Expected: FAIL if the second `pauseWorkflowRun` throws, if either asking node writes `node_completed`, if `after` starts, or if dual-insert is dropped when the first handler throws.
-If current production already satisfies these, keep the tests and skip executor edits.
-
-- [ ] **Step 3: Write minimal implementation**
-
-If RED, keep these production rules:
-- `pauseOnAskHuman` calls `pauseWorkflowRun(runId)` with no approval.
-- Asking catch returns `{ state: 'pending' }` without `createWorkflowEvent({ event_type: 'node_completed' })`.
-- `shouldContinueStreamingForStatus` continues on `paused`.
-- `runLayers` returns `'pending'` when `layerHadPending` is true and does not execute the next layer.
-
-Do not add a per-node scheduler.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `cd packages/workflows && bun test src/dag-executor.test.ts`
-Expected: PASS, including existing single-node Ask pause and resume re-entry tests.
-
-- [ ] **Step 5: Refactor**
-
-Update the `shouldContinueStreamingForStatus` comment so it names AskHuman as well as a concurrent approval node.
-Do not change the function body unless a test requires it.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add packages/workflows/src/dag-executor.test.ts packages/workflows/src/dag-executor.ts
-git commit -m "test(workflows): keep several in-flight Asks on one paused run"
-```
-
----
-
-## Task 5: GET run embeds independent Asks and the awaiting-input formula
-
-**Files:**
-- Modify: `packages/server/src/routes/api.workflow-runs.test.ts`
-- Modify only if RED stays red: `packages/server/src/routes/api.ts`
-- Test: `packages/server/src/routes/api.workflow-runs.test.ts`
-
-**Interfaces:**
-- Consumes: GET `/api/workflows/runs/:runId` `{ run.status, pending_interactions, nodeStates }`
-- Produces: unchanged embed; clients compute `awaitingInput = status === 'paused' && pending_interactions.some(row => row.status === 'pending')`
-
-- [ ] **Step 1: Write the failing tests**
-
-Append inside `describe('GET /api/workflows/runs/:runId')` after `projects awaiting from a pending row on a paused run without rewriting to paused or running`:
-
-```ts
-test('embeds two pending Asks as independent rows and projects both nodes awaiting', async () => {
+test('embeds sibling and same-node Ask rows while projecting every pending owner as awaiting', async () => {
   mockGetWorkflowRun.mockImplementationOnce(async () => ({
     ...MOCK_RUNNING_RUN,
     status: 'paused',
   }));
   mockListWorkflowEvents.mockImplementationOnce(async () => [
     {
-      id: 'evt-alpha-start',
+      id: 'evt-review-start',
       workflow_run_id: 'run-uuid-1',
       event_type: 'node_started',
       step_index: null,
-      step_name: 'alpha',
-      data: { node_id: 'alpha', provider: 'claude' },
+      step_name: 'review',
+      data: { node_id: 'review', provider: 'claude' },
       created_at: NOW,
     },
     {
@@ -806,30 +909,44 @@ test('embeds two pending Asks as independent rows and projects both nodes awaiti
   }));
   mockListPendingInteractions.mockImplementationOnce(async () => [
     {
-      id: 'pend-alpha',
+      id: 'pend-review-answered',
       workflow_run_id: 'run-uuid-1',
-      node_id: 'alpha',
-      tool_use_id: 'toolu_alpha',
+      node_id: 'review',
+      tool_use_id: 'toolu_review_answered',
+      kind: 'ask',
+      status: 'answered',
+      envelope: { questions: [{ prompt: 'First review question' }] },
+      answer: { answers: [{ questionId: 'first', value: 'yes' }] },
+      provider_session_id: 'sess-review',
+      created_at: '2026-09-06T00:00:00.000Z',
+      resolved_at: '2026-09-06T00:01:00.000Z',
+      resolved_by: 'user-1',
+    },
+    {
+      id: 'pend-review-open',
+      workflow_run_id: 'run-uuid-1',
+      node_id: 'review',
+      tool_use_id: 'toolu_review_open',
       kind: 'ask',
       status: 'pending',
-      envelope: { questions: [{ prompt: 'Alpha?' }] },
+      envelope: { questions: [{ prompt: 'Second review question' }] },
       answer: null,
-      provider_session_id: 'sess-alpha',
-      created_at: '2026-09-06T00:00:00.000Z',
+      provider_session_id: 'sess-review',
+      created_at: '2026-09-06T00:00:01.000Z',
       resolved_at: null,
       resolved_by: null,
     },
     {
-      id: 'pend-beta',
+      id: 'pend-beta-open',
       workflow_run_id: 'run-uuid-1',
       node_id: 'beta',
-      tool_use_id: 'toolu_beta',
+      tool_use_id: 'toolu_beta_open',
       kind: 'ask',
       status: 'pending',
-      envelope: { questions: [{ prompt: 'Beta?' }] },
+      envelope: { questions: [{ prompt: 'Beta question' }] },
       answer: null,
       provider_session_id: 'sess-beta',
-      created_at: '2026-09-06T00:00:01.000Z',
+      created_at: '2026-09-06T00:00:02.000Z',
       resolved_at: null,
       resolved_by: null,
     },
@@ -837,550 +954,165 @@ test('embeds two pending Asks as independent rows and projects both nodes awaiti
 
   const { app } = makeApp();
   const response = await app.request('/api/workflows/runs/run-uuid-1');
+
   expect(response.status).toBe(200);
   const body = (await response.json()) as {
     run: { status: string };
     pending_interactions: Array<{ node_id: string; tool_use_id: string; status: string }>;
     nodeStates: Array<{ nodeId: string; status: string }>;
   };
+  expect(mockListPendingInteractions).toHaveBeenCalledWith('run-uuid-1');
   expect(body.run.status).toBe('paused');
-  expect(body.pending_interactions.map(row => row.tool_use_id).sort()).toEqual([
-    'toolu_alpha',
-    'toolu_beta',
+  expect(
+    body.pending_interactions.map(row => [row.node_id, row.tool_use_id, row.status])
+  ).toEqual([
+    ['review', 'toolu_review_answered', 'answered'],
+    ['review', 'toolu_review_open', 'pending'],
+    ['beta', 'toolu_beta_open', 'pending'],
   ]);
-  const awaitingInput =
-    body.run.status === 'paused' &&
-    body.pending_interactions.some(row => row.status === 'pending');
-  expect(awaitingInput).toBe(true);
-  expect(body.nodeStates).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ nodeId: 'alpha', status: 'awaiting' }),
-      expect.objectContaining({ nodeId: 'beta', status: 'awaiting' }),
-    ])
-  );
-});
-
-test('keeps a node awaiting after one of two same-node Asks is answered', async () => {
-  mockGetWorkflowRun.mockImplementationOnce(async () => ({
-    ...MOCK_RUNNING_RUN,
-    status: 'paused',
-  }));
-  mockListWorkflowEvents.mockImplementationOnce(async () => [
-    {
-      id: 'evt-review-start',
-      workflow_run_id: 'run-uuid-1',
-      event_type: 'node_started',
-      step_index: null,
-      step_name: 'review',
-      data: { node_id: 'review', provider: 'claude' },
-      created_at: NOW,
-    },
-    {
-      id: 'evt-review-await',
-      workflow_run_id: 'run-uuid-1',
-      event_type: 'node_awaiting',
-      step_index: null,
-      step_name: 'review',
-      data: { node_id: 'review', tool_use_id: 'toolu_1' },
-      created_at: NOW,
-    },
-    {
-      id: 'evt-review-resolved',
-      workflow_run_id: 'run-uuid-1',
-      event_type: 'interaction_resolved',
-      step_index: null,
-      step_name: 'review',
-      data: { node_id: 'review', tool_use_id: 'toolu_1' },
-      created_at: NOW,
-    },
-  ]);
-  mockGetConversationById.mockImplementationOnce(async () => ({
-    id: 'conv-uuid-1',
-    platform_conversation_id: 'web-conv-abc',
-  }));
-  mockListPendingInteractions.mockImplementationOnce(async () => [
-    {
-      id: 'pend-done',
-      workflow_run_id: 'run-uuid-1',
-      node_id: 'review',
-      tool_use_id: 'toolu_1',
-      kind: 'ask',
-      status: 'answered',
-      envelope: { questions: [{ prompt: 'First' }] },
-      answer: { answers: [{ questionId: 'q1', value: 'yes' }] },
-      provider_session_id: 'sess-1',
-      created_at: '2026-09-06T00:00:00.000Z',
-      resolved_at: '2026-09-06T00:01:00.000Z',
-      resolved_by: 'user-1',
-    },
-    {
-      id: 'pend-open',
-      workflow_run_id: 'run-uuid-1',
-      node_id: 'review',
-      tool_use_id: 'toolu_2',
-      kind: 'ask',
-      status: 'pending',
-      envelope: { questions: [{ prompt: 'Second' }] },
-      answer: null,
-      provider_session_id: 'sess-1',
-      created_at: '2026-09-06T00:00:01.000Z',
-      resolved_at: null,
-      resolved_by: null,
-    },
-  ]);
-
-  const { app } = makeApp();
-  const response = await app.request('/api/workflows/runs/run-uuid-1');
-  expect(response.status).toBe(200);
-  const body = (await response.json()) as {
-    run: { status: string };
-    pending_interactions: Array<{ status: string }>;
-    nodeStates: Array<{ nodeId: string; status: string }>;
-  };
-  expect(body.run.status).toBe('paused');
-  expect(body.pending_interactions.some(row => row.status === 'pending')).toBe(true);
   expect(body.nodeStates).toEqual([
-    expect.objectContaining({ nodeId: 'review', status: 'awaiting' }),
+    { nodeId: 'review', name: 'review', status: 'awaiting', retryEpoch: 0, provider: 'claude' },
+    { nodeId: 'beta', name: 'beta', status: 'awaiting', retryEpoch: 0, provider: 'claude' },
   ]);
-});
-
-test('awaiting-input formula is false when a paused run has no pending rows', async () => {
-  mockGetWorkflowRun.mockImplementationOnce(async () => ({
-    ...MOCK_RUNNING_RUN,
-    status: 'paused',
-  }));
-  mockListWorkflowEvents.mockImplementationOnce(async () => []);
-  mockGetConversationById.mockImplementationOnce(async () => ({
-    id: 'conv-uuid-1',
-    platform_conversation_id: 'web-conv-abc',
-  }));
-  mockListPendingInteractions.mockImplementationOnce(async () => []);
-
-  const { app } = makeApp();
-  const response = await app.request('/api/workflows/runs/run-uuid-1');
-  expect(response.status).toBe(200);
-  const body = (await response.json()) as {
-    run: { status: string };
-    pending_interactions: Array<{ status: string }>;
-  };
-  const awaitingInput =
-    body.run.status === 'paused' &&
-    body.pending_interactions.some(row => row.status === 'pending');
-  expect(awaitingInput).toBe(false);
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails or characterize**
+Do not compute a second `isAwaitingInput` boolean inside the test because reproducing the UI formula in test code would be tautological and would not exercise server behavior.
+The returned `run.status` and row statuses are the exact server inputs from which the existing web client derives run chrome.
 
-Run: `cd packages/server && bun test src/routes/api.workflow-runs.test.ts`
-Expected: FAIL only if GET lists one row, rewrites `awaiting` on paused runs, or completes a node on `interaction_resolved`.
-Current `projectApiWorkflowNodeStates` plus pending overlay should characterize green.
+### Step 2: Run the focused route test
 
-- [ ] **Step 3: Write minimal implementation**
-
-If RED, keep GET passing `pendingInteractions` into `projectLatestEffectiveNodeStates`.
-Do not add an `awaitingInput` response field.
-Do not let `settleApiWorkflowNodeStatesForRunStatus` rewrite `awaiting` on a paused run.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `cd packages/server && bun test src/routes/api.workflow-runs.test.ts`
-Expected: PASS, including the existing single-pending awaiting test and the intermediate-answer no-dispatch test.
-
-- [ ] **Step 5: Refactor**
-
-Do not introduce a shared React helper.
-Leave copy and warning tokens to Story 6.5.
-
-- [ ] **Step 6: Commit**
+- [ ] Run this route file from the server package.
 
 ```bash
-git add packages/server/src/routes/api.workflow-runs.test.ts packages/server/src/routes/api.ts
-git commit -m "test(server): embed independent outstanding Asks without a second scheduler field"
+cd packages/server
+bun test src/routes/api.workflow-runs.test.ts
+```
+
+Expected result: PASS, including the new row-embedding and node-projection assertions.
+
+### Step 3: Commit the route characterization
+
+- [ ] Commit only the route test file.
+
+```bash
+git add packages/server/src/routes/api.workflow-runs.test.ts
+git commit -m "test(server): cover several outstanding asks"
 ```
 
 ---
 
-## Task 6: Child-run Asks live on the child run id
+## Task 6: Validate the Story and Update Tracking
 
 **Files:**
-- Modify: `packages/workflows/src/subrun.test.ts`
-- Modify: `packages/server/src/routes/api.workflow-runs.test.ts`
-- Modify production files only if RED stays red
-- Test: `packages/workflows/src/subrun.test.ts` and `packages/server/src/routes/api.workflow-runs.test.ts`
 
-**Interfaces:**
-- Consumes: `createAskHumanTool({ workflowRunId })` on the executing run; GET/POST keyed by `runId`; `pauseParentOnChild` for parent pause
-- Produces: pending rows with `workflow_run_id === child.id`; parent GET embed empty; parent POST for the child `tool_use_id` returns 404
+- Verify: every file modified in Tasks 1 through 5.
+- Modify after all gates pass: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml`.
 
-- [ ] **Step 1: Write the failing tests**
+### Step 1: Run the focused regression matrix
 
-In `packages/workflows/src/subrun.test.ts`, add:
-
-```ts
-it('persists a child Ask on the child run and pauses the parent with existing child-paused behavior', async () => {
-  await writeWorkflow(
-    'child-ask',
-    `
-name: child-ask
-description: child that asks
-nodes:
-  - id: work
-    prompt: "ask the starter"
-`
-  );
-  await writeWorkflow(
-    'parent-ask',
-    `
-name: parent-ask
-description: parent blocked on child ask
-nodes:
-  - id: sub
-    workflow: child-ask
-`
-  );
-
-  const store = new InMemoryStore();
-  const askQuestions = [
-    {
-      id: 'q1',
-      prompt: 'Ship it?',
-      selection: 'single' as const,
-      options: ['yes', 'no'],
-      allowOther: false,
-    },
-  ];
-  const provider = {
-    ...makeProvider(),
-    sendQuery: mock(async function* (
-      prompt: string,
-      _cwd: string,
-      _resume?: string,
-      options?: { nativeTools?: Array<{ name: string; handler: Function }> }
-    ) {
-      if (String(prompt).includes('ask the starter')) {
-        const ask = options?.nativeTools?.find(tool => tool.name === 'AskHuman');
-        if (!ask) throw new Error('AskHuman was not injected on the child');
-        await ask.handler(
-          { questions: askQuestions },
-          { toolUseId: 'toolu_child', sessionId: 'sess-child' }
-        );
-      }
-      yield { type: 'assistant', content: 'ai-output' };
-      yield { type: 'result', sessionId: 'sess', cost: 0.01, tokens: { input: 7, output: 3 } };
-    }),
-  };
-  const deps = {
-    ...makeDeps(store),
-    getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
-  };
-
-  const parent = await discover('parent-ask');
-  const result = await executeWorkflow(
-    deps,
-    makePlatform(),
-    'conv-plat',
-    cwd,
-    parent,
-    'the-goal',
-    'conv-db'
-  );
-
-  expect(result.success).toBe(true);
-  const parentRun = [...store.runs.values()].find(run => run.workflow_name === 'parent-ask');
-  const childRun = [...store.runs.values()].find(run => run.workflow_name === 'child-ask');
-  expect(parentRun?.status).toBe('paused');
-  expect(childRun?.status).toBe('paused');
-  expect(childRun?.parent_run_id).toBe(parentRun?.id);
-  expect(childRun?.metadata.approval).toBeUndefined();
-  expect(
-    (parentRun?.metadata.approval as { type?: string; childRunId?: string } | undefined)?.type
-  ).toBe('child_workflow');
-  expect(
-    (parentRun?.metadata.approval as { childRunId?: string } | undefined)?.childRunId
-  ).toBe(childRun?.id);
-
-  const childPending = await store.listPendingInteractions(childRun!.id);
-  const parentPending = await store.listPendingInteractions(parentRun!.id);
-  expect(childPending).toHaveLength(1);
-  expect(childPending[0]?.tool_use_id).toBe('toolu_child');
-  expect(childPending[0]?.workflow_run_id).toBe(childRun!.id);
-  expect(parentPending).toEqual([]);
-  expect(
-    store.events.some(
-      event =>
-        event.workflow_run_id === childRun!.id &&
-        event.event_type === 'node_completed' &&
-        event.step_name === 'work'
-    )
-  ).toBe(false);
-  expect(
-    store.events.some(
-      event =>
-        event.workflow_run_id === parentRun!.id &&
-        event.event_type === 'node_completed' &&
-        event.step_name === 'sub'
-    )
-  ).toBe(false);
-});
-```
-
-In `packages/server/src/routes/api.workflow-runs.test.ts`, add:
-
-```ts
-test('GET parent does not embed a child Ask pending row', async () => {
-  const childRow = {
-    id: 'pend-child',
-    workflow_run_id: 'child-run-1',
-    node_id: 'work',
-    tool_use_id: 'toolu_child',
-    kind: 'ask' as const,
-    status: 'pending' as const,
-    envelope: { questions: [{ prompt: 'Child?' }] },
-    answer: null,
-    provider_session_id: 'sess-child',
-    created_at: '2026-09-06T00:00:00.000Z',
-    resolved_at: null,
-    resolved_by: null,
-  };
-  mockListPendingInteractions.mockImplementation(async (id: string) =>
-    id === 'child-run-1' ? [childRow] : []
-  );
-  mockListWorkflowEvents.mockImplementation(async () => []);
-  mockGetConversationById.mockImplementation(async () => ({
-    id: 'conv-uuid-1',
-    platform_conversation_id: 'web-conv-abc',
-  }));
-  mockGetWorkflowRun.mockImplementation(async (id: string) => ({
-    ...MOCK_RUNNING_RUN,
-    id,
-    status: 'paused',
-    parent_run_id: id === 'child-run-1' ? 'parent-run-1' : null,
-  }));
-
-  const { app } = makeApp();
-  const parentResponse = await app.request('/api/workflows/runs/parent-run-1');
-  const childResponse = await app.request('/api/workflows/runs/child-run-1');
-  expect(parentResponse.status).toBe(200);
-  expect(childResponse.status).toBe(200);
-  const parentBody = (await parentResponse.json()) as {
-    pending_interactions: Array<{ tool_use_id: string }>;
-  };
-  const childBody = (await childResponse.json()) as {
-    pending_interactions: Array<{ tool_use_id: string; workflow_run_id: string }>;
-  };
-  expect(parentBody.pending_interactions).toEqual([]);
-  expect(childBody.pending_interactions).toEqual([
-    expect.objectContaining({ tool_use_id: 'toolu_child', workflow_run_id: 'child-run-1' }),
-  ]);
-});
-
-test('POST answer on the parent run id for a child tool_use_id returns 404', async () => {
-  mockGetWorkflowRun.mockResolvedValue(
-    mockAskPausedRun({ id: 'parent-run-1', parent_conversation_id: 'parent-conv-uuid' })
-  );
-  mockResolvePendingInteraction.mockImplementation(async () => {
-    const { PendingInteractionNotFoundError } = await import(
-      '@archon/core/db/workflow-pending-interactions'
-    );
-    throw new PendingInteractionNotFoundError('parent-run-1', 'toolu_child');
-  });
-
-  const { app } = makeApp();
-  const response = await app.request('/api/workflows/runs/parent-run-1/ask/toolu_child/answer', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Archon-User': ASK_STARTER_USER_ID,
-    },
-    body: JSON.stringify(ASK_ANSWER_BODY),
-  });
-  expect(response.status).toBe(404);
-});
-```
-
-If `PendingInteractionNotFoundError` is already imported or the existing 404 helper maps that class, reuse the existing 404 mock from the answer-route suite instead of a dynamic import.
-Match the file's current 404 test exactly.
-
-- [ ] **Step 2: Run tests to verify they fail or characterize**
-
-Run: `cd packages/workflows && bun test src/subrun.test.ts`
-Run: `cd packages/server && bun test src/routes/api.workflow-runs.test.ts`
-Expected: sub-run test FAIL if AskHuman is not injected on the child, if pending rows land on the parent, or if child Ask pause writes approval.
-HTTP tests should characterize green because list and resolve are keyed by `runId`.
-
-- [ ] **Step 3: Write minimal implementation**
-
-If the child Ask is missing because `makeProvider().getCapabilities()` is used instead of the registry, do not change `nativeToolsForAskHuman`.
-It already uses `getProviderCapabilities(provider)` for `'claude'`.
-If insert uses the parent id, keep passing `workflowRun.id` from the executing child into `createAskHumanTool`.
-Do not add a parent-side pending row.
-Do not change `pauseParentOnChild` beyond existing child-paused behavior.
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `cd packages/workflows && bun test src/subrun.test.ts`
-Run: `cd packages/server && bun test src/routes/api.workflow-runs.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Refactor**
-
-Keep parent approval-slot copy as existing child-paused behavior.
-Do not special-case Ask in `pauseParentOnChild` in this story.
-
-- [ ] **Step 6: Commit**
+- [ ] Run each command as a separate process from the named package directory.
 
 ```bash
-git add packages/workflows/src/subrun.test.ts packages/server/src/routes/api.workflow-runs.test.ts
-git commit -m "test(workflows): persist child Asks on the child run id"
+(cd packages/workflows && bun test src/retry-state.test.ts)
+(cd packages/core && bun test src/db/workflow-pending-interactions.test.ts)
+(cd packages/core && bun test src/db/workflows.test.ts)
+(cd packages/core && bun test src/operations/workflow-operations.test.ts)
+(cd packages/workflows && bun test src/dag-executor.test.ts)
+(cd packages/workflows && bun test src/subrun.test.ts)
+(cd packages/server && bun test src/routes/api.workflow-runs.test.ts)
 ```
 
----
+Expected result: every process exits zero.
 
-## Task 7: Validation, sprint status, and issue close gate
+### Step 2: Run repository-wide validation
 
-**Files:**
-- Modify: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml`
-
-**Interfaces:**
-- Consumes: every focused test from Tasks 1–6
-- Produces: `6-4-keep-several-asks-outstanding-without-a-second-scheduler: done`
-
-- [ ] **Step 1: Run focused tests**
+- [ ] Check patch whitespace before the full gate.
 
 ```bash
-cd packages/workflows && bun test src/retry-state.test.ts
-cd packages/workflows && bun test src/dag-executor.test.ts
-cd packages/workflows && bun test src/subrun.test.ts
-cd packages/core && bun test src/db/workflow-pending-interactions.test.ts
-cd packages/core && bun test src/db/workflows.test.ts
-cd packages/core && bun test src/operations/workflow-operations.test.ts
-cd packages/server && bun test src/routes/api.workflow-runs.test.ts
+git diff --check
 ```
 
-Expected: PASS.
-`workflows.test.ts` must still include `Ask pause succeeds when the run is already paused`.
-
-- [ ] **Step 2: Run package and repo gates**
+- [ ] Run the repository's complete pre-PR validation command from the repository root.
 
 ```bash
-bun run type-check
-bun run lint
 bun run validate
 ```
 
-Run those from the repository root.
-Do not run unscoped `bun test` from the repository root.
-Expected: exit 0.
+Expected result: type checking, lint with zero warnings, formatting, package-isolated tests, dependency checks, generated-file checks, and the remaining validation stages all pass.
 
-- [ ] **Step 3: Update sprint status**
+### Step 3: Resolve the registered tracking conflicts only after validation passes
 
-The sprint file currently has merge-conflict markers on `last_updated`.
-Resolve by writing a single new timestamp, not `@ours` stacked with `@theirs`.
-Set:
+- [ ] Read `conflict://1/theirs` and `conflict://2/theirs` through the workspace conflict interface and verify that both contain the `2026-09-07 01:23:49 +0700` timestamp from commit `c25ea00c`.
+- [ ] Resolve both registered blocks in one conflict-aware workspace write with the exact operation below; do not copy the rendered conflict diagnostic into the YAML file.
 
-```yaml
-last_updated: "<implementation local timestamp>"
-development_status:
-  6-4-keep-several-asks-outstanding-without-a-second-scheduler: done
+```text
+write({ path: "conflict://*", content: "1: @theirs\n2: @theirs" })
 ```
 
-Leave `6-5`, `6-6`, and `6-7` as `backlog`.
-Do not mark `epic-6` done.
+- [ ] Re-read `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` and verify that Story 6.3 remains `done`, Story 6.4 remains `backlog`, both timestamp locations contain `2026-09-07 01:23:49 +0700`, and no unresolved-conflict diagnostic remains.
 
-- [ ] **Step 4: Commit sprint status only after gates pass**
+### Step 4: Update Story 6.4 only after resolving the tracking file
+
+- [ ] Capture one real local timestamp and use that exact value for both the leading `# last_updated:` comment and the `last_updated:` YAML field.
+
+```bash
+date '+%Y-%m-%d %H:%M:%S %z'
+```
+
+- [ ] In `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml`, change `6-4-keep-several-asks-outstanding-without-a-second-scheduler: backlog` to `6-4-keep-several-asks-outstanding-without-a-second-scheduler: done`.
+- [ ] Do not change the Epic 6 status or any other story status.
+- [ ] Verify the edited YAML contains no conflict markers and is formatted.
+
+```bash
+rg -n '^(<<<<<<<|=======|>>>>>>>)|^⚠ |^NOTICE:|^──── |^<<< |^>>> ' _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
+bun x prettier --check _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
+git diff --check
+```
+
+Expected result: `rg` exits 1 with no matches, while Prettier and `git diff --check` exit zero.
+
+### Step 5: Commit the tracking update
+
+- [ ] Commit the validated story status.
 
 ```bash
 git add _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
-git commit -m "chore: mark AskHuman several-asks story 6.4 done"
+git commit -m "chore(planning): mark AskHuman several asks done"
 ```
 
-If any gate fails, leave the sprint key unchanged and do not close issue 89.
+### Step 6: Prepare the pull-request handoff
+
+- [ ] Copy `.github/pull_request_template.md` into the PR body, retain the required Problem and outcome, Review guidance, Solution, and Validation sections, and remove unused conditional sections and instructional comments.
+- [ ] Include `Closes #89` in the PR description.
+- [ ] Report the focused regression matrix and `bun run validate` as the validation evidence.
 
 ---
 
-## Testing Strategy
-
-### Tests to Write
-
-| Test File | Test Cases | Validates |
-| --- | --- | --- |
-| `packages/workflows/src/retry-state.test.ts` | Remaining pending on one node; independent sibling nodes; permission pending overlay | FR5 node awaiting |
-| `packages/core/src/db/workflow-pending-interactions.test.ts` | Remaining pending on another node; last pending in the run resumes | FR5 last-clears |
-| `packages/workflows/src/dag-executor.test.ts` | Two in-flight Asks; dual Ask on one node; sibling streaming; no next layer | FR5 concurrency, NFR6 |
-| `packages/workflows/src/subrun.test.ts` | Ask pause omits approval; child pending on child run | FR10, AD-1 |
-| `packages/server/src/routes/api.workflow-runs.test.ts` | Independent GET rows; awaiting-input formula; parent/child isolation; parent 404 | FR5, FR10, AD-8 |
-
-### Edge Cases Checklist
-
-- [ ] Second Ask persist succeeds while the run is already paused.
-- [ ] Second Ask pause does not pass `ApprovalContext`.
-- [ ] Asking nodes never receive `node_completed`.
-- [ ] A non-asking sibling may write `node_completed`.
-- [ ] Downstream layers do not start.
-- [ ] Answering one of two same-node Asks leaves the node `awaiting`.
-- [ ] Answering one of two sibling-node Asks leaves the run `paused`.
-- [ ] Answering the last pending row in the run resumes once.
-- [ ] Intermediate HTTP answers do not auto-dispatch.
-- [ ] Child pending rows are absent from GET parent.
-- [ ] Parent answer for a child `tool_use_id` is 404.
-- [ ] Fan-out paused children remain out of scope.
-- [ ] No timeout or auto-default exists.
-
-## Validation Commands
-
-From the repository root, after the focused package commands in Task 7:
-
-```bash
-bun run type-check
-bun run lint
-bun run validate
-```
-
-Do not run `bun test` from the repository root.
-
 ## Acceptance Criteria
 
-- [ ] Two in-flight agent nodes can each persist an Ask after the run is already paused, and neither asking node is failed for that reason.
-- [ ] Each asking node tears down only its own `sendQuery`.
-- [ ] In-flight siblings may finish streaming via `shouldContinueStreamingForStatus('paused')`.
-- [ ] The next DAG layer does not start.
-- [ ] `node_completed` is not written for an asking node.
-- [ ] Two pending Asks on the same node keep that node `awaiting` until every pending row for `(run_id, node_id)` is resolved.
-- [ ] Run chrome awaiting input equals `paused` AND `count(pending) > 0` on that run, and it clears only when the last pending row in the run is resolved.
-- [ ] Child Ask pending rows live on the child `run_id`.
-- [ ] The parent follows existing child-paused behavior.
-- [ ] The operator answers the child, not the parent.
-- [ ] Per-node independent scheduling is not implemented.
-- [ ] No Ask cards, Permission POST, YAML field, CLI answer path, or new run status is added.
-- [ ] Focused tests plus `bun run validate` pass.
-- [ ] Sprint key `6-4-keep-several-asks-outstanding-without-a-second-scheduler` is `done` only after those gates pass.
+- [ ] Two independent agent nodes can each persist an Ask row, and the second node can complete its Ask persist-and-pause teardown after the first node has already paused the run.
+- [ ] An already-started sibling may finish streaming and record `node_completed` while the run is paused by another node's Ask.
+- [ ] A later DAG layer does not start after any node in the current layer awaits an Ask response.
+- [ ] An asking node records `awaiting` and does not record `node_completed` or `node_failed` solely because `AskHumanAwaitingError` unwinds its provider stream.
+- [ ] Two Ask calls from one node produce two distinct pending rows and unwind the node only after both fake-provider calls have settled.
+- [ ] Answering one of several run-scoped pending rows returns `resumed: false`, leaves the run `paused`, and reports the exact remaining count.
+- [ ] Answering the last pending row returns `resumed: true`, changes the run to `running` in the same database transaction, and reports zero remaining rows.
+- [ ] A pending non-Ask interaction also prevents resume, proving that the resolver counts all pending kinds.
+- [ ] Node projection remains `awaiting` while any pending row owned by that node exists, including when an older row on the same node is already answered.
+- [ ] One node's pending row does not incorrectly overlay `awaiting` onto a sibling that owns only answered rows.
+- [ ] A child node's Ask row is stored only under the child `workflow_run_id`, carries the child `node_id`, and cannot be answered through the parent run ID.
+- [ ] A child Ask pauses the child without approval metadata, causes the existing child-workflow policy to pause the parent with its explanatory approval copy, and emits no child `node_completed` event for the asking node.
+- [ ] GET `/api/workflows/runs/:runId` returns all answered and pending rows for that exact run and projects every node that still owns a pending row as `awaiting`.
+- [ ] The run chrome contract remains derivable from the existing response as `run.status === 'paused' && pending_interactions.some(row => row.status === 'pending')` without adding an API boolean.
+- [ ] No schema, generated type, YAML language, provider contract, scheduling model, or public interface changes are introduced.
+- [ ] Every focused test command, `git diff --check`, and `bun run validate` passes before Story 6.4 is marked `done`.
 
-## Open Questions
+## Definition of Done
 
-1. Parent blocked-on-child copy still tells the operator to `/workflow approve <childRunId>`.
-Safe provisional default: keep existing `pauseParentOnChild` copy and approval slot because Story 6.4 requires existing child-paused behavior, and Story 6.5 owns Ask chrome.
-
-2. A fan-out child that pauses at Ask is still cancelled by existing `#2180` autonomous-child policy.
-Safe provisional default: leave fan-out unchanged; only a single `workflow:` child is in scope.
-
-3. Should GET grow an `awaitingInput` boolean for Story 6.5?
-Safe provisional default: no.
-Surfaces compute `status === 'paused' && pending_interactions.some(row => row.status === 'pending')` from the existing embed so the OpenAPI contract stays stable.
-
-## Risks
-
-| Risk | Likelihood | Impact | Mitigation |
-| --- | --- | --- | --- |
-| A production-like pause mock hides a second-Ask failure | Med | High | Task 4 uses an idempotent no-approval pause mock that throws if approval is passed while paused |
-| `InMemoryStore` keeps stamping approval on Ask pause | High | Med | Task 3 fails until omitted `approvalContext` leaves metadata untouched |
-| Remaining-pending count is accidentally node-scoped | Low | High | Task 2 uses two node ids on one run |
-| Child Ask rows leak onto the parent GET embed | Med | High | Task 6 asserts parent list empty and parent POST 404 |
-| A sibling finishing is mistaken for per-node scheduling | Med | High | Task 4 allows `node_completed` only for the non-asking sibling and forbids the next layer |
-| Sprint file merge conflict is stacked | High | Low | Task 7 writes one new `last_updated` timestamp |
-
-## Completion Gate
-
-Story 6.4 is complete only when every acceptance criterion is satisfied, every focused test passes in its isolated package process, `bun run validate` exits zero, and the sprint key is `done`.
-
-If any gate fails, leave the sprint key unchanged and do not close issue 89.
+- [ ] All code blocks in this plan have been applied without replacing exact types or assertions with placeholders.
+- [ ] Every characterization test has a named mutation or regression that would make it fail.
+- [ ] The single red-green cycle fails for the expected test-double reason before the minimal harness repair and passes afterward.
+- [ ] No production behavior is changed beyond correcting stale comments because the accepted mechanics are already present in the verified repository baseline.
+- [ ] Sprint status contains one consistent real timestamp and marks only Story 6.4 `done`.
+- [ ] The implementation is ready for review with `Closes #89` and complete validation evidence.
