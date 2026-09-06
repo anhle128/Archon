@@ -1,163 +1,114 @@
 # Node Room From Graph (Legacy) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
-> Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task by task.
+> Track progress with the checkbox steps below.
 
-**Goal:** Give the legacy run view a node-centric graph that is a second door into the same per-type room as Logs, without replacing unmerged Logs or shipping Ask chrome.
+**Goal:** Give the legacy run view a node-centric graph as a second door into the same mounted per-type node room as Logs, while retaining the unmerged Logs view and excluding AskHuman chrome.
 
-**Architecture:** Add a dependency-free pure-TS module at `packages/web/src/lib/run-graph/` whose public API is `layout({ nodes: { id, nodeState }[], edges }) → { positions, routes }`.
-Keep React Flow as the legacy shell only: it consumes those positions and routes, and a graph node click selects the matching Logs row and mounts the existing Story 5.2 `LegacyNodeRoom`.
-Do not implement the console graph shell, do not add a frontend dependency, and do not change engine, database, API, or workflow YAML.
+**Architecture:** Add the adopted dependency-free `packages/web/src/lib/run-graph/` module for deterministic cycle-safe layout, cubic edge routing, and taken-path classification.
+Keep `@xyflow/react` as the legacy pan-and-zoom shell, but feed it only positions and routes from the pure module.
+Evolve the current Logs-only composition into one `LegacyGraphLogsPane` that stays mounted while its left navigation switches between Graph and Logs, so both doors share selection and exactly one `LegacyNodeRoom` instance.
 
-**Tech Stack:** Bun, strict TypeScript, React 19, `@xyflow/react` (legacy shell only), TanStack Query, react-dom/server, happy-dom, and bun:test.
+**Tech stack:** Bun, strict TypeScript, React 19, `@xyflow/react`, TanStack Query, happy-dom, react-dom/server, and bun:test.
 
-**Spec:** `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md`, Story 5.3.
+**Story authority:** `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md`, Story 5.3, FR1, UX-DR2, and UX-DR3.
 
-**Approved design inputs:** `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md` CAP-1, `_bmad-output/specs/spec-workflow-run-view-hitl/hitl-contract.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/brownfield.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/ux-design.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/README.md`, and `_bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md` AD-4.
+**Approved design authority:** `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md` CAP-1, `_bmad-output/specs/spec-workflow-run-view-hitl/hitl-contract.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/brownfield.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/ux-design.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/README.md`, and `_bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md` AD-4.
 
 **Issue:** https://github.com/anhle128/Archon/issues/83
 
-## Global Constraints
+## Scope and Non-Goals
 
-- Implement only Story 5.3 on the legacy `WorkflowExecution` Graph surface.
-- Keep Story 5.3 inspect-only for AskHuman.
-- Do not add an Ask card, an empty Ask slot, awaiting or waiting-on-you chrome, an awaiting run status, `node_awaiting` or `interaction_resolved` events, or `remote_agent_pending_interactions`.
-- Do not add `awaiting` to `WorkflowStepStatus` or to `workflowNodeStateSchema`.
-- The run-graph module must accept `nodeState: 'awaiting'` in fixtures even though the live UI does not produce it yet.
-- Taken-path must treat `awaiting` as on-path and must never classify it as skipped.
-- Keep declared approval and Plannotator gates on the existing `ApprovalContext` slot.
-- Do not change workflow YAML, the NativeTool handler contract, provider resume behavior, `pauseWorkflowRun`, CLI, chat, `manage_run`, or command-center behavior.
+- Implement only Story 5.3 on the legacy `WorkflowExecution` Graph and Logs surfaces.
+- Keep the Graph and Logs tabs and keep Logs as an unmerged chronological list of node-run rows.
+- Use one mounted legacy room pane for Graph and Logs, with a graph click and the equivalent Logs-row click resolving to the same `LogRow` and `LegacyNodeRoom` chrome.
+- Preserve the selected node and room when switching between Graph and Logs.
+- Keep loop-iteration and route-iteration selection when the operator clicks a specific Logs row.
+- Reset an iteration-specific Logs selection to the graph's canonical row when the operator clicks that graph node, including when it is the already-selected node.
+- Keep the existing graph auto-selection behavior for the running or first available DAG node.
+- Keep `LegacyNodeRoom` and every Story 5.2 per-type room implementation unchanged.
+- Keep the Graph shell inspect-only and do not add an Ask card, an empty Ask slot, awaiting chrome, waiting-on-you copy, or a new status badge.
+- Do not add `awaiting` to `WorkflowStepStatus`, `workflowNodeStateSchema`, the generated API types, or a live UI mapper in this story.
+- The pure run-graph module must still accept an `awaiting` fixture and classify it as on-path rather than skipped.
+- Do not change the engine, database, API routes, workflow schemas, workflow YAML, provider behavior, CLI, chat, `manage_run`, or command-center behavior.
 - Do not implement the console graph shell.
-- Do not import `packages/web/src/experiments/console` from `packages/web/src/components/workflows`.
-- Do not share a React room or panel component with the console.
-- Console may later import only `@/lib/run-graph` (already allowed by `eslint.config.mjs` because it is not `@/lib/api` or `@/components/**`).
+- Do not import any legacy React component into `packages/web/src/experiments/console/`.
 - Do not import `@archon/workflows` from `@archon/web`.
-- Do not change an API route or regenerate `packages/web/src/lib/api.generated.d.ts`.
-- Do not add a package dependency, including ELK or a second layout library.
-- `packages/web/src/lib/run-graph/` must not import React, DOM, `@xyflow/react`, `@dagrejs/dagre`, or `@/lib/api`.
-- Keep the Logs tab and its unmerged `LegacyNodeLogs` list.
-- Replace only the Graph tab's merged `WorkflowLogs` panel with the same `LegacyNodeRoom` as Logs.
-- Sequential non-DAG runs keep the merged logs panel.
-- Keep `remote_agent_messages` as the merged chat path and do not add a node identifier to it.
-- Keep `GET /api/workflows/runs/:runId/nodes/:nodeId/messages` as the command, prompt, and loop room source only.
+- Do not add a frontend dependency or call dagre from `packages/web/src/lib/run-graph/`.
+- Do not change `packages/web/src/lib/dag-layout.ts`; the Workflow Builder continues to use its existing dagre layout.
+- Sequential non-DAG runs continue to use the merged `WorkflowLogs` or `StepLogs` panel.
 - Do not introduce the TypeScript `any` type.
-- Use only existing design tokens and existing dependencies.
+- Use only existing design tokens.
 - Do not run `bun test` from the repository root.
-- Run focused tests from `packages/web` and finish with `bun run validate` from the repository root.
-- For every behavior change, write and run the failing test first, confirm that it fails for the missing behavior, implement only enough production code to pass, rerun the focused test, and refactor only while green.
-- Do not mark the sprint story done until all validation succeeds.
-
----
+- For every behavior change, write and run the failing test first, confirm that it fails for the missing behavior, implement the minimum production change, and refactor only while green.
+- Do not update sprint tracking until all focused and repository validation succeeds.
 
 ## Verified Repository Baseline
 
-- Issue 83 requests Story 5.3 and requires its epic acceptance criteria, focused evidence, and the sprint-status transition.
-- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml:48` marks Story 5.2 done and line 49 marks Story 5.3 backlog.
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml:48-49` marks Story 5.2 done and Story 5.3 backlog.
+- Issue 83 requires the Story 5.3 acceptance criteria, focused test evidence, and the sprint-status transition before close.
 - `packages/web/src/lib/run-graph/` does not exist.
-- `packages/web/src/lib/dag-layout.ts:6-7` defines `NODE_WIDTH = 180` and `NODE_HEIGHT = 80`.
-- `packages/web/src/lib/dag-layout.ts:49-84` lays out the builder and the current run Graph with dagre at `ranksep: 80` and `nodesep: 40`.
-- `packages/web/src/lib/dag-layout.ts:145-211` builds React Flow nodes and edges, including `route_loop` outcome edges using `ROUTE_LAYOUT_OUTCOMES = ['exhausted', 'negative', 'positive']`.
-- `packages/web/src/components/workflows/WorkflowDagViewer.tsx:42-64` still calls `dagNodesToReactFlow` and ignores taken-path.
-- `packages/web/src/components/workflows/WorkflowDagViewer.tsx:149-155` already forwards `onNodeClick(node.id)`.
-- `packages/web/src/components/workflows/WorkflowExecution.tsx:261` stores `selectedDagNode`.
-- `packages/web/src/components/workflows/WorkflowExecution.tsx:265` defaults `activeView` to `'graph'`.
+- `packages/web/src/lib/dag-layout.ts:6-7` uses a 180 by 80 node box.
+- `packages/web/src/lib/dag-layout.ts:49-84` uses dagre for the builder and the current run viewer.
+- `packages/web/src/lib/dag-layout.ts:145-211` produces dependency and `route_loop` edges for React Flow.
+- `packages/web/src/components/workflows/WorkflowDagViewer.tsx:59-120` currently calls `dagNodesToReactFlow` and colors an edge from only the target status.
+- `packages/web/src/components/workflows/WorkflowDagViewer.tsx:149-155` already forwards a clicked node id.
+- `packages/web/src/components/workflows/ExecutionDagNode.tsx:88-160` owns the existing node card, selection ring, status display, and React Flow handles.
+- `packages/web/src/components/workflows/WorkflowExecution.tsx:261-280` owns `selectedDagNode`, defaults to Graph, and resets selection on a run change.
 - `packages/web/src/components/workflows/WorkflowExecution.tsx:492-498` auto-selects a running or first DAG node.
-- `packages/web/src/components/workflows/WorkflowExecution.tsx:616-619` `handleNodeClick` sets `selectedDagNode` and bumps a merged-log scroll trigger.
-- `packages/web/src/components/workflows/WorkflowExecution.tsx:687-774` renders Graph as `WorkflowDagViewer` plus merged `WorkflowLogs`.
-- `packages/web/src/components/workflows/WorkflowExecution.tsx:787-811` renders Logs as `LegacyNodeLogs` plus `LegacyNodeRoom`.
-- `packages/web/src/components/workflows/LegacyNodeLogs.tsx:123-145` owns Logs-row selection internally and does not read `selectedDagNode`.
-- `packages/web/src/components/workflows/LegacyNodeRoom.tsx:24-36` is the one per-type room dispatcher.
-- `packages/web/src/components/workflows/build-log-rows.ts:14-22` defines `LogRow`.
-- `packages/web/src/components/workflows/build-log-rows.ts:100-141` emits either iteration rows or one ordinary `{ kind: 'node' }` row per node id.
-- `packages/web/src/components/workflows/source-control/dag-run-tabs.tsx:23-24` already shows Graph then Logs.
-- `packages/web/src/lib/types.ts:13` `WorkflowStepStatus` is `pending | running | completed | failed | skipped` with no `awaiting`.
-- `packages/web/src/lib/api.generated.d.ts:4845` GET run `nodeStates[].status` also has no `awaiting`.
-- `packages/web/package.json:15` already depends on `@dagrejs/dagre`; Story 5.3 must not add another layout package and must not use dagre inside `run-graph`.
-- `eslint.config.mjs:125-146` blocks console from `@/components/**` and `@/lib/api` functions; `@/lib/run-graph` is already a legal console import.
+- `packages/web/src/components/workflows/WorkflowExecution.tsx:687-774` renders Graph beside a merged logs panel.
+- `packages/web/src/components/workflows/WorkflowExecution.tsx:787-811` renders Logs through `LegacyNodeLogs`.
+- `packages/web/src/components/workflows/LegacyNodeLogs.tsx:70-100` synthesizes missing gate and control-flow node states.
+- `packages/web/src/components/workflows/LegacyNodeLogs.tsx:118-164` owns a Logs-only row selection and its own `LegacyNodeRoom`.
+- `packages/web/src/components/workflows/LegacyNodeRoom.tsx:24-170` is the single per-type room dispatcher from Story 5.2.
+- `packages/web/src/components/workflows/build-log-rows.ts:9-22` defines the complete `LogRow` selection contract.
+- `packages/web/src/components/workflows/build-log-rows.ts:100-143` emits either iteration rows or one ordinary row for each projected node.
+- `packages/web/src/components/workflows/NodeRunList.tsx` already accepts complete `LogRow` values on selection.
+- `packages/web/src/components/workflows/source-control/dag-run-tabs.tsx:23-24` already renders Graph before Logs.
+- `packages/web/src/lib/types.ts:13` and `packages/web/src/lib/api.generated.d.ts:4841-4846` intentionally have no `awaiting` live status yet.
+- `packages/web/package.json` already depends on `@xyflow/react` and dagre, so this story needs no dependency change.
+- `eslint.config.mjs:116-156` permits a future console import from `@/lib/run-graph` while continuing to forbid console imports from legacy components and API functions.
+- `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/app.js:225-312` supplies the approved cycle breaking, longest-path layering, two-direction barycenter sweeps, and horizontally centered layers.
+- `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/app.js:391-467` supplies the approved bottom-to-top, bottom-to-side, and left-flank cubic route geometry.
+- `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/app.js:471-483` defines taken path by whether the target has started, which maps to `running`, `completed`, `failed`, or future `awaiting` and excludes `pending` and `skipped`.
 
-## Scope Decisions
+## Design Decisions
 
-These are resolved implementation decisions, not open product questions.
+1. Keep React Flow as the legacy viewport shell.
+Story 5.3 and AD-4 require each surface to own its shell, and the existing legacy shell already supplies keyboard focus, pan, zoom, fit, controls, and node clicks.
 
-1. Keep React Flow as the legacy Graph shell.
-Do not replace it with a custom SVG canvas in this story.
-Console Story 5.5 owns its own SVG shell.
+2. Put all layout and route geometry in the pure module.
+The React Flow edge component renders the returned SVG path and does not recompute ports, bends, cycle lanes, or taken state.
 
-2. Implement layout, barycenter ordering, distance-aware ports, and taken-path inside `packages/web/src/lib/run-graph/` with zero runtime dependencies.
-Do not call dagre from that module.
+3. Detect DFS back edges before layering.
+A naive Kahn pass over all edges flattens a valid workflow containing a retry loop, which contradicts the approved complex-graph design.
 
-3. Do not share Graph and Logs selection in this story.
-`LegacyNodeLogs` keeps its internal `selectedLogRowId`.
-The Graph tab uses existing `selectedDagNode` plus `resolveGraphRoomRow`.
-Story 5.4 lifts the three-door shared selection.
+4. Use the approved target-started rule for taken path.
+An edge is taken when its target state is `running`, `completed`, `failed`, or `awaiting`.
+An edge is not taken when the target is missing, `pending`, or `skipped`.
 
-4. Graph nodes are authored top-level definition nodes from `GET /api/workflows/:name`.
-Do not add include-expanded ids or `loop_group` body nodes to the graph.
+5. Use the current 180 by 80 legacy graph node dimensions.
+This preserves the existing card geometry while adopting the approved layout algorithm.
 
-5. A graph click maps to the latest ordinary `{ kind: 'node' }` Logs row for that `nodeId`.
-If that node has only loop-iteration or route-iteration rows, use the last matching row in `buildLogRows` order.
-If no Logs row exists, synthesize `{ id: 'node:<nodeId>', selection: { kind: 'node' } }` from live status or the node id so a pending graph node still opens a room.
+6. Keep one room component mounted across Graph and Logs.
+`LegacyGraphLogsPane` owns the row selection and renders a stable right-hand `LegacyNodeRoom`; only the left navigation child switches.
 
-6. Existing Graph auto-select remains.
-After load, the Graph tab shows that node's room instead of merged logs.
-Logs still starts at `Select a node` until the operator clicks a row.
+7. Treat a graph node as a node-level selection.
+Prefer an ordinary row for that node, otherwise use the last iteration row in `buildLogRows` order, and synthesize a pending ordinary row only when no row exists.
 
-7. Remove merged `WorkflowLogs` from the DAG Graph tab only.
-Sequential non-DAG layout keeps merged logs.
+8. Preserve route and conditional edge metadata in the shared input type.
+This prevents the legacy shell and the future console shell from inventing parallel label and style side channels.
 
-8. Edge routing is port selection plus simple polylines, not the August orthogonal-router spec.
-Short/vertical forward edges use bottom → top.
-Long-offset forward edges use right → left or left → right.
-Back-edges (`target.y <= source.y`) use left → left around `min(x) - 24`.
-
-9. Positions depend only on node ids and edges.
-Changing `nodeState` must not move nodes.
-
-10. Live UI never maps a status to `awaiting` in this story.
-The module still classifies an `awaiting` fixture as on-path.
-
-## File Map and Responsibilities
-
-### Pure run-graph module
-
-- Create `packages/web/src/lib/run-graph/types.ts` for `NodeState`, `LayoutNode`, `LayoutEdge`, `Point`, `PortSide`, `LayoutRoute`, and `LayoutResult`.
-- Create `packages/web/src/lib/run-graph/constants.ts` for `NODE_WIDTH`, `NODE_HEIGHT`, `RANK_SEP`, `NODE_SEP`, `VERTICAL_DX`, and `SIDE_GUTTER`.
-- Create `packages/web/src/lib/run-graph/taken-path.ts` and `packages/web/src/lib/run-graph/taken-path.test.ts`.
-- Create `packages/web/src/lib/run-graph/positions.ts` and `packages/web/src/lib/run-graph/positions.test.ts`.
-- Create `packages/web/src/lib/run-graph/routes.ts` and `packages/web/src/lib/run-graph/routes.test.ts`.
-- Create `packages/web/src/lib/run-graph/layout.ts` for the public `layout()` orchestrator.
-- Create `packages/web/src/lib/run-graph/layout.test.ts` for the AD-4 public contract, awaiting fixture, and position stability.
-- Create `packages/web/src/lib/run-graph/index.ts` re-exporting only the public API.
-
-### Legacy shell input and room mapping
-
-- Create `packages/web/src/components/workflows/build-run-graph-input.ts` and `packages/web/src/components/workflows/build-run-graph-input.test.ts`.
-- Create `packages/web/src/components/workflows/synthesize-legacy-log-node-states.ts`.
-- Create `packages/web/src/components/workflows/resolve-graph-room-row.ts` and `packages/web/src/components/workflows/resolve-graph-room-row.test.ts`.
-- Create `packages/web/src/components/workflows/GraphRoomPane.tsx` and `packages/web/src/components/workflows/GraphRoomPane.test.tsx`.
-- Create `packages/web/src/components/workflows/RunGraphRouteEdge.tsx` and `packages/web/src/components/workflows/RunGraphRouteEdge.test.ts`.
-
-### Viewer and Graph tab wiring
-
-- Modify `packages/web/src/components/workflows/WorkflowDagViewer.tsx:1-176` to consume `layoutRunGraph` and `RunGraphRouteEdge`.
-- Modify `packages/web/src/components/workflows/WorkflowExecution.tsx:9-10` and `687-774` to mount `GraphRoomPane` instead of merged logs on the DAG Graph tab.
-- Modify `packages/web/src/components/workflows/LegacyNodeLogs.tsx:36-100` only to import the extracted synthesizer.
-- Leave `packages/web/src/components/workflows/LegacyNodeRoom.tsx` unchanged.
-- Leave `packages/web/src/lib/dag-layout.ts` unchanged so the Workflow Builder keeps dagre.
-- Leave `packages/web/src/experiments/console/**` unchanged.
-
-### Completion tracking
-
-- Modify `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml:2`, `37`, and `49` only after validation passes.
+9. Do not expand `include` or `loop_group` bodies in the browser.
+Use the top-level nodes returned by the existing `GET /api/workflows/:name` response exactly as the current viewer does.
 
 ## Authoritative Interfaces
 
-### Run-graph public API
+### Pure run-graph types
 
-The module's only public runtime export is `layout`.
-Types and box constants may also be exported from `index.ts`.
+Create `packages/web/src/lib/run-graph/types.ts` with these exact contracts.
 
-~~~ts
+```ts
 export type NodeState =
   | 'pending'
   | 'running'
@@ -165,6 +116,10 @@ export type NodeState =
   | 'failed'
   | 'skipped'
   | 'awaiting';
+
+export type RouteOutcome = 'positive' | 'negative' | 'exhausted';
+
+export type LayoutEdgeKind = 'dependency' | 'conditional' | 'route';
 
 export interface LayoutNode {
   id: string;
@@ -175,6 +130,9 @@ export interface LayoutEdge {
   id: string;
   source: string;
   target: string;
+  kind?: LayoutEdgeKind;
+  label?: string;
+  outcome?: RouteOutcome;
 }
 
 export interface Point {
@@ -188,9 +146,14 @@ export interface LayoutRoute {
   edgeId: string;
   source: string;
   target: string;
+  kind: LayoutEdgeKind;
+  label?: string;
+  outcome?: RouteOutcome;
   sourcePort: PortSide;
   targetPort: PortSide;
-  points: Point[];
+  path: string;
+  labelPosition: Point;
+  backEdge: boolean;
   taken: boolean;
 }
 
@@ -199,119 +162,261 @@ export interface LayoutResult {
   routes: LayoutRoute[];
 }
 
-export function layout(input: {
+export interface LayoutInput {
   nodes: readonly LayoutNode[];
   edges: readonly LayoutEdge[];
-}): LayoutResult;
-~~~
+}
+```
 
-`positions[id]` is the top-left of an `NODE_WIDTH` by `NODE_HEIGHT` box.
+The public entry point is exact.
 
-Constants:
+```ts
+export function layout(input: LayoutInput): LayoutResult;
+```
 
-~~~ts
+`packages/web/src/lib/run-graph/index.ts` exports `layout` as its only runtime value and re-exports the public types above with `export type`.
+It does not export internal DFS, barycenter, or route-builder helpers.
+
+### Constants
+
+Create `packages/web/src/lib/run-graph/constants.ts` with these exact values.
+
+```ts
 export const NODE_WIDTH = 180;
 export const NODE_HEIGHT = 80;
-export const RANK_SEP = 80;
 export const NODE_SEP = 40;
-export const VERTICAL_DX = 90;
-export const SIDE_GUTTER = 24;
-~~~
+export const RANK_SEP = 80;
+export const SIDE_PORT_THRESHOLD = NODE_WIDTH * 0.75;
+export const BACK_EDGE_GUTTER = 46;
+```
 
-### Taken-path
+### Taken-path classification
 
-~~~ts
-export function isOnPath(state: NodeState): boolean;
-export function isEdgeTaken(sourceState: NodeState, targetState: NodeState): boolean;
-~~~
+Create `packages/web/src/lib/run-graph/taken-path.ts` with these internal contracts.
 
-`isOnPath` is true only for `running`, `completed`, `failed`, and `awaiting`.
-`pending` and `skipped` are never on-path.
-`isEdgeTaken` is true only when both endpoints are on-path.
-A missing endpoint is not taken.
+```ts
+export function isOnPath(state: NodeState | undefined): boolean;
+export function isEdgeTaken(targetState: NodeState | undefined): boolean;
+```
 
-### Positions
+`isOnPath` returns true only for `running`, `completed`, `failed`, and `awaiting`.
+`isEdgeTaken` delegates to the target's `isOnPath` result because the approved semantic is that the target started.
 
-~~~ts
+### Cycle-safe positions
+
+Create `packages/web/src/lib/run-graph/positions.ts` with this internal result.
+
+```ts
+export interface PositionResult {
+  positions: Record<string, Point>;
+  layers: Record<string, number>;
+  backEdgeIds: ReadonlySet<string>;
+}
+
 export function computePositions(
   nodeIds: readonly string[],
   edges: readonly LayoutEdge[]
-): Record<string, Point>;
-~~~
+): PositionResult;
+```
 
-Use Kahn layering with `layer = max(parent layers) + 1` and sources at layer 0.
-Nodes that remain because of a cycle go into `maxAssignedLayer + 1`, or layer 0 when no layer was assigned.
-Drop edges whose source or target is absent from `nodeIds`.
-Preserve first-seen node id order when ids repeat.
-Inside each layer, start with input order, then apply three barycenter passes: a node's barycenter is the average parent index in the previous layer, or its current index when it has no in-layer-resolvable parent.
-Sort by barycenter, then original input index.
-`x = index * (NODE_WIDTH + NODE_SEP)`.
-`y = layer * (NODE_HEIGHT + RANK_SEP)`.
+The algorithm is deterministic and follows the approved prototype.
 
-### Ports and polylines
+- Deduplicate node ids by preserving their first appearance.
+- Ignore an edge whose source or target is not in that deduplicated id set.
+- Build adjacency lists in input edge order.
+- Visit nodes in first-seen order with a white, gray, and black DFS.
+- Mark self-edges and edges to a gray node as back edges.
+- Exclude only those back edges from longest-path layering.
+- Place every source at layer zero.
+- For each forward edge, assign `targetLayer = max(targetLayer, sourceLayer + 1)` in topological order.
+- Start every layer in first-seen node order.
+- Perform two complete barycenter sweeps, each with a top-down pass using predecessor positions and a bottom-up pass using successor positions.
+- Use the current position for a node with no neighbors in the adjacent direction.
+- Break equal barycenters with the node's original first-seen index.
+- Center every layer within the width of the widest layer.
+- Use `NODE_WIDTH + NODE_SEP` horizontally and `NODE_HEIGHT + RANK_SEP` vertically.
+- Return top-left coordinates.
+- Never read a node state while calculating positions.
 
-Anchor points:
+### Cubic routes
 
-- top: `{ x: x + NODE_WIDTH / 2, y }`
-- bottom: `{ x: x + NODE_WIDTH / 2, y: y + NODE_HEIGHT }`
-- left: `{ x, y: y + NODE_HEIGHT / 2 }`
-- right: `{ x: x + NODE_WIDTH, y: y + NODE_HEIGHT / 2 }`
+Create `packages/web/src/lib/run-graph/routes.ts` with this internal contract.
 
-Let `dx = target.x - source.x` and `dy = target.y - source.y`.
+```ts
+export function buildRoutes(input: {
+  positions: Readonly<Record<string, Point>>;
+  layers: Readonly<Record<string, number>>;
+  backEdgeIds: ReadonlySet<string>;
+  edges: readonly LayoutEdge[];
+  states: Readonly<Record<string, NodeState>>;
+}): LayoutRoute[];
+```
 
-- If `dy > 0` and `Math.abs(dx) <= VERTICAL_DX`: `sourcePort = 'bottom'`, `targetPort = 'top'`, `points = [sourceBottom, targetTop]`.
-- Else if `dy <= 0`: `sourcePort = 'left'`, `targetPort = 'left'`, `outerX = Math.min(source.x, target.x) - SIDE_GUTTER`, `points = [sourceLeft, { x: outerX, y: sourceLeft.y }, { x: outerX, y: targetLeft.y }, targetLeft]`.
-- Else if `dx > 0`: `sourcePort = 'right'`, `targetPort = 'left'`, `midX = (sourceRight.x + targetLeft.x) / 2`, `points = [sourceRight, { x: midX, y: sourceRight.y }, { x: midX, y: targetLeft.y }, targetLeft]`.
-- Else: `sourcePort = 'left'`, `targetPort = 'right'`, `midX = (sourceLeft.x + targetRight.x) / 2`, `points = [sourceLeft, { x: midX, y: sourceLeft.y }, { x: midX, y: targetRight.y }, targetRight]`.
+Every route is one cubic SVG path in `M x y C x y x y x y` form.
+The helper that formats this path stays in `routes.ts`, so the shell does not own route math.
 
+For a forward edge, start at the source's bottom center.
+Use the target's top center when the edge spans at most one layer or the absolute horizontal center offset is at most `SIDE_PORT_THRESHOLD`.
+Use the target's left center when the long-offset target is to the right of the source.
+Use the target's right center when the long-offset target is to the left of the source.
+For a top-target route, calculate `bend = Math.max(18, (end.y - start.y) * 0.45)` and use control points `{ x: start.x, y: start.y + bend }` and `{ x: end.x, y: end.y - bend }`.
+For a side-target route, let `direction` be `Math.sign(targetCenterX - sourceCenterX)`.
+Calculate `sourceBend = Math.max(24, (end.y - start.y) * 0.5)` and `targetBend = Math.max(40, Math.abs(targetCenterX - sourceCenterX) * 0.35)`.
+Use control points `{ x: start.x, y: start.y + sourceBend }` and `{ x: end.x - direction * targetBend, y: end.y }`.
+
+For a non-self back edge, start at the source's left center and end at the target's left center.
+Use `min(source.x, target.x) - BACK_EDGE_GUTTER` for both control-point x coordinates.
+Keep the first control point at the start y and the second control point at the end y.
+For a self-edge, start at the left center, end at the top center, set `lane = source.x - BACK_EDGE_GUTTER`, set `topLane = source.y - BACK_EDGE_GUTTER`, and use `{ x: lane, y: start.y }` and `{ x: lane, y: topLane }` as the controls.
+
+For a top-target route, set `labelPosition` to `{ x: (start.x + end.x) / 2 + 8, y: (start.y + end.y) / 2 }`.
+For a side-target route, set `labelPosition` to `{ x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 - 8 }`.
+For a non-self back edge, set `labelPosition` to `{ x: lane + 4, y: (start.y + end.y) / 2 }`.
+For a self-edge, set `labelPosition` at the upper-left gutter control point.
+Copy `kind`, `label`, and `outcome` from the input edge.
+Default a missing `kind` to `dependency`.
 Omit a route when either endpoint has no position.
-Self-loops use the back-edge rule.
+Set `taken` from only the target state.
+Set `backEdge` from `backEdgeIds`.
 
-### Shell graph input
+### Workflow-to-layout adapter
 
-~~~ts
-export interface RunGraphShellInput {
+Create `packages/web/src/components/workflows/build-run-graph-input.ts` with these exact contracts.
+
+```ts
+export interface RunGraphInput {
   nodes: LayoutNode[];
   edges: LayoutEdge[];
-  labels: Record<string, string>;
 }
 
 export function buildRunGraphInput(
   dagNodes: readonly DagNode[],
   liveStatus: readonly { nodeId: string; status: WorkflowStepStatus }[]
-): RunGraphShellInput;
+): RunGraphInput;
 
 export function layoutRunGraph(
   dagNodes: readonly DagNode[],
   liveStatus: readonly { nodeId: string; status: WorkflowStepStatus }[]
-): LayoutResult & { labels: Record<string, string> };
-~~~
+): LayoutResult;
+```
 
-`buildRunGraphInput` copies each `dagNodes` id in order.
-It sets `nodeState` from the last matching `liveStatus` entry, or `'pending'` when absent.
-It never emits `'awaiting'`.
-It builds ordinary edges from `depends_on` unless the dependency is a `route_loop` controller and this node is one of that controller's route targets.
-It then adds one edge per configured `positive` / `negative` / `exhausted` target using insertion order `exhausted`, `negative`, `positive`.
-Edge ids match `dag-layout.ts`: `${source}->${target}`, or `${source}->${target}:${outcome}` when that base id is already used.
-Labels are the outcome string for route edges and are omitted for ordinary edges.
+`buildRunGraphInput` copies top-level definition nodes in definition order.
+The last matching live status wins, and a missing live status maps to `pending`.
+This live adapter never emits `awaiting` in Story 5.3.
 
-`layoutRunGraph` calls `layout({ nodes, edges })` and returns `{ ...result, labels }`.
+An ordinary `depends_on` edge has id `${dependency}->${node.id}`.
+An ordinary edge has `kind: 'conditional'` and `label: node.when` when `node.when` is a non-empty string.
+Otherwise an ordinary edge has `kind: 'dependency'` and no label.
 
-### Graph room row
+Do not emit an ordinary dependency edge from a `route_loop` controller to one of that controller's configured route targets.
+Emit route targets in `exhausted`, `negative`, and `positive` insertion order to retain the current visual ordering.
+Derive that order with `[...ROUTE_LOOP_OUTCOMES].reverse()` rather than duplicating the canonical outcome tuple.
+Each route edge has `kind: 'route'`, its `outcome`, and the outcome as its label.
+Use `${source}->${target}` when free and `${source}->${target}:${outcome}` on an id collision.
 
-~~~ts
+`layoutRunGraph` passes the adapter result directly to `layout`.
+
+### React Flow view model
+
+Create `packages/web/src/components/workflows/build-workflow-dag-view-model.ts` with a pure mapping boundary.
+
+```ts
+export interface WorkflowDagViewModel {
+  nodes: ExecutionFlowNode[];
+  edges: RunGraphFlowEdge[];
+}
+
+export function buildWorkflowDagViewModel(input: {
+  dagNodes: readonly DagNode[];
+  liveStatus: readonly DagNodeState[];
+  selectedNodeId: string | null;
+}): WorkflowDagViewModel;
+```
+
+The function calls `layoutRunGraph` and creates one `ExecutionFlowNode` for every definition node.
+It continues to use `resolveExecutionNodeDisplay` and copies all current status, duration, error, iteration, route-decision, provider, model, tier, effort, and thinking fields.
+It sets each node's `position` from the pure layout result and sets `selected` from `selectedNodeId`.
+
+The function creates one React Flow edge for every returned route.
+Each edge uses `type: 'runGraphRoute'`, retains the route label, stores the complete route in typed `data`, and animates only while the target status is `running`.
+Each edge uses the existing `MarkerType.ArrowClosed` marker.
+The mapping never marks a skipped target as taken.
+
+Create `packages/web/src/components/workflows/RunGraphRouteEdge.tsx` with these types.
+
+```ts
+export type RunGraphFlowEdge = Edge<
+  { route: LayoutRoute },
+  'runGraphRoute'
+>;
+
+export function RunGraphRouteEdge(
+  props: EdgeProps<RunGraphFlowEdge>
+): React.ReactElement | null;
+```
+
+The component renders nothing when `data?.route.path` is empty.
+Otherwise it renders `BaseEdge` with `path`, `labelX`, `labelY`, `label`, and `markerEnd` taken from the route and React Flow props.
+It does not calculate geometry.
+Untaken edges use `var(--border)`.
+Taken dependency and conditional edges use `var(--accent-bright)`.
+Taken positive routes use `var(--success)`.
+Taken negative routes use `var(--accent)`.
+Taken exhausted routes use `var(--error)`.
+Back edges and conditional edges use a dashed stroke.
+
+### Shared Graph and Logs room pane
+
+Move `packages/web/src/components/workflows/LegacyNodeLogs.tsx` to `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` and rename its export.
+Preserve its state synthesizer, `buildLogRows`, and Story 5.2 room props.
+
+Add these props to the renamed component.
+
+```ts
+export interface LegacyGraphLogsPaneProps {
+  activeView: 'graph' | 'logs';
+  renderGraph: (input: {
+    selectedNodeId: string | null;
+    onNodeClick: (nodeId: string) => void;
+  }) => ReactNode;
+  selectedNodeId: string | null;
+  onSelectNode: (nodeId: string | null) => void;
+  runId: string;
+  nodeStates: readonly WorkflowNodeStateResponse[];
+  events: readonly WorkflowEventResponse[];
+  isLive: boolean;
+  loadMessages: typeof getWorkflowNodeMessages;
+  roomHeader?: ReactNode;
+  roomFooter?: ReactNode;
+  definitionNodes: readonly DagNode[];
+  definitionPending: boolean;
+  runStatus: WorkflowRunStatus;
+  approval: unknown;
+  onApprove: () => Promise<void>;
+  onReject: (reason?: string) => Promise<void>;
+}
+```
+
+Create `packages/web/src/components/workflows/resolve-graph-room-row.ts` with this contract.
+
+```ts
 export function resolveGraphRoomRow(input: {
   rows: readonly LogRow[];
   nodeId: string | null;
-  liveStatus: readonly { nodeId: string; name: string; status: WorkflowNodeStateResponse['status'] }[];
+  liveStatus: readonly {
+    nodeId: string;
+    name: string;
+    status: WorkflowNodeStateResponse['status'];
+  }[];
 }): LogRow | null;
-~~~
+```
 
-If `nodeId` is null, return null.
-If any `rows` have that `nodeId`, return the last `{ selection.kind === 'node' }` match, else the last match in array order.
-Otherwise synthesize:
+Return null when `nodeId` is null.
+Among matching rows, return the last ordinary `{ kind: 'node' }` row when present.
+Otherwise return the last matching row in current array order.
+When no row matches, synthesize this exact row from the last matching live status or the node id.
 
-~~~ts
+```ts
 {
   id: `node:${nodeId}`,
   nodeId,
@@ -321,235 +426,132 @@ Otherwise synthesize:
   sourceIndex: 0,
   selection: { kind: 'node' },
 }
-~~~
+```
 
-### Graph room pane
+`LegacyGraphLogsPane` retains `selectedLogRowId` for iteration-specific Logs selection.
+Resolve `explicitSelectedRow` from that id before deriving the displayed selection.
+Its selected row is `explicitSelectedRow` only while that row exists and belongs to `selectedNodeId`.
+Otherwise its selected row comes from `resolveGraphRoomRow`.
+Pass the synthesized visible node states as the resolver's `liveStatus` input.
 
-~~~ts
-export interface GraphRoomPaneProps {
-  runId: string;
-  selectedNodeId: string | null;
-  nodeStates: readonly WorkflowNodeStateResponse[];
-  events: readonly WorkflowEventResponse[];
-  isLive: boolean;
-  loadMessages: typeof getWorkflowNodeMessages;
-  definitionNodes: readonly DagNode[];
-  definitionPending: boolean;
-  runStatus: WorkflowRunStatus;
-  approval: unknown;
-  onApprove: () => Promise<void>;
-  onReject: (reason?: string) => Promise<void>;
-  liveStatus: readonly { nodeId: string; name: string; status: WorkflowNodeStateResponse['status'] }[];
-}
-~~~
+The graph callback clears `selectedLogRowId` before calling `onSelectNode(nodeId)`.
+This rule applies even when the clicked graph node is already selected.
+The Logs callback stores the complete row id and calls `onSelectNode(row.nodeId)`.
+A run-id change or polling that removes the explicit selected row clears `selectedLogRowId` and calls `onSelectNode(null)` exactly once, preserving the Story 5.1 reset contract.
+An external selected-node change clears an explicit row belonging to the previous node.
 
-`GraphRoomPane` builds rows with the same `synthesizeLegacyLogNodeStates` contract as Logs.
-Do not duplicate that synthesizer.
-Import nothing from `LegacyNodeLogs.tsx` if that would create a cycle.
-Copy the existing synthesizer into `packages/web/src/components/workflows/synthesize-legacy-log-node-states.ts` only if Task 5 cannot import it without a cycle.
-The default is: move `synthesizeLegacyLogNodeStates` and its local helpers from `LegacyNodeLogs.tsx` into `synthesize-legacy-log-node-states.ts` and import it from both `LegacyNodeLogs` and `GraphRoomPane`.
-That move is a behavior-preserving extract and still needs a failing-then-passing import test in Task 5.
+Render one stable `ResizablePanelGroup` for both Graph and Logs.
+Use the current Graph split values of left `defaultSize={60}` and `minSize={30}` plus right `defaultSize={40}` and `minSize={20}`.
+The left panel calls `renderGraph` in Graph mode and renders the existing `NodeRunList` in Logs mode.
+Pass `selectedRow?.id ?? null` to `NodeRunList.selectedRowId` so the row resolved from a Graph selection is visibly selected after switching to Logs.
+The right panel always renders `roomHeader`, one `LegacyNodeRoom`, and `roomFooter` in the same React tree position.
+Do not render `NodeRunList` in Graph mode.
+Do not mount a second `LegacyNodeRoom` in either mode.
 
-`GraphRoomPane` then calls `resolveGraphRoomRow` and renders one `LegacyNodeRoom`.
-It must not render `NodeRunList`.
-
-### Polyline helper
-
-~~~ts
-export function polylinePath(points: readonly Point[]): string;
-~~~
-
-Empty points return `''`.
-Otherwise `M ${x} ${y}` plus ` L ${x} ${y}` for each following point, using the raw numbers from layout.
-
-### Exact visible copy
-
-- `Select a node` when the Graph tab has no `selectedNodeId`.
-- Existing Story 5.2 room copy for every type.
-- Graph tab label remains `Graph`.
-- Logs tab label remains `Logs`.
-- Do not add `awaiting`, `waiting on you`, or `AskHuman` copy.
-
----
-
-### Task 1: Classify taken-path including awaiting
+## Task 1: Add the Pure Types and Taken-Path Contract
 
 **Files:**
 
 - Create `packages/web/src/lib/run-graph/types.ts`.
+- Create `packages/web/src/lib/run-graph/constants.ts`.
 - Create `packages/web/src/lib/run-graph/taken-path.ts`.
 - Create `packages/web/src/lib/run-graph/taken-path.test.ts`.
 
-**Interfaces:**
+- [ ] **Step 1: Write the failing tests.**
 
-- Produces `NodeState`, `isOnPath`, and `isEdgeTaken`.
-- Consumed by Tasks 3 and 4.
+Test every `NodeState` value through `isOnPath`.
+Assert that `running`, `completed`, `failed`, and `awaiting` are true.
+Assert that `pending`, `skipped`, and `undefined` are false.
+Assert that `isEdgeTaken('awaiting')` is true and `isEdgeTaken('skipped')` is false.
 
-- [ ] **Step 1: Write the failing taken-path tests.**
+- [ ] **Step 2: Run the RED test.**
 
-~~~ts
-import { describe, expect, test } from 'bun:test';
-import { isEdgeTaken, isOnPath } from './taken-path';
-import type { NodeState } from './types';
-
-const ON_PATH: readonly NodeState[] = ['running', 'completed', 'failed', 'awaiting'];
-const OFF_PATH: readonly NodeState[] = ['pending', 'skipped'];
-
-describe('isOnPath', () => {
-  test('treats awaiting as on-path and skipped as off-path', () => {
-    for (const state of ON_PATH) {
-      expect(isOnPath(state)).toBe(true);
-    }
-    for (const state of OFF_PATH) {
-      expect(isOnPath(state)).toBe(false);
-    }
-  });
-});
-
-describe('isEdgeTaken', () => {
-  test('marks completed to awaiting as taken', () => {
-    expect(isEdgeTaken('completed', 'awaiting')).toBe(true);
-  });
-
-  test('never marks a skipped target as taken', () => {
-    expect(isEdgeTaken('completed', 'skipped')).toBe(false);
-    expect(isEdgeTaken('awaiting', 'skipped')).toBe(false);
-  });
-
-  test('does not mark pending endpoints as taken', () => {
-    expect(isEdgeTaken('completed', 'pending')).toBe(false);
-    expect(isEdgeTaken('pending', 'running')).toBe(false);
-  });
-});
-~~~
-
-- [ ] **Step 2: Run the test to verify it fails.**
-
-~~~bash
+```bash
 ( cd packages/web && bun test src/lib/run-graph/taken-path.test.ts )
-~~~
+```
 
-Expected: FAIL because `./taken-path` cannot be resolved.
+Expected result: FAIL because the new module does not exist.
 
-- [ ] **Step 3: Write the minimal implementation.**
+- [ ] **Step 3: Implement only the declared types, constants, and classifiers.**
 
-`types.ts` exports `NodeState` exactly as specified.
-`taken-path.ts` implements `isOnPath` with an explicit union check and `isEdgeTaken` as `isOnPath(source) && isOnPath(target)`.
+Keep these files free of React, DOM, API, React Flow, and dagre imports.
 
-- [ ] **Step 4: Run the test to verify it passes.**
+- [ ] **Step 4: Run the GREEN test.**
 
-~~~bash
+```bash
 ( cd packages/web && bun test src/lib/run-graph/taken-path.test.ts )
-~~~
+```
 
-Expected: PASS.
+Expected result: PASS.
 
 - [ ] **Step 5: Refactor only while green.**
 
-Keep the helpers free of layout math.
+Do not add status aliases or a live `awaiting` mapper.
 
 - [ ] **Step 6: Commit Task 1.**
 
-~~~bash
-git add packages/web/src/lib/run-graph/types.ts packages/web/src/lib/run-graph/taken-path.ts packages/web/src/lib/run-graph/taken-path.test.ts
-git commit -m "feat(web): classify run-graph taken-path including awaiting"
-~~~
+```bash
+git add packages/web/src/lib/run-graph/types.ts packages/web/src/lib/run-graph/constants.ts packages/web/src/lib/run-graph/taken-path.ts packages/web/src/lib/run-graph/taken-path.test.ts
+git commit -m "feat(web): define run graph path states"
+```
 
-### Task 2: Compute stable layered positions
+## Task 2: Implement Cycle-Safe Layered Positions
 
 **Files:**
 
-- Create `packages/web/src/lib/run-graph/constants.ts`.
 - Create `packages/web/src/lib/run-graph/positions.ts`.
 - Create `packages/web/src/lib/run-graph/positions.test.ts`.
 
-**Interfaces:**
-
-- Consumes `LayoutEdge` from Task 1 types.
-- Produces `computePositions` and the box constants.
-
 - [ ] **Step 1: Write the failing position tests.**
 
-~~~ts
-import { describe, expect, test } from 'bun:test';
-import { NODE_HEIGHT, NODE_SEP, NODE_WIDTH, RANK_SEP } from './constants';
-import { computePositions } from './positions';
+Cover all of these cases in `positions.test.ts`.
 
-describe('computePositions', () => {
-  test('places a one-node graph at the origin', () => {
-    expect(computePositions(['a'], [])).toEqual({ a: { x: 0, y: 0 } });
-  });
+- An empty input returns empty positions, layers, and back-edge ids.
+- A single node is at `{ x: 0, y: 0 }`.
+- Duplicate node ids preserve the first position only.
+- Edges with a missing endpoint do not affect layout.
+- A fork centers the one-node parent layer over its two-node child layer.
+- The crossing fixture `a -> d` and `b -> c` reorders the second layer to `d, c`.
+- The retry fixture `start -> work -> review -> work` marks only `review -> work` as a back edge and leaves `start`, `work`, and `review` on three successive layers.
+- A two-node cycle is not flattened into one layer.
+- Repeating the same input returns byte-for-byte equal output.
 
-  test('layers a fork and orders the children by input id when barycenters tie', () => {
-    const positions = computePositions(
-      ['a', 'c', 'b'],
-      [
-        { id: 'a->b', source: 'a', target: 'b' },
-        { id: 'a->c', source: 'a', target: 'c' },
-      ]
-    );
-    expect(positions.a).toEqual({ x: 0, y: 0 });
-    expect(positions.b).toEqual({ x: 0, y: NODE_HEIGHT + RANK_SEP });
-    expect(positions.c).toEqual({
-      x: NODE_WIDTH + NODE_SEP,
-      y: NODE_HEIGHT + RANK_SEP,
-    });
-  });
+Use constants in coordinate assertions rather than copying numeric gaps.
 
-  test('places a two-node cycle on one overflow layer in input order', () => {
-    const positions = computePositions(
-      ['a', 'b'],
-      [
-        { id: 'a->b', source: 'a', target: 'b' },
-        { id: 'b->a', source: 'b', target: 'a' },
-      ]
-    );
-    expect(positions.a).toEqual({ x: 0, y: 0 });
-    expect(positions.b).toEqual({ x: NODE_WIDTH + NODE_SEP, y: 0 });
-  });
+- [ ] **Step 2: Run the RED test.**
 
-  test('ignores edges whose endpoints are missing', () => {
-    expect(
-      computePositions(['a'], [{ id: 'a->missing', source: 'a', target: 'missing' }])
-    ).toEqual({ a: { x: 0, y: 0 } });
-  });
-});
-~~~
-
-- [ ] **Step 2: Run the test to verify it fails.**
-
-~~~bash
+```bash
 ( cd packages/web && bun test src/lib/run-graph/positions.test.ts )
-~~~
+```
 
-Expected: FAIL because `./positions` cannot be resolved.
+Expected result: FAIL because `positions.ts` does not exist.
 
-- [ ] **Step 3: Write the minimal implementation.**
+- [ ] **Step 3: Implement DFS cycle breaking, longest-path layering, barycenter sweeps, and centered coordinates.**
 
-Export the six constants from `constants.ts`.
-Implement Kahn layering and three barycenter passes as specified.
-Do not read `nodeState`.
+Use typed `Map` and `Set` values internally.
+Use stable original-index tie breaks after every barycenter calculation.
+Do not catch and silently replace a programming error with arbitrary fallback positions.
 
-- [ ] **Step 4: Run the test to verify it passes.**
+- [ ] **Step 4: Run the GREEN test.**
 
-~~~bash
+```bash
 ( cd packages/web && bun test src/lib/run-graph/positions.test.ts )
-~~~
+```
 
-Expected: PASS.
+Expected result: PASS.
 
 - [ ] **Step 5: Refactor only while green.**
 
-Keep the function under one module.
+Keep all traversal order explicit and deterministic.
 
 - [ ] **Step 6: Commit Task 2.**
 
-~~~bash
-git add packages/web/src/lib/run-graph/constants.ts packages/web/src/lib/run-graph/positions.ts packages/web/src/lib/run-graph/positions.test.ts
-git commit -m "feat(web): add run-graph layered positions"
-~~~
+```bash
+git add packages/web/src/lib/run-graph/positions.ts packages/web/src/lib/run-graph/positions.test.ts
+git commit -m "feat(web): add cycle-safe run graph positions"
+```
 
-### Task 3: Route distance-aware ports and export layout()
+## Task 3: Implement Cubic Routes and the Public Layout Function
 
 **Files:**
 
@@ -559,949 +561,485 @@ git commit -m "feat(web): add run-graph layered positions"
 - Create `packages/web/src/lib/run-graph/layout.test.ts`.
 - Create `packages/web/src/lib/run-graph/index.ts`.
 
-**Interfaces:**
+- [ ] **Step 1: Write the failing route tests.**
 
-- Consumes Tasks 1 and 2.
-- Produces public `layout()`.
+Cover all of these cases in `routes.test.ts`.
 
-- [ ] **Step 1: Write the failing route and layout tests.**
+- An adjacent-layer forward edge leaves the source bottom and enters the target top.
+- A vertically aligned multi-layer edge still enters the target top.
+- A long edge offset to the right leaves the source bottom and enters the target left.
+- A long edge offset to the left leaves the source bottom and enters the target right.
+- A retry back edge uses left-to-left ports and a lane exactly `BACK_EDGE_GUTTER` left of the leftmost endpoint.
+- A self-edge emits a non-empty visible upper-left curve.
+- Missing endpoints omit the route.
+- Edge kind, label, and outcome survive into the route.
+- An `awaiting` target produces `taken: true`.
+- A `skipped`, `pending`, or missing target state produces `taken: false`.
 
-~~~ts
-import { describe, expect, test } from 'bun:test';
-import { NODE_HEIGHT, NODE_SEP, NODE_WIDTH, RANK_SEP, SIDE_GUTTER } from './constants';
-import { buildRoutes } from './routes';
-import type { Point } from './types';
+Assert exact ports, endpoints, back-edge flags, and deterministic path strings.
 
-describe('buildRoutes', () => {
-  test('uses bottom and top ports for a short vertical forward edge', () => {
-    const positions: Record<string, Point> = {
-      a: { x: 0, y: 0 },
-      b: { x: 0, y: NODE_HEIGHT + RANK_SEP },
-    };
-    const routes = buildRoutes(
-      positions,
-      [{ id: 'a->b', source: 'a', target: 'b' }],
-      { a: 'completed', b: 'completed' }
-    );
-    expect(routes).toEqual([
-      {
-        edgeId: 'a->b',
-        source: 'a',
-        target: 'b',
-        sourcePort: 'bottom',
-        targetPort: 'top',
-        points: [
-          { x: NODE_WIDTH / 2, y: NODE_HEIGHT },
-          { x: NODE_WIDTH / 2, y: NODE_HEIGHT + RANK_SEP },
-        ],
-        taken: true,
-      },
-    ]);
-  });
+- [ ] **Step 2: Write the failing public-layout tests.**
 
-  test('uses side ports for a long offset forward edge', () => {
-    const positions: Record<string, Point> = {
-      a: { x: 0, y: 0 },
-      c: { x: NODE_WIDTH + NODE_SEP, y: NODE_HEIGHT + RANK_SEP },
-    };
-    const routes = buildRoutes(
-      positions,
-      [{ id: 'a->c', source: 'a', target: 'c' }],
-      { a: 'completed', c: 'running' }
-    );
-    expect(routes[0]?.sourcePort).toBe('right');
-    expect(routes[0]?.targetPort).toBe('left');
-    expect(routes[0]?.points).toHaveLength(4);
-    expect(routes[0]?.taken).toBe(true);
-  });
+Cover all of these cases in `layout.test.ts`.
 
-  test('routes a back-edge on the left gutter', () => {
-    const positions: Record<string, Point> = {
-      a: { x: 0, y: 0 },
-      b: { x: 0, y: NODE_HEIGHT + RANK_SEP },
-    };
-    const routes = buildRoutes(
-      positions,
-      [{ id: 'b->a', source: 'b', target: 'a' }],
-      { a: 'completed', b: 'completed' }
-    );
-    expect(routes[0]?.sourcePort).toBe('left');
-    expect(routes[0]?.targetPort).toBe('left');
-    expect(routes[0]?.points[1]?.x).toBe(-SIDE_GUTTER);
-  });
+- Empty input returns `{ positions: {}, routes: [] }`.
+- Changing only node states leaves all positions byte-for-byte equal.
+- `completed -> awaiting` is taken.
+- `completed -> skipped` is not taken.
+- A retry loop keeps progressive layers and returns one left-flank back route.
+- Duplicate node ids keep the first layout position and use the last state for taken-path classification.
 
-  test('omits a route when a node is missing', () => {
-    expect(
-      buildRoutes({ a: { x: 0, y: 0 } }, [{ id: 'a->z', source: 'a', target: 'z' }], {
-        a: 'completed',
-      })
-    ).toEqual([]);
-  });
-});
-~~~
+- [ ] **Step 3: Run both RED tests.**
 
-And `layout.test.ts`:
-
-~~~ts
-import { describe, expect, test } from 'bun:test';
-import { layout } from './layout';
-
-describe('layout', () => {
-  test('returns empty collections for an empty graph', () => {
-    expect(layout({ nodes: [], edges: [] })).toEqual({ positions: {}, routes: [] });
-  });
-
-  test('keeps positions stable when only nodeState changes', () => {
-    const edges = [
-      { id: 'start->ask', source: 'start', target: 'ask' },
-      { id: 'start->skip', source: 'start', target: 'skip' },
-    ];
-    const first = layout({
-      nodes: [
-        { id: 'start', nodeState: 'running' },
-        { id: 'ask', nodeState: 'pending' },
-        { id: 'skip', nodeState: 'pending' },
-      ],
-      edges,
-    });
-    const second = layout({
-      nodes: [
-        { id: 'start', nodeState: 'completed' },
-        { id: 'ask', nodeState: 'awaiting' },
-        { id: 'skip', nodeState: 'skipped' },
-      ],
-      edges,
-    });
-    expect(second.positions).toEqual(first.positions);
-  });
-
-  test('treats awaiting as on-path and skipped as not taken', () => {
-    const result = layout({
-      nodes: [
-        { id: 'start', nodeState: 'completed' },
-        { id: 'ask', nodeState: 'awaiting' },
-        { id: 'skip', nodeState: 'skipped' },
-      ],
-      edges: [
-        { id: 'start->ask', source: 'start', target: 'ask' },
-        { id: 'start->skip', source: 'start', target: 'skip' },
-      ],
-    });
-    expect(result.routes.find(route => route.edgeId === 'start->ask')?.taken).toBe(true);
-    expect(result.routes.find(route => route.edgeId === 'start->skip')?.taken).toBe(false);
-  });
-});
-~~~
-
-- [ ] **Step 2: Run the tests to verify they fail.**
-
-~~~bash
+```bash
 ( cd packages/web && bun test src/lib/run-graph/routes.test.ts src/lib/run-graph/layout.test.ts )
-~~~
+```
 
-Expected: FAIL because the modules do not exist.
+Expected result: FAIL because route and layout modules do not exist.
 
-- [ ] **Step 3: Write the minimal implementation.**
+- [ ] **Step 4: Implement the route builder and `layout`.**
 
-Implement `buildRoutes(positions, edges, states: Record<string, NodeState>)`.
-Missing state is treated as `pending`.
-Implement `layout` as `computePositions` plus `buildRoutes`.
-Duplicate node ids: last `nodeState` wins, first id keeps its first-seen place in the position input list.
-`index.ts` re-exports `layout`, the types, and the six constants.
+`layout` deduplicates ids for positioning, lets the last duplicate state win, calls `computePositions`, and passes its complete topology result to `buildRoutes`.
+Return routes in valid input-edge order.
 
-- [ ] **Step 4: Run the tests to verify they pass.**
+- [ ] **Step 5: Add the narrow public export file.**
 
-~~~bash
+Export only the `layout` runtime value and type-only public contracts from `index.ts`.
+
+- [ ] **Step 6: Run all pure-module GREEN tests.**
+
+```bash
 ( cd packages/web && bun test src/lib/run-graph/taken-path.test.ts src/lib/run-graph/positions.test.ts src/lib/run-graph/routes.test.ts src/lib/run-graph/layout.test.ts )
-~~~
+```
 
-Expected: PASS.
+Expected result: PASS.
 
-- [ ] **Step 5: Refactor only while green.**
+- [ ] **Step 7: Refactor only while green.**
 
-Do not add React or API imports.
+Run this import audit after refactoring.
 
-- [ ] **Step 6: Commit Task 3.**
+```bash
+rg -n "from ['\"](react|@xyflow/react|@dagrejs/dagre|@/lib/api)['\"]" packages/web/src/lib/run-graph --glob '!*.test.ts'
+rg -n "\b(document|window)\b" packages/web/src/lib/run-graph --glob '!*.test.ts'
+```
 
-~~~bash
+Expected result: both searches return no matches.
+
+- [ ] **Step 8: Commit Task 3.**
+
+```bash
 git add packages/web/src/lib/run-graph
-git commit -m "feat(web): add pure run-graph layout module"
-~~~
+git commit -m "feat(web): add pure run graph layout"
+```
 
-### Task 4: Map definition nodes into layout input
+## Task 4: Adapt Workflow Definitions to the Shared Layout Input
 
 **Files:**
 
 - Create `packages/web/src/components/workflows/build-run-graph-input.ts`.
 - Create `packages/web/src/components/workflows/build-run-graph-input.test.ts`.
 
-**Interfaces:**
+- [ ] **Step 1: Write the failing adapter tests.**
 
-- Consumes public `layout()`.
-- Produces `buildRunGraphInput` and `layoutRunGraph`.
+Cover all of these cases.
 
-- [ ] **Step 1: Write the failing input tests.**
+- Definition order becomes layout-node order.
+- The last duplicate live status wins.
+- A missing live status becomes `pending`.
+- The adapter never emits `awaiting` from `WorkflowStepStatus`.
+- Ordinary dependencies become dependency edges.
+- A non-empty `when` makes each incoming ordinary edge conditional and carries the exact condition label.
+- `route_loop` targets suppress duplicate ordinary controller-to-target dependencies.
+- `route_loop` edges are emitted in `exhausted`, `negative`, and `positive` order with stable ids, kinds, labels, and outcomes.
+- Repeated route targets receive unique ids.
+- `layoutRunGraph` returns every definition node position and a skipped target's incoming route is not taken.
 
-~~~ts
-import { describe, expect, test } from 'bun:test';
-import type { DagNode } from '@/lib/api';
-import { buildRunGraphInput, layoutRunGraph } from './build-run-graph-input';
+- [ ] **Step 2: Run the RED test.**
 
-function routeLoopNode(): DagNode {
-  return {
-    id: 'router',
-    route_loop: {
-      condition: 'ok',
-      max_iterations: 3,
-      routes: {
-        positive: 'done',
-        negative: 'fix',
-        exhausted: 'fail',
-      },
-    },
-    depends_on: ['start'],
-  } as DagNode;
-}
-
-describe('buildRunGraphInput', () => {
-  test('maps missing live status to pending and ordinary depends_on to unlabeled edges', () => {
-    const input = buildRunGraphInput(
-      [
-        { id: 'start', prompt: 'go' },
-        { id: 'end', prompt: 'stop', depends_on: ['start'] },
-      ],
-      [{ nodeId: 'start', status: 'completed' }]
-    );
-    expect(input.nodes).toEqual([
-      { id: 'start', nodeState: 'completed' },
-      { id: 'end', nodeState: 'pending' },
-    ]);
-    expect(input.edges).toEqual([{ id: 'start->end', source: 'start', target: 'end' }]);
-    expect(input.labels).toEqual({});
-  });
-
-  test('emits labeled route_loop edges and suppresses the duplicate depends_on route-target edge', () => {
-    const input = buildRunGraphInput(
-      [
-        { id: 'start', prompt: 'go' },
-        routeLoopNode(),
-        { id: 'fix', prompt: 'fix', depends_on: ['router'] },
-        { id: 'done', prompt: 'done', depends_on: ['router'] },
-        { id: 'fail', prompt: 'fail', depends_on: ['router'] },
-      ],
-      []
-    );
-    expect(input.edges.filter(edge => edge.source === 'router').map(edge => edge.id)).toEqual([
-      'router->fail',
-      'router->fix',
-      'router->done',
-    ]);
-    expect(input.labels).toEqual({
-      'router->fail': 'exhausted',
-      'router->fix': 'negative',
-      'router->done': 'positive',
-    });
-    expect(input.edges.some(edge => edge.id === 'router->fix' && input.labels[edge.id] === undefined)).toBe(
-      false
-    );
-  });
-
-  test('never emits awaiting from live WorkflowStepStatus', () => {
-    const input = buildRunGraphInput([{ id: 'ask', prompt: 'ask' }], [
-      { nodeId: 'ask', status: 'running' },
-    ]);
-    expect(input.nodes[0]?.nodeState).toBe('running');
-  });
-});
-
-describe('layoutRunGraph', () => {
-  test('returns layout positions for every definition node', () => {
-    const result = layoutRunGraph(
-      [
-        { id: 'start', prompt: 'go' },
-        { id: 'end', prompt: 'stop', depends_on: ['start'] },
-      ],
-      [
-        { nodeId: 'start', status: 'completed' },
-        { nodeId: 'end', status: 'skipped' },
-      ]
-    );
-    expect(Object.keys(result.positions).sort()).toEqual(['end', 'start']);
-    expect(result.routes).toHaveLength(1);
-    expect(result.routes[0]?.taken).toBe(false);
-  });
-});
-~~~
-
-The first test in Step 1 is the complete contract.
-Do not add a second copy of that test.
-
-- [ ] **Step 2: Run the test to verify it fails.**
-
-~~~bash
+```bash
 ( cd packages/web && bun test src/components/workflows/build-run-graph-input.test.ts )
-~~~
+```
 
-Expected: FAIL because the module does not exist.
+Expected result: FAIL because the adapter does not exist.
 
-- [ ] **Step 3: Write the minimal implementation.**
+- [ ] **Step 3: Implement the adapter.**
 
-Copy the private `getRouteLoopConfig` logic from `dag-layout.ts:30-47` into this file.
-Do not import `@xyflow/react` or dagre.
-Call `layout` from `@/lib/run-graph`.
+Import the `ROUTE_LOOP_OUTCOMES` value and the `RouteLoopConfig` and `DagNode` types from `@/lib/api` instead of redeclaring their value or shapes.
+Keep any defensive route-loop narrowing local and typed.
+Do not import React Flow or dagre.
 
-- [ ] **Step 4: Run the test to verify it passes.**
+- [ ] **Step 4: Run the GREEN test and the unchanged builder layout tests.**
 
-~~~bash
-( cd packages/web && bun test src/components/workflows/build-run-graph-input.test.ts )
-~~~
+```bash
+( cd packages/web && bun test src/components/workflows/build-run-graph-input.test.ts src/lib/dag-layout.test.ts )
+```
 
-Expected: PASS.
+Expected result: PASS.
 
 - [ ] **Step 5: Refactor only while green.**
 
-Keep route-target suppression identical to `dagNodesToReactFlow`.
+Do not move builder callers away from `dag-layout.ts`.
 
 - [ ] **Step 6: Commit Task 4.**
 
-~~~bash
+```bash
 git add packages/web/src/components/workflows/build-run-graph-input.ts packages/web/src/components/workflows/build-run-graph-input.test.ts
-git commit -m "feat(web): map workflow definition into run-graph input"
-~~~
+git commit -m "feat(web): adapt workflow runs to graph layout"
+```
 
-### Task 5: Resolve a graph node to the same room row
-
-**Files:**
-
-- Create `packages/web/src/components/workflows/synthesize-legacy-log-node-states.ts`.
-- Modify `packages/web/src/components/workflows/LegacyNodeLogs.tsx:36-100` to import the extracted synthesizer.
-- Create `packages/web/src/components/workflows/resolve-graph-room-row.ts`.
-- Create `packages/web/src/components/workflows/resolve-graph-room-row.test.ts`.
-- Create `packages/web/src/components/workflows/GraphRoomPane.tsx`.
-- Create `packages/web/src/components/workflows/GraphRoomPane.test.tsx`.
-
-**Interfaces:**
-
-- Consumes `buildLogRows`, `LegacyNodeRoom`, and Task 4 is not required here.
-- Produces `resolveGraphRoomRow` and `GraphRoomPane`.
-
-- [ ] **Step 1: Write the failing row-resolver tests.**
-
-~~~ts
-import { describe, expect, test } from 'bun:test';
-import { buildLogRows, type LogRow } from './build-log-rows';
-import { resolveGraphRoomRow } from './resolve-graph-room-row';
-import type { WorkflowEventResponse, WorkflowNodeStateResponse } from '@/lib/api';
-
-const CREATED_AT = '2026-09-06T00:00:00.000Z';
-
-function event(overrides: Partial<WorkflowEventResponse>): WorkflowEventResponse {
-  return {
-    id: 'e1',
-    workflow_run_id: 'run-1',
-    event_type: 'node_started',
-    step_index: null,
-    step_name: 'setup',
-    data: {},
-    created_at: CREATED_AT,
-    ...overrides,
-  };
-}
-
-describe('resolveGraphRoomRow', () => {
-  test('returns null when no graph node is selected', () => {
-    expect(
-      resolveGraphRoomRow({ rows: [], nodeId: null, liveStatus: [] })
-    ).toBeNull();
-  });
-
-  test('prefers the ordinary node row over iteration rows', () => {
-    const rows: LogRow[] = [
-      {
-        id: 'iter-1',
-        nodeId: 'loop',
-        label: 'Loop ×1',
-        status: 'completed',
-        order: 0,
-        sourceIndex: 0,
-        selection: { kind: 'loop_iteration', iteration: 1 },
-      },
-      {
-        id: 'node:loop',
-        nodeId: 'loop',
-        label: 'Loop',
-        status: 'completed',
-        order: 1,
-        sourceIndex: 0,
-        selection: { kind: 'node' },
-      },
-    ];
-    expect(resolveGraphRoomRow({ rows, nodeId: 'loop', liveStatus: [] })?.id).toBe('node:loop');
-  });
-
-  test('falls back to the last iteration row when no ordinary row exists', () => {
-    const nodeStates: WorkflowNodeStateResponse[] = [
-      { nodeId: 'loop', name: 'Loop', status: 'completed', retryEpoch: 0 },
-    ];
-    const events: WorkflowEventResponse[] = [
-      event({
-        id: 'i1',
-        step_name: 'loop',
-        event_type: 'loop_iteration_started',
-        data: { iteration: 1 },
-      }),
-      event({
-        id: 'i2',
-        step_name: 'loop',
-        event_type: 'loop_iteration_started',
-        data: { iteration: 2 },
-      }),
-    ];
-    const rows = buildLogRows(nodeStates, events);
-    const resolved = resolveGraphRoomRow({ rows, nodeId: 'loop', liveStatus: nodeStates });
-    expect(resolved?.selection).toEqual({ kind: 'loop_iteration', iteration: 2 });
-  });
-
-  test('synthesizes a pending node row when the graph node has no logs row', () => {
-    expect(
-      resolveGraphRoomRow({
-        rows: [],
-        nodeId: 'setup',
-        liveStatus: [{ nodeId: 'setup', name: 'Setup', status: 'pending' }],
-      })
-    ).toEqual({
-      id: 'node:setup',
-      nodeId: 'setup',
-      label: 'Setup',
-      status: 'pending',
-      order: 0,
-      sourceIndex: 0,
-      selection: { kind: 'node' },
-    });
-  });
-});
-~~~
-
-- [ ] **Step 2: Run the resolver test to verify it fails.**
-
-~~~bash
-( cd packages/web && bun test src/components/workflows/resolve-graph-room-row.test.ts )
-~~~
-
-Expected: FAIL because the module does not exist.
-
-- [ ] **Step 3: Implement `resolveGraphRoomRow`.**
-
-Follow the Authoritative Interfaces section.
-
-- [ ] **Step 4: Run the resolver test to verify it passes.**
-
-~~~bash
-( cd packages/web && bun test src/components/workflows/resolve-graph-room-row.test.ts )
-~~~
-
-Expected: PASS.
-
-- [ ] **Step 5: Extract `synthesizeLegacyLogNodeStates` without changing Logs behavior.**
-
-Move the helper and its local functions from `LegacyNodeLogs.tsx` into `synthesize-legacy-log-node-states.ts`.
-Re-import them in `LegacyNodeLogs.tsx`.
-Run:
-
-~~~bash
-( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyNodeLogs.test.tsx )
-~~~
-
-Expected: PASS with the same Logs behavior.
-
-- [ ] **Step 6: Write the failing GraphRoomPane tests.**
-
-Create `GraphRoomPane.test.tsx` with `process.env.NODE_ENV = 'development'` as the first statement.
-Copy the happy-dom bootstrap, `INSTALLED_GLOBAL_KEYS`, `installHappyDom`, `restoreGlobals`, `flush`, `flushUntil`, and `deferred` helpers verbatim from `packages/web/src/components/workflows/LegacyNodeLogs.test.tsx:65-186`.
-Then add:
-
-~~~ts
-describe('GraphRoomPane', () => {
-  test('renders Select a node when nothing is selected and never asks for messages', async () => {
-    const calls: [string, string][] = [];
-    await act(async () => {
-      renderPane({ selectedNodeId: null, loadMessages: async (runId, nodeId) => {
-        calls.push([runId, nodeId]);
-        return { messages: [] };
-      } });
-    });
-    await flush();
-    expect(host.textContent).toContain('Select a node');
-    expect(host.querySelectorAll('[role="region"]')).toHaveLength(0);
-    expect(host.textContent).not.toContain('Node runs');
-    expect(calls).toEqual([]);
-    expectNoAskHumanChrome(host);
-  });
-
-  test('opens the bash stdout room for a graph node without requesting messages', async () => {
-    const calls: [string, string][] = [];
-    await act(async () => {
-      renderPane({
-        selectedNodeId: 'setup',
-        definitionNodes: [{ id: 'setup', bash: 'echo ready' }],
-        nodeStates: [{ nodeId: 'setup', name: 'Setup', status: 'completed', retryEpoch: 0 }],
-        events: [
-          workflowEvent({ id: 'start-setup', event_type: 'node_started', step_name: 'setup', data: { type: 'bash' } }),
-          workflowEvent({
-            id: 'done-setup',
-            event_type: 'node_completed',
-            step_name: 'setup',
-            data: { type: 'bash', node_output: 'ready' },
-          }),
-        ],
-        loadMessages: async (runId, nodeId) => {
-          calls.push([runId, nodeId]);
-          return { messages: [] };
-        },
-      });
-    });
-    await flushUntil(host, 'stdout', () => (host.textContent ?? '').includes('ready'));
-    expect(host.querySelector('[aria-label="setup room"]')).not.toBeNull();
-    expect(host.textContent).toContain('Bash');
-    expect(calls).toEqual([]);
-    expectNoAskHumanChrome(host);
-  });
-
-  test('opens the command transcript room for a graph node', async () => {
-    const pending = deferred<WorkflowNodeMessagesResponse>();
-    await act(async () => {
-      renderPane({
-        selectedNodeId: 'review',
-        definitionNodes: [{ id: 'review', command: 'review' }],
-        nodeStates: [{ nodeId: 'review', name: 'Review', status: 'completed', retryEpoch: 0 }],
-        events: [
-          workflowEvent({ id: 'start-review', event_type: 'node_started', step_name: 'review' }),
-        ],
-        loadMessages: async () => pending.promise,
-      });
-    });
-    await flush();
-    await act(async () => {
-      pending.resolve({
-        messages: [
-          {
-            id: 'm1',
-            seq: 1,
-            kind: 'text',
-            payload: { text: 'hello from review' },
-            created_at: CREATED_AT,
-          },
-        ],
-      });
-    });
-    await flushUntil(host, 'transcript', () =>
-      (host.textContent ?? '').includes('hello from review')
-    );
-    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
-    expectNoAskHumanChrome(host);
-  });
-
-  test('opens the route_loop controller room without a node-run list', async () => {
-    await act(async () => {
-      renderPane({
-        selectedNodeId: 'router',
-        definitionNodes: [
-          {
-            id: 'router',
-            route_loop: {
-              condition: 'ok',
-              max_iterations: 3,
-              routes: { positive: 'done', negative: 'fix', exhausted: 'fail' },
-            },
-          } as DagNode,
-        ],
-        nodeStates: [{ nodeId: 'router', name: 'Router', status: 'completed', retryEpoch: 0 }],
-        events: [
-          workflowEvent({
-            id: 'routed-1',
-            event_type: 'node_routed',
-            step_name: 'router',
-            data: { execution_seq: 1, outcome: 'positive', to: 'done' },
-          }),
-        ],
-        loadMessages: async () => ({ messages: [] }),
-      });
-    });
-    await flushUntil(host, 'route room', () => (host.textContent ?? '').includes('Route loop'));
-    expect(host.textContent).toContain('Routing decision');
-    expect(host.querySelector('[aria-label="router room"]')).not.toBeNull();
-    expect(host.textContent).not.toContain('Node runs');
-    expectNoAskHumanChrome(host);
-  });
-});
-
-`renderPane` mounts `QueryClientProvider` plus `GraphRoomPane` with `runId: 'run-1'`, `isLive: false`, `definitionPending: false`, `runStatus: 'completed'`, `approval: null`, no-op approve/reject, and `liveStatus` defaulting to `nodeStates`.
-`expectNoAskHumanChrome` is the same three assertions as Logs.
-
-- [ ] **Step 7: Run the pane test to verify it fails.**
-
-~~~bash
-( cd packages/web && NODE_ENV=development bun test src/components/workflows/GraphRoomPane.test.tsx )
-~~~
-
-Expected: FAIL because `GraphRoomPane` does not exist.
-
-- [ ] **Step 8: Implement `GraphRoomPane`.**
-
-Call `synthesizeLegacyLogNodeStates`, `buildLogRows`, `resolveGraphRoomRow`, then `LegacyNodeRoom`.
-Do not render a list.
-
-- [ ] **Step 9: Run the pane and Logs tests.**
-
-~~~bash
-( cd packages/web && bun test src/components/workflows/resolve-graph-room-row.test.ts )
-( cd packages/web && NODE_ENV=development bun test src/components/workflows/GraphRoomPane.test.tsx )
-( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyNodeLogs.test.tsx )
-~~~
-
-Expected: PASS.
-
-- [ ] **Step 10: Commit Task 5.**
-
-~~~bash
-git add packages/web/src/components/workflows/synthesize-legacy-log-node-states.ts packages/web/src/components/workflows/LegacyNodeLogs.tsx packages/web/src/components/workflows/resolve-graph-room-row.ts packages/web/src/components/workflows/resolve-graph-room-row.test.ts packages/web/src/components/workflows/GraphRoomPane.tsx packages/web/src/components/workflows/GraphRoomPane.test.tsx
-git commit -m "feat(web): open typed rooms from a selected graph node"
-~~~
-
-### Task 6: Draw layout routes in the legacy Graph viewer
+## Task 5: Render Shared Routes in the Legacy React Flow Viewer
 
 **Files:**
 
 - Create `packages/web/src/components/workflows/RunGraphRouteEdge.tsx`.
-- Create `packages/web/src/components/workflows/RunGraphRouteEdge.test.ts`.
-- Modify `packages/web/src/components/workflows/WorkflowDagViewer.tsx:1-176`.
+- Create `packages/web/src/components/workflows/RunGraphRouteEdge.test.tsx`.
+- Create `packages/web/src/components/workflows/build-workflow-dag-view-model.ts`.
+- Create `packages/web/src/components/workflows/build-workflow-dag-view-model.test.ts`.
+- Modify `packages/web/src/components/workflows/WorkflowDagViewer.tsx`.
 
-**Interfaces:**
+- [ ] **Step 1: Write the failing view-model tests.**
 
-- Consumes `layoutRunGraph` and `polylinePath`.
-- Produces React Flow nodes at layout positions and custom edges from `routes`.
+Cover all of these cases.
 
-- [ ] **Step 1: Write the failing polyline tests.**
+- Every definition node receives the pure layout position.
+- Missing live status remains a pending visual node without changing the definition label.
+- Live status metadata is preserved exactly as the current viewer preserves it.
+- Changing only statuses changes edge `taken` and animation without changing positions.
+- A skipped target has `route.taken === false` and is not animated.
+- Every edge uses `type: 'runGraphRoute'`, typed route data, its label, and an arrow marker.
+- A retry cycle produces progressive node y coordinates and one `backEdge: true` route.
 
-~~~ts
-import { describe, expect, test } from 'bun:test';
-import { polylinePath } from './RunGraphRouteEdge';
+- [ ] **Step 2: Write the failing edge-renderer tests.**
 
-describe('polylinePath', () => {
-  test('returns an empty string for no points', () => {
-    expect(polylinePath([])).toBe('');
-  });
+Use `renderToStaticMarkup` with fully typed props and no `any` assertion.
+Assert that an untaken edge renders the exact shared path with `var(--border)`.
+Assert that a taken dependency uses `var(--accent-bright)`.
+Assert positive, negative, and exhausted taken routes use the declared existing tokens.
+Assert conditional and back-edge routes have a dashed stroke.
+Assert an empty path renders an empty string.
 
-  test('builds an SVG path from layout points', () => {
-    expect(
-      polylinePath([
-        { x: 90, y: 80 },
-        { x: 90, y: 160 },
-      ])
-    ).toBe('M 90 80 L 90 160');
-  });
-});
-~~~
+- [ ] **Step 3: Run the RED tests.**
 
-- [ ] **Step 2: Run the test to verify it fails.**
+```bash
+( cd packages/web && bun test src/components/workflows/build-workflow-dag-view-model.test.ts src/components/workflows/RunGraphRouteEdge.test.tsx )
+```
 
-~~~bash
-( cd packages/web && bun test src/components/workflows/RunGraphRouteEdge.test.ts )
-~~~
+Expected result: FAIL because both modules do not exist.
 
-Expected: FAIL because the module does not exist.
+- [ ] **Step 4: Implement the view model and custom edge.**
 
-- [ ] **Step 3: Implement `polylinePath` and `RunGraphRouteEdge`.**
+Define `edgeTypes` at module scope in `WorkflowDagViewer.tsx` as `{ runGraphRoute: RunGraphRouteEdge }`.
+Replace the `dagNodesToReactFlow` and edge-color memos with one memoized `buildWorkflowDagViewModel` call.
+Depend on `dagNodes`, `liveStatus`, and `selectedNodeId` so taken state updates live while positions remain stable by contract.
+Keep the executing chip, node types, MiniMap, Controls, fit, pan, zoom, and existing click callback.
+Do not import dagre into the new adapter or viewer.
 
-`RunGraphRouteEdge` reads `data.points` as `Point[]` and `data.taken` as boolean.
-It renders `@xyflow/react` `BaseEdge` with `path={polylinePath(points)}`.
-Stroke is `var(--accent-bright)` when taken and `var(--text-tertiary)` when not taken.
-Do not use awaiting or error tokens.
-If `points` is empty, render nothing.
+- [ ] **Step 5: Run the GREEN tests and viewer neighbors.**
 
-- [ ] **Step 4: Run the polyline test to verify it passes.**
+```bash
+( cd packages/web && bun test src/components/workflows/build-workflow-dag-view-model.test.ts src/components/workflows/RunGraphRouteEdge.test.tsx src/components/workflows/build-run-graph-input.test.ts src/lib/run-graph/layout.test.ts src/lib/dag-layout.test.ts )
+```
 
-~~~bash
-( cd packages/web && bun test src/components/workflows/RunGraphRouteEdge.test.ts )
-~~~
+Expected result: PASS.
 
-Expected: PASS.
+- [ ] **Step 6: Run the web type checker.**
 
-- [ ] **Step 5: Switch `WorkflowDagViewer` to `layoutRunGraph`.**
-
-Replace the `dagNodesToReactFlow` memo.
-Call `layoutRunGraph(dagNodes, liveStatus)`.
-Set each flow node `position` from `positions[id]` defaulting to `{ x: 0, y: 0 }`.
-Keep the existing status overlay, selection ring, executing chip, MiniMap, Controls, and `onNodeClick`.
-Register `edgeTypes` at module scope: `{ runGraphRoute: RunGraphRouteEdge }`.
-Map each `LayoutRoute` to a React Flow edge `{ id: edgeId, source, target, type: 'runGraphRoute', label: labels[edgeId], data: { points, taken }, animated: target live status === 'running' }`.
-Do not color edges by a skipped target as if they were taken.
-Do not import dagre.
-
-- [ ] **Step 6: Run neighboring layout tests.**
-
-~~~bash
-( cd packages/web && bun test src/lib/run-graph/layout.test.ts src/components/workflows/build-run-graph-input.test.ts src/lib/dag-layout.test.ts src/components/workflows/RunGraphRouteEdge.test.ts )
-~~~
-
-Expected: PASS.
-Builder `dag-layout` tests must still pass because that module is unchanged.
-
-- [ ] **Step 7: Commit Task 6.**
-
-~~~bash
-git add packages/web/src/components/workflows/RunGraphRouteEdge.tsx packages/web/src/components/workflows/RunGraphRouteEdge.test.ts packages/web/src/components/workflows/WorkflowDagViewer.tsx
-git commit -m "feat(web): render run-graph layout in the legacy viewer"
-~~~
-
-### Task 7: Replace Graph-tab merged logs with the node room
-
-**Files:**
-
-- Modify `packages/web/src/components/workflows/WorkflowExecution.tsx:9-10` and `687-774`.
-
-**Interfaces:**
-
-- Consumes `GraphRoomPane` and existing `selectedDagNode`.
-- Produces Graph click → same `LegacyNodeRoom` as Logs for that node.
-
-- [ ] **Step 1: Re-run the Graph room contract before wiring.**
-
-~~~bash
-( cd packages/web && NODE_ENV=development bun test src/components/workflows/GraphRoomPane.test.tsx )
-~~~
-
-Expected: PASS from Task 5, including bash, command, and route_loop rooms and the absence of a Node runs list.
-That suite is the Graph-tab room contract.
-Task 7 only replaces the Graph tab's merged logs panel with that pane.
-
-- [ ] **Step 2: Wire `WorkflowExecution` Graph branch.**
-
-Import `GraphRoomPane`.
-In the `isDag && activeView === 'graph'` right `ResizablePanel`, stop rendering `mergedLogsPanel`.
-Render `retryActionPanel`, then:
-
-~~~tsx
-<GraphRoomPane
-  runId={runId}
-  selectedNodeId={selectedDagNode}
-  nodeStates={queryData?.nodeStates ?? []}
-  events={queryData?.events ?? []}
-  isLive={isRunning}
-  loadMessages={getWorkflowNodeMessages}
-  definitionNodes={dagDefinitionNodes ?? []}
-  definitionPending={workflowDefPending}
-  runStatus={queryData?.workflowState.status ?? workflow.status}
-  approval={queryData?.approval ?? null}
-  onApprove={handleGateApprove}
-  onReject={handleGateReject}
-  liveStatus={workflow.dagNodes}
-/>
-~~~
-
-Keep the artifacts footer on that panel, matching Logs.
-Keep `mergedLogsPanel` for the sequential non-DAG branch.
-Keep `DagRunTabs` Graph and Logs triggers.
-Keep `handleNodeClick` as the viewer's `onNodeClick`.
-Do not pass graph selection into `LegacyNodeLogs`.
-
-- [ ] **Step 3: Run focused tests.**
-
-~~~bash
-( cd packages/web && bun test src/components/workflows/source-control/dag-run-tabs.test.tsx src/components/workflows/WorkflowExecution.test.tsx src/components/workflows/build-log-rows.test.ts )
-( cd packages/web && NODE_ENV=development bun test src/components/workflows/GraphRoomPane.test.tsx )
-( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyNodeLogs.test.tsx )
+```bash
 ( cd packages/web && bun run type-check )
-~~~
+```
 
-Expected: PASS with no `any`.
-Logs still has unmerged rows.
-Graph tabs still include Logs.
+Expected result: PASS with no `any` and no React Flow generic mismatch.
 
-- [ ] **Step 4: Commit Task 7.**
+- [ ] **Step 7: Commit Task 5.**
 
-~~~bash
-git add packages/web/src/components/workflows/WorkflowExecution.tsx
-git commit -m "feat(web): open the node room from the legacy graph"
-~~~
+```bash
+git add packages/web/src/components/workflows/RunGraphRouteEdge.tsx packages/web/src/components/workflows/RunGraphRouteEdge.test.tsx packages/web/src/components/workflows/build-workflow-dag-view-model.ts packages/web/src/components/workflows/build-workflow-dag-view-model.test.ts packages/web/src/components/workflows/WorkflowDagViewer.tsx
+git commit -m "feat(web): render shared run graph routes"
+```
 
-### Task 8: Validate the story and update sprint tracking last
+## Task 6: Share One Room Between Graph and Logs
 
 **Files:**
 
-- Modify `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml:2`, `37`, and `49`.
+- Create `packages/web/src/components/workflows/resolve-graph-room-row.ts`.
+- Create `packages/web/src/components/workflows/resolve-graph-room-row.test.ts`.
+- Move `packages/web/src/components/workflows/LegacyNodeLogs.tsx` to `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx`.
+- Move `packages/web/src/components/workflows/LegacyNodeLogs.test.tsx` to `packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx`.
+- Modify `packages/web/src/components/workflows/WorkflowExecution.tsx`.
+- Modify `packages/web/src/components/workflows/WorkflowExecution.test.tsx` for the exact composition selector below.
 
-**Interfaces:**
+Add this pure selector to `packages/web/src/components/workflows/WorkflowExecution.tsx` and use it in `renderBody`.
 
-- Produces no runtime interface.
-- This task is permitted only after Tasks 1 through 7 are green.
+```ts
+export type WorkflowExecutionBody =
+  | 'graph-logs-pane'
+  | 'source-control'
+  | 'chat'
+  | 'sequential';
 
-- [ ] **Step 1: Run run-graph unit tests.**
+export function resolveWorkflowExecutionBody(input: {
+  isDag: boolean;
+  activeView: WorkflowRunView;
+  parentPlatformId: string | null;
+}): WorkflowExecutionBody;
+```
 
-~~~bash
+Return `sequential` when `isDag` is false.
+Return `source-control` for a DAG Source Control view.
+Return `chat` only for a DAG Chat view with a non-null parent platform id.
+Return `graph-logs-pane` for DAG Graph or Logs views and for the existing impossible Chat-without-parent fallback.
+
+- [ ] **Step 1: Write the failing graph-row resolver tests.**
+
+Cover all of these cases.
+
+- Null node selection returns null.
+- An ordinary matching row wins over iteration rows regardless of its array position.
+- When no ordinary row exists, the last matching iteration row wins.
+- Rows for other nodes are ignored.
+- No row plus live status produces the exact synthetic row.
+- No row and no live status produces a pending synthetic row labelled with the node id.
+- Duplicate live statuses use the last match.
+
+- [ ] **Step 2: Run the resolver RED test.**
+
+```bash
+( cd packages/web && bun test src/components/workflows/resolve-graph-room-row.test.ts )
+```
+
+Expected result: FAIL because the resolver does not exist.
+
+- [ ] **Step 3: Implement the resolver and run it GREEN.**
+
+```bash
+( cd packages/web && bun test src/components/workflows/resolve-graph-room-row.test.ts )
+```
+
+Expected result: PASS.
+
+- [ ] **Step 4: Move the existing Logs test first and add failing shared-pane cases.**
+
+Use `git mv` for the test file.
+Change its dynamic import and harness to expect `LegacyGraphLogsPane`.
+Keep the existing Story 5.2 agent, stdout, gate, workflow, route-loop, loop-group, selection-reset, and no-Ask assertions.
+Default the existing cases to `activeView: 'logs'`.
+
+Add these new mounted cases.
+
+- Graph mode renders the injected graph navigation and no `Node runs` list.
+- Clicking an injected graph-node button opens the same bash room without loading messages.
+- Clicking an injected command node loads only that node's messages.
+- Switching from Graph to Logs for the same selection preserves the exact labelled room DOM element and does not issue another message request.
+- The equivalent Logs row is selected with `aria-current="true"` after switching from Graph to Logs.
+- Clicking a loop iteration row preserves that iteration selection.
+- Clicking the same loop node in Graph clears the iteration-specific row and resolves the graph's canonical last iteration row.
+- A run-id change clears selection and reports null once.
+- Neither mode contains `AskHuman`, `awaiting`, or `waiting-on-you` copy.
+
+- [ ] **Step 5: Run the shared-pane RED test before moving production code.**
+
+```bash
+( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx )
+```
+
+Expected result: FAIL because `LegacyGraphLogsPane.tsx` and its new export do not exist.
+
+- [ ] **Step 6: Move and evolve the production composition.**
+
+Use `git mv packages/web/src/components/workflows/LegacyNodeLogs.tsx packages/web/src/components/workflows/LegacyGraphLogsPane.tsx`.
+Rename the export and props.
+Keep the state synthesizer and existing Story 5.2 room inputs.
+Implement the authoritative shared-pane rules above.
+Do not duplicate `LegacyNodeRoom` or `NodeRunList`.
+
+- [ ] **Step 7: Run the shared-pane GREEN test and Story 5.2 room regression tests.**
+
+```bash
+( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx )
+( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyNodeRoom.test.tsx src/components/workflows/NodeTranscriptPane.test.tsx src/components/workflows/NodeRoom.test.tsx )
+```
+
+Expected result: PASS.
+
+- [ ] **Step 8: Write the failing WorkflowExecution composition-selector assertions before wiring.**
+
+Import `resolveWorkflowExecutionBody` in the existing test file.
+Assert both DAG Graph and DAG Logs return `graph-logs-pane`.
+Assert DAG Source Control returns `source-control`.
+Assert DAG Chat with a parent returns `chat`.
+Assert DAG Chat without a parent retains the current fallback by returning `graph-logs-pane`.
+Assert every non-DAG input returns `sequential`.
+Do not add `mock.module` to the shared component test process.
+
+- [ ] **Step 9: Run the WorkflowExecution RED test.**
+
+```bash
+( cd packages/web && bun test src/components/workflows/WorkflowExecution.test.tsx )
+```
+
+Expected result: FAIL because the selector is absent.
+
+- [ ] **Step 10: Wire Graph and Logs through the same pane.**
+
+Replace the `LegacyNodeLogs` import with `LegacyGraphLogsPane`.
+Implement and use `resolveWorkflowExecutionBody` rather than retaining parallel branch predicates.
+Combine the DAG Graph and Logs branches so both render one `LegacyGraphLogsPane` at the same tree position.
+When the resolved body is `graph-logs-pane`, pass pane mode `graph` only for `activeView === 'graph'` and pass pane mode `logs` for the Logs and Chat-without-parent fallback cases.
+Pass `activeView`, `selectedDagNode`, `setSelectedDagNode`, raw node states, events, the workflow definition, room callbacks, retry header, and artifact footer.
+Pass a `renderGraph` callback containing the current loaded, failed, pending, and unavailable graph states.
+Inside the successful graph state, render `WorkflowDagViewer` with the selection callback supplied by `LegacyGraphLogsPane`.
+Remove `mergedLogsPanel` from DAG Graph mode.
+Rename it to `sequentialLogsPanel` and retain it only in the non-DAG branch.
+Keep Chat and Source Control branches unchanged for later stories.
+Keep the current auto-selection effect.
+
+- [ ] **Step 11: Run the complete focused GREEN set.**
+
+```bash
+( cd packages/web && bun test src/components/workflows/WorkflowExecution.test.tsx src/components/workflows/resolve-graph-room-row.test.ts src/components/workflows/source-control/dag-run-tabs.test.tsx src/components/workflows/build-log-rows.test.ts )
+( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx )
+( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyNodeRoom.test.tsx src/components/workflows/NodeTranscriptPane.test.tsx src/components/workflows/NodeRoom.test.tsx )
+( cd packages/web && bun run type-check )
+```
+
+Expected result: PASS.
+
+- [ ] **Step 12: Refactor only while green.**
+
+Run `rg -n "LegacyNodeLogs" packages/web/src` and remove stale imports or names.
+Do not delete any Story 5.2 behavioral assertion during the rename.
+
+- [ ] **Step 13: Commit Task 6.**
+
+```bash
+git add packages/web/src/components/workflows/resolve-graph-room-row.ts packages/web/src/components/workflows/resolve-graph-room-row.test.ts packages/web/src/components/workflows/LegacyGraphLogsPane.tsx packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx packages/web/src/components/workflows/WorkflowExecution.tsx packages/web/src/components/workflows/WorkflowExecution.test.tsx
+git commit -m "feat(web): share the legacy graph and logs room"
+```
+
+## Task 7: Validate and Update Sprint Tracking Last
+
+**Files:**
+
+- Modify `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` only after every preceding check passes.
+
+- [ ] **Step 1: Run every new pure and adapter test from `packages/web`.**
+
+```bash
 ( cd packages/web && bun test src/lib/run-graph/taken-path.test.ts src/lib/run-graph/positions.test.ts src/lib/run-graph/routes.test.ts src/lib/run-graph/layout.test.ts )
-~~~
+( cd packages/web && bun test src/components/workflows/build-run-graph-input.test.ts src/components/workflows/build-workflow-dag-view-model.test.ts src/components/workflows/RunGraphRouteEdge.test.tsx src/components/workflows/resolve-graph-room-row.test.ts src/lib/dag-layout.test.ts )
+```
 
-Expected: PASS.
+Expected result: PASS.
 
-- [ ] **Step 2: Run shell mapping tests.**
+- [ ] **Step 2: Run the mounted pane and room tests in isolated invocations.**
 
-~~~bash
-( cd packages/web && bun test src/components/workflows/build-run-graph-input.test.ts src/components/workflows/resolve-graph-room-row.test.ts src/components/workflows/RunGraphRouteEdge.test.ts src/lib/dag-layout.test.ts )
-~~~
+```bash
+( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyGraphLogsPane.test.tsx )
+( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyNodeRoom.test.tsx src/components/workflows/NodeTranscriptPane.test.tsx src/components/workflows/NodeRoom.test.tsx )
+```
 
-Expected: PASS.
+Expected result: PASS.
 
-- [ ] **Step 3: Run DOM room tests in isolated invocations.**
+- [ ] **Step 3: Run neighboring regressions and the web type checker.**
 
-~~~bash
-( cd packages/web && NODE_ENV=development bun test src/components/workflows/GraphRoomPane.test.tsx )
-( cd packages/web && NODE_ENV=development bun test src/components/workflows/LegacyNodeLogs.test.tsx src/components/workflows/LegacyNodeRoom.test.tsx )
-~~~
-
-Expected: PASS.
-
-- [ ] **Step 4: Run neighboring regression tests and the web type checker.**
-
-~~~bash
+```bash
 ( cd packages/web && bun test src/components/workflows/WorkflowExecution.test.tsx src/components/workflows/source-control/dag-run-tabs.test.tsx src/components/workflows/build-log-rows.test.ts )
 ( cd packages/web && bun run type-check )
-~~~
+```
 
-Expected: PASS.
+Expected result: PASS.
 
-- [ ] **Step 5: Run repository lint and full validation from the repository root.**
+- [ ] **Step 4: Run root lint and the complete repository validation.**
 
-~~~bash
+```bash
 bun run lint --max-warnings 0
 bun run validate
-~~~
+```
 
-Expected: both commands exit zero with no warnings.
-Do not run `bun test` directly from the root.
+Expected result: both commands exit zero with no warnings.
+Do not substitute a root `bun test` command.
 
-- [ ] **Step 6: Update sprint status only after Step 5 succeeds.**
+- [ ] **Step 5: Update sprint status only after Step 4 succeeds.**
 
-Change `5-3-open-the-same-node-room-from-the-graph-legacy` from `backlog` to `done`.
-Set both `last_updated` fields to the implementation completion time in the file's existing timestamp format.
-Do not change `generated`, any other story, or either epic status.
+Change only `5-3-open-the-same-node-room-from-the-graph-legacy` from `backlog` to `done`.
+Update the comment-form and YAML-form `last_updated` timestamps in the file's existing `YYYY-MM-DD HH:mm:ss +0700` format.
+Do not change `generated`, either epic status, any other story, or the absolute metadata paths.
 
-- [ ] **Step 7: Check the final diff and rerun formatting validation for the tracking edit.**
+- [ ] **Step 6: Validate the tracking-only edit and final diff.**
 
-~~~bash
+```bash
 git diff --check
 bun run format:check
 bun run validate
-~~~
+git status --short
+```
 
-Expected: all three commands exit zero after the tracking edit.
+Expected result: all validation commands exit zero and status shows only intended story files.
 
-- [ ] **Step 8: Commit the validated tracking update.**
+- [ ] **Step 7: Commit the validated tracking update.**
 
-~~~bash
+```bash
 git add _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
 git commit -m "chore: mark legacy graph node room done"
-~~~
-
----
-
-## Test Coverage Matrix
-
-| Behavior | Primary test | Regression boundary |
-| --- | --- | --- |
-| `awaiting` is on-path | `packages/web/src/lib/run-graph/taken-path.test.ts` | `layout.test.ts` |
-| Skipped branch is not taken | `layout.test.ts` | `build-run-graph-input.test.ts` |
-| Short vertical uses top ports | `routes.test.ts` | `layout.test.ts` |
-| Long offset uses side ports | `routes.test.ts` | `layout.test.ts` |
-| Back-edge uses left gutter | `routes.test.ts` | `layout.test.ts` |
-| Positions ignore nodeState | `layout.test.ts` | `positions.test.ts` |
-| Route_loop edge ids and labels | `build-run-graph-input.test.ts` | `dag-layout.test.ts` |
-| Graph node → ordinary Logs row | `resolve-graph-room-row.test.ts` | `GraphRoomPane.test.tsx` |
-| Graph node → last iteration row | `resolve-graph-room-row.test.ts` | `build-log-rows.test.ts` |
-| Pending graph node synthesizes a row | `resolve-graph-room-row.test.ts` | `GraphRoomPane.test.tsx` |
-| Graph bash room matches Logs stdout | `GraphRoomPane.test.tsx` | `LegacyNodeLogs.test.tsx` |
-| Graph command room uses GET messages | `GraphRoomPane.test.tsx` | `LegacyNodeRoom.test.tsx` |
-| Graph has no Node runs list | `GraphRoomPane.test.tsx` | `dag-run-tabs.test.tsx` |
-| Logs tab still unmerged | `LegacyNodeLogs.test.tsx` | `dag-run-tabs.test.tsx` |
-| Builder dagre layout unchanged | `dag-layout.test.ts` | WorkflowCanvas tests |
-| No Ask / awaiting chrome | `GraphRoomPane.test.tsx` | `LegacyNodeLogs.test.tsx` |
+```
 
 ## Acceptance Criteria
 
-- [ ] `packages/web/src/lib/run-graph/` exists and exports `layout({ nodes: { id, nodeState }[], edges }) → { positions, routes }`.
-- [ ] The module has no React, DOM, `@xyflow/react`, dagre, or `@/lib/api` imports.
-- [ ] No new frontend dependency is added.
-- [ ] Taken-path treats `awaiting` as on-path and never skipped, proven with a fixture.
-- [ ] Short/vertical edges use top ports and long-offset edges use side ports.
-- [ ] The legacy run view still has unmerged Logs.
-- [ ] The DAG Graph tab shows the graph in addition to that Logs tab, not instead of it.
-- [ ] Clicking a graph node opens the same per-type `LegacyNodeRoom` chrome as clicking that node's Logs row.
-- [ ] Graph click does not render a second Node runs list.
-- [ ] There is still no Ask card, empty Ask slot, or awaiting / waiting-on-you chrome.
-- [ ] Console graph shell is unchanged.
-- [ ] Engine, database, routes, generated API types, and workflow language are unchanged.
-- [ ] All focused tests and `bun run validate` pass.
-- [ ] The Story 5.3 sprint-status entry changes to `done` only after validation.
+- [ ] `packages/web/src/lib/run-graph/index.ts` exposes `layout({ nodes: { id, nodeState }[], edges })` and returns positions plus routes.
+- [ ] The pure module has no React, DOM, API, React Flow, or dagre production imports.
+- [ ] No dependency is added.
+- [ ] A retry-loop edge is removed from layering, routed around the left flank, and does not flatten the forward graph.
+- [ ] Forward routes always leave the source bottom, enter the target top for short or vertical connections, and enter the facing target side for long offset connections.
+- [ ] Positions are deterministic and do not change when only node states change.
+- [ ] Taken-path classification uses the target-started rule and treats `awaiting` as on-path while treating `skipped` as off-path.
+- [ ] The live Story 5.3 adapter never emits `awaiting`.
+- [ ] The legacy viewer gets every node position and route path from the pure module.
+- [ ] React Flow retains fit, pan, zoom, controls, keyboard-selectable nodes, status cards, and graph-node clicks.
+- [ ] The Graph tab renders no merged `WorkflowLogs` panel and no second `NodeRunList`.
+- [ ] The Logs tab remains an unmerged node-run list with iteration rows.
+- [ ] Graph and Logs render the same mounted `LegacyNodeRoom` in the same right-hand panel.
+- [ ] Clicking a graph node resolves the same canonical `LogRow` and per-type chrome as clicking its equivalent Logs row.
+- [ ] Switching between Graph and Logs preserves selection and the mounted room DOM node.
+- [ ] Clicking an explicit Logs iteration preserves that iteration until a graph-node click intentionally returns to the canonical graph row.
+- [ ] Sequential non-DAG runs keep their merged logs behavior.
+- [ ] Chat, Source Control, console, engine, database, routes, generated API types, provider behavior, and workflow language are unchanged.
+- [ ] No Ask card, Ask slot, `awaiting`, or waiting-on-you chrome is introduced.
+- [ ] All focused tests, type checking, lint, formatting, and `bun run validate` pass.
+- [ ] Story 5.3 moves to done only after validation succeeds.
 
-## Validation Commands
+## Test Coverage Map
 
-Run from `packages/web`:
-
-~~~bash
-bun test src/lib/run-graph/taken-path.test.ts src/lib/run-graph/positions.test.ts src/lib/run-graph/routes.test.ts src/lib/run-graph/layout.test.ts
-bun test src/components/workflows/build-run-graph-input.test.ts src/components/workflows/resolve-graph-room-row.test.ts src/components/workflows/RunGraphRouteEdge.test.ts src/lib/dag-layout.test.ts
-NODE_ENV=development bun test src/components/workflows/GraphRoomPane.test.tsx
-NODE_ENV=development bun test src/components/workflows/LegacyNodeLogs.test.tsx src/components/workflows/LegacyNodeRoom.test.tsx
-bun test src/components/workflows/WorkflowExecution.test.tsx src/components/workflows/source-control/dag-run-tabs.test.tsx src/components/workflows/build-log-rows.test.ts
-bun run type-check
-~~~
-
-Run from the repository root:
-
-~~~bash
-bun run lint --max-warnings 0
-bun run validate
-git diff --check
-~~~
-
-There is no schema migration, so `bun run check:schema-upgrades` is not required.
-There is no route-schema change, so `packages/web/src/lib/api.generated.d.ts` must remain unchanged.
+- `packages/web/src/lib/run-graph/taken-path.test.ts` proves future `awaiting` and current skipped semantics.
+- `packages/web/src/lib/run-graph/positions.test.ts` proves deterministic cycle-safe layering and barycenter ordering.
+- `packages/web/src/lib/run-graph/routes.test.ts` proves distance-aware ports, cubic paths, back-edge lanes, and route metadata.
+- `packages/web/src/lib/run-graph/layout.test.ts` proves the public AD-4 contract and state-independent positions.
+- `packages/web/src/components/workflows/build-run-graph-input.test.ts` proves definition and live-status adaptation.
+- `packages/web/src/components/workflows/build-workflow-dag-view-model.test.ts` proves React Flow nodes and edges consume shared output.
+- `packages/web/src/components/workflows/RunGraphRouteEdge.test.tsx` proves visual edge semantics use existing tokens without recalculating geometry.
+- `packages/web/src/components/workflows/resolve-graph-room-row.test.ts` proves graph-node-to-row resolution and pending synthesis.
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx` proves one mounted room, shared selection, unmerged Logs, every Story 5.2 room type, and no Ask chrome.
+- `packages/web/src/components/workflows/WorkflowExecution.test.tsx` proves Graph and Logs select the same composition branch.
+- `packages/web/src/lib/dag-layout.test.ts` protects the unchanged builder layout.
+- `packages/web/src/components/workflows/source-control/dag-run-tabs.test.tsx` protects the existing tab order.
 
 ## Implementation Order
 
-1. Classify taken-path, including the awaiting fixture.
-2. Compute dependency-free layered positions.
-3. Add distance-aware routes and the public `layout()` export.
-4. Map the current workflow definition into that layout input.
-5. Resolve a graph node id to the Story 5.2 room row and pane.
-6. Feed layout positions and routes into the existing React Flow viewer.
-7. Replace Graph-tab merged logs with that pane and keep Logs.
-8. Run focused and full validation.
-9. Mark sprint tracking done and commit the tracking change last.
+1. Define independent graph types, constants, and taken-path classification.
+2. Implement cycle-safe positions before route geometry.
+3. Implement routes and expose the public `layout` function.
+4. Adapt workflow definitions and statuses into the shared input type.
+5. Build typed React Flow elements and switch the existing viewer to shared routes.
+6. Resolve graph nodes to rows and replace the Logs-only composition with one Graph-and-Logs pane.
+7. Wire both tabs through that pane while preserving non-DAG, Chat, and Source Control branches.
+8. Run focused and complete validation.
+9. Update and commit sprint tracking last.
 
-## Risks and Guardrails
+## Rollback Boundary
 
-| Risk | Guardrail |
-| --- | --- |
-| Two layout implementations drift | Run Graph stops calling `dagNodesToReactFlow`; builder keeps dag-layout |
-| Console imports the React shell | Console isolation still blocks `@/components/**`; only `@/lib/run-graph` is legal |
-| Graph click opens a different room than Logs | Both paths use `LegacyNodeRoom` and `resolveGraphRoomRow` prefers the ordinary Logs row |
-| Iteration rows lose a graph target | Fallback to the last matching Logs row, then a synthesized pending row |
-| Status updates reshuffle the DAG | `computePositions` ignores `nodeState`; layout test freezes coordinates |
-| Awaiting chrome leaks into Epic 5 | Live mapper never emits `awaiting`; pane tests forbid that copy |
-| Merged logs disappear from sequential runs | `mergedLogsPanel` remains the non-DAG body |
-| TDD becomes test-after | Each task names the expected RED failure and runs it before its production step |
+The runtime change is isolated to the new `run-graph` and legacy graph-room files plus `WorkflowDagViewer.tsx` and `WorkflowExecution.tsx`.
+Reverting Tasks 4 through 6 restores the old dagre-backed Graph and Logs-only room composition without touching the Workflow Builder or backend contracts.
+Reverting Tasks 1 through 3 then removes the unused pure module.
 
 ## Open Questions
 
-1. Should Graph and Logs share one selected row in this story?
-Provisional default: no.
-Keep Logs selection internal and let Story 5.4 lift the three-door selection.
-
-2. Should the legacy Graph drop React Flow for a custom SVG shell?
-Provisional default: no.
-AD-4 lets each surface own its shell; React Flow already pans, zooms, and clicks.
-
-3. Should `loop_group` body nodes appear on the run graph?
-Provisional default: no.
-The graph shows the same top-level `GET /api/workflows/:name` nodes as today's viewer.
+None.
