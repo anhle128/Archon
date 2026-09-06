@@ -7,6 +7,9 @@ import {
 } from '../primitives/workflow';
 import type { WorkflowGraphNode } from '../primitives/workflow-graph';
 import type { WireWorkflowDefinition } from '../builder/types/wire';
+import type { components } from '@/lib/api.generated';
+
+export type DagNode = components['schemas']['DagNode'];
 
 interface RawNode {
   id: string;
@@ -29,7 +32,7 @@ interface RawNode {
  * side needs — `getWorkflowGraph` reads it.
  */
 type RawWorkflow = RawWorkflowShape & {
-  nodes?: RawNode[];
+  nodes?: DagNode[];
 };
 
 interface WorkflowListEntry {
@@ -92,6 +95,20 @@ export async function getWorkflowGraph(name: string, cwd?: string): Promise<Work
       kind: nodeKind(n),
     })
   );
+}
+
+/**
+ * Return the workflow's generated DAG nodes without the graph-panel projection.
+ * Uses the list endpoint for the same subfolder-discovery reason as `getWorkflowGraph`.
+ */
+export async function getWorkflowDagNodes(workflowName: string, cwd?: string): Promise<DagNode[]> {
+  const qs = cwd !== undefined ? `?cwd=${encodeURIComponent(cwd)}` : '';
+  const res = await requestJson<WorkflowsResponse>(`/api/workflows${qs}`);
+  const match = res.workflows.find(w => w.workflow.name === workflowName);
+  if (match === undefined) {
+    throw new Error(`Workflow not found: ${workflowName}`);
+  }
+  return match.workflow.nodes ?? [];
 }
 
 // ---------------------------------------------------------------------------
