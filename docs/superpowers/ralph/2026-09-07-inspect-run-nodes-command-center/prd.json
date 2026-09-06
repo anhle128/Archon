@@ -19,8 +19,8 @@
       "technicalNotes": "Plan Task 1 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:118-174). Files: packages/web/src/experiments/console/skills/runs.node-messages.test.ts, packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts, packages/web/src/experiments/console/store/keys.ts, packages/web/src/experiments/console/skills/runs.ts, packages/web/src/experiments/console/skills/workflows.ts. Use generated API types and no 'any'.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/web/src/experiments/console/skills/runs.node-messages.test.ts, packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts, packages/web/src/experiments/console/store/keys.ts, packages/web/src/experiments/console/skills/runs.ts, packages/web/src/experiments/console/skills/workflows.ts."
     },
     {
       "id": "US-002",
@@ -40,8 +40,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/web/src/experiments/console/components/inspect/read-approval-context.ts, read-approval-context.test.ts, inspect-status.ts, inspect-status.test.ts."
     },
     {
       "id": "US-003",
@@ -63,8 +63,8 @@
         "US-002"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/experiments/console/components/inspect/build-log-rows.ts, build-log-rows.test.ts, synthesize-log-node-states.ts, synthesize-log-node-states.test.ts, build-console-log-entries.ts, build-console-log-entries.test.ts."
     },
     {
       "id": "US-004",
@@ -85,8 +85,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/experiments/console/components/inspect/resolve-room-kind.ts, resolve-room-kind.test.ts, select-room-data.ts, select-room-data.test.ts, select-node-room-messages.ts, select-node-room-messages.test.ts, console-inspect-selection.ts, console-inspect-selection.test.ts."
     },
     {
       "id": "US-005",
@@ -109,8 +109,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/experiments/console/test/install-happy-dom.ts, packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx, packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx."
     },
     {
       "id": "US-006",

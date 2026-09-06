@@ -1,0 +1,175 @@
+## Codebase Patterns
+
+### Console node rooms poll via useEntity, not React Query
+- **Where**: `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx`, `packages/web/src/experiments/console/test/install-happy-dom.ts`
+- **Pattern**: Key `useEntity` with `K.nodeMessages(run.id, nodeId)` only for agent rooms; every other kind uses a stable idle key plus `Promise.resolve({ messages: [] })` so `loadMessages` is never called. Hold fetches while `definitionPending` and resolution is the unknown-agent fallback. Poll with `globalThis.setInterval(..., 1000)` only when `isLive` and kind is `agent`; keep `refetch` in a ref so cache notifies do not reset the timer. Tests call `installHappyDom()` / `restoreHappyDom()`, inject `loadMessages`, spy `setInterval` without wall-clock, then `invalidate('run-node-messages')` after unmount because the cache retains subscriber-less values.
+- **Example**: `useEntity(agentActive ? K.nodeMessages(run.id, nodeId) : 'console-node-room:idle', () => agentActive ? loadMessages(run.id, nodeId) : Promise.resolve({ messages: [] }))`
+
+
+### Room dispatch is definition schema keys, then approval, then events
+- **Where**: `packages/web/src/experiments/console/components/inspect/resolve-room-kind.ts`, `select-room-data.ts`, `select-node-room-messages.ts`, `console-inspect-selection.ts`
+- **Pattern**: Mirror legacy `resolve-room-kind.ts` / `select-room-data.ts` / `NodeRoom.selectNodeRoomMessages`. Import `DagNode` from console workflows, `WorkflowEvent` / `WorkflowNodeState` / `WorkflowNodeMessage` from console runs, and `RunStatus` from `lib/run-status`. Definition data outranks metadata. Agent + `nodeType: 'unknown'` is last. Loop transcripts slice from `iteration_started` through matching terminal or next start; missing markers return the full seq-sorted copy. Valid `?node=` wins with `logRowId: null`; graph selection also clears the row id.
+- **Example**: `resolveRoomKind(nodeId, dagNodes, events, approval)` then `selectNodeRoomMessages(messages, row.selection)` and `resolveInitialInspectSelection({ requestedNodeId: readNodeSearchParam(search), nodeStates, rows, approvalNodeId })`
+
+### Unmerged log projection pipeline is synthesize → rows → entries
+- **Where**: `packages/web/src/experiments/console/components/inspect/build-log-rows.ts`, `synthesize-log-node-states.ts`, `build-console-log-entries.ts`
+- **Pattern**: Mirror the legacy `packages/web/src/components/workflows/build-log-rows.ts` contract, but import `WorkflowEvent` / `WorkflowNodeState` from console skills (type-only generated types). Existing projected states always win; synthetics come only from loop-iteration events, `approval_requested` with `gateType` `approval`|`plannotator_gate`, or a paused selectable approval (`approval` / `plannotator_gate` / `child_workflow` / omitted type). Ordinary `node_started`/terminal events never synthesize. Loop terminal duration is `data.duration_ms` then `data.duration`, finite and ≥ 0. `showNodeUsage` is true only on the last chronological row per `nodeId`.
+- **Example**: `buildLogRows(synthesizeLogNodeStates(nodeStates, events, status, approval), events)` then `buildConsoleLogEntries({ rows, rawEvents: events, nodeRuns: foldNodeRuns(events.map(toRunEvent)), runStartedAt })`
+
+### Console inspect policy is owned under components/inspect, not @/lib
+- **Where**: `packages/web/src/experiments/console/components/inspect/read-approval-context.ts`, `inspect-status.ts`
+- **Pattern**: NFR4 forbids runtime `@/lib/approval-context`. Console copies the parser contract as `ApprovalContext` / `readApprovalContext` / `getPlannotatorReviewUrl`. Object guard is `isRecord` (object, non-null, non-array) so no `any` and arrays fail closed. Invalid `type` or `resolved` enum returns `null`; wrong-typed optional scalars are dropped.
+- **Example**: `inspectStatusLabel` passes arbitrary transcript strings through; `inspectStatus` maps unknowns to `'pending'`; only `'running'` and `'paused'` are live.
+
+### Console fetch contract tests use spyOn, not mock.module
+- **Where**: `packages/web/src/experiments/console/skills/runs.node-messages.test.ts`, `packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts`
+- **Pattern**: `spyOn(globalThis, 'fetch').mockImplementation((...) as typeof fetch)` with `afterEach` `mockRestore()`. `requestJson` JSON-parses the body, so assert unreshaped payloads with `toEqual`, not object identity `toBe`.
+- **Example**: `expect(result.rawEvents).toEqual([rawEvent])`
+
+### Collision-safe console cache keys encode each segment
+- **Where**: `packages/web/src/experiments/console/store/keys.ts`
+- **Pattern**: Join `encodeURIComponent` of each id/cwd/name so `:` or `/` in one segment cannot collide with another.
+- **Example**: `` `run-node-messages:${encodeURIComponent(runId)}:${encodeURIComponent(nodeId)}` ``
+
+### Workflow DAG reads go through GET /api/workflows list
+- **Where**: `packages/web/src/experiments/console/skills/workflows.ts` (`getWorkflowGraph`, `getWorkflowDagNodes`)
+- **Pattern**: List + exact `workflow.name` match, then throw `Workflow not found: ${name}`. Do not call `/api/workflows/:name` (it misses subfolder workflows).
+- **Example**: `getWorkflowDagNodes('deploy/workflow', '/repo path')` → `/api/workflows?cwd=%2Frepo%20path`
+
+---
+
+## 2026-09-07 — US-001: Extend the Typed Console Data Boundary
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/skills/runs.node-messages.test.ts` — getRun/listNodeMessages fetch-contract tests
+- `packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts` — getWorkflowDagNodes fetch-contract tests
+- `packages/web/src/experiments/console/store/keys.ts` — `K.nodeMessages` and `K.workflowDagNodes`
+- `packages/web/src/experiments/console/skills/runs.ts` — generated inspect aliases, ConsoleRunDetail, listNodeMessages
+- `packages/web/src/experiments/console/skills/workflows.ts` — DagNode alias and getWorkflowDagNodes
+
+**Acceptance criteria verified**:
+- [x] Create runs.node-messages and workflows.dag-nodes tests asserting client contracts with spyOn(globalThis, 'fetch')
+- [x] Add type aliases WorkflowEvent, WorkflowNodeState, WorkflowNodeMessage, WorkflowNodeMessagesResponse from components['schemas'] to skills/runs.ts
+- [x] Expand ConsoleRunDetail to include run, events, rawEvents, nodeStates, approval, and usage
+- [x] getRun('run/1') requests /api/workflows/runs/run%2F1 and returns untouched rawEvents, nodeStates, and approval while preserving events, run, and usage
+- [x] listNodeMessages('run/1', 'node a') requests /api/workflows/runs/run%2F1/nodes/node%20a/messages and returns text, tool, and status entries without reshaping them
+- [x] Non-2xx responses from getRun or listNodeMessages reject through requestJson instead of returning an empty fallback
+- [x] Add collision-safe keys K.nodeMessages and K.workflowDagNodes with individually encoded segments
+- [x] Export DagNode and implement getWorkflowDagNodes; missing workflow rejects with Workflow not found: <workflowName>
+- [x] bun test src/experiments/console/skills/runs.node-messages.test.ts src/experiments/console/skills/workflows.dag-nodes.test.ts passes from packages/web
+
+**Learnings**:
+- JSON.parse in requestJson means "untouched" is structural equality, not same-object identity
+- fetch mockImplementation must be cast `as typeof fetch` because Fetch has `preconnect`
+- **/*.test.ts is eslint-ignored; lint the production files only
+- bun install was required in this worktree before `tsc --noEmit`
+
+---
+
+## 2026-09-07 — US-002: Establish Approval and Inspect-Status Policy
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/inspect/read-approval-context.ts` — ApprovalContext parser and paused http(s) Plannotator URL gate
+- `packages/web/src/experiments/console/components/inspect/read-approval-context.test.ts` — table-driven accepted/rejected shapes, child-run, plannotator, resolved decisions
+- `packages/web/src/experiments/console/components/inspect/inspect-status.ts` — InspectStatus, awaiting→running, live polling predicate
+- `packages/web/src/experiments/console/components/inspect/inspect-status.test.ts` — pass-through, awaiting map, arbitrary labels, live statuses
+
+**Acceptance criteria verified**:
+- [x] Create read-approval-context.test.ts and inspect-status.test.ts covering accepted/rejected shapes and status mapping
+- [x] Implement ApprovalContext and readApprovalContext requiring string nodeId/message; only approval, plannotator_gate, child_workflow, interactive_loop, writeback
+- [x] getPlannotatorReviewUrl accepts review links only when paused and URL is http: or https:
+- [x] inspect-status.ts exports InspectStatus, inspectStatus, inspectStatusLabel, isInspectRunLive
+- [x] inspectStatus and inspectStatusLabel map awaiting to running; known statuses pass through; inspectStatus maps other strings to pending
+- [x] isInspectRunLive returns true only for running and paused
+- [x] bun test src/experiments/console/components/inspect/read-approval-context.test.ts src/experiments/console/components/inspect/inspect-status.test.ts passes from packages/web
+
+**Learnings**:
+- Do not import `@/lib/approval-context`; console must own the copy
+- `inspectStatusLabel` is display-passthrough except awaiting; `inspectStatus` is the closed InspectStatus union
+- `new URL(value).href` is the normalized review link; javascript: and ftp: fail the protocol check
+
+---
+
+## 2026-09-07 — US-003: Build the Unmerged Log Projection
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/inspect/build-log-rows.ts` — LogRow / LogRowSelection projector sorted by event-array order then projected-state index
+- `packages/web/src/experiments/console/components/inspect/build-log-rows.test.ts` — ordinary, loop, route, suppression, invalid keys, fallback ids
+- `packages/web/src/experiments/console/components/inspect/synthesize-log-node-states.ts` — missing-id synthetics from loop events and selectable paused gates
+- `packages/web/src/experiments/console/components/inspect/synthesize-log-node-states.test.ts` — precedence, ordinary-lifecycle exclusion, interactive_loop/writeback exclusion
+- `packages/web/src/experiments/console/components/inspect/build-console-log-entries.ts` — ConsoleLogEntry adapter with one-time usage placement
+- `packages/web/src/experiments/console/components/inspect/build-console-log-entries.test.ts` — foldNodeRuns timestamps, loop duration, route null metadata, usage once
+
+**Acceptance criteria verified**:
+- [x] Create build-log-rows.test.ts, synthesize-log-node-states.test.ts, and build-console-log-entries.test.ts covering ordinary, loop-iteration, route-decision, fallback states, and usage placement.
+- [x] Implement build-log-rows.ts with LogRow and LogRowSelection sorting by source event-array order, then projected-state index.
+- [x] Group loop rows by positive safe-integer data.iteration and route rows by positive safe-integer data.execution_seq; suppress the ordinary row when specific iteration/route rows exist.
+- [x] Existing projected states always win; synthetics only for missing ids from loop-iteration metadata or selectable declared pause (excluding interactive_loop and writeback).
+- [x] ConsoleLogEntry derives startedAt, durationMs, costUsd, numTurns, stopReason, skipReason, skipExpr, and showNodeUsage.
+- [x] showNodeUsage is true only on the final chronological row for a given nodeId.
+- [x] runStartedAt is the final timestamp fallback for every row.
+- [x] bun test src/experiments/console/components/inspect/build-log-rows.test.ts src/experiments/console/components/inspect/synthesize-log-node-states.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts passes from packages/web.
+
+**Learnings**:
+- Mirror `packages/web/src/components/workflows/build-log-rows.ts`; do not import `@/lib/api` — use console `WorkflowEvent` / `WorkflowNodeState`.
+- Engine loop terminals write `data.duration` (ms), not `duration_ms`; accept both if finite and ≥ 0.
+- `approval_requested` synthetics require `gateType` `approval` or `plannotator_gate`; child_workflow comes from paused approval context, not from that event filter.
+
+---
+
+## 2026-09-07 — US-004: Resolve Room Types, Data, and Selection
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/inspect/resolve-room-kind.ts` — RoomKind / NodeBodyKind dispatch with loop-group qualification
+- `packages/web/src/experiments/console/components/inspect/resolve-room-kind.test.ts` — every body mode, nested ids, definition-missing fallbacks
+- `packages/web/src/experiments/console/components/inspect/select-room-data.ts` — stdout, gate, child-run, route, loop-group selectors
+- `packages/web/src/experiments/console/components/inspect/select-room-data.test.ts` — interleaved nodes, two iterations, two routes, malformed scalars
+- `packages/web/src/experiments/console/components/inspect/select-node-room-messages.ts` — seq sort plus loop-iteration slicing
+- `packages/web/src/experiments/console/components/inspect/select-node-room-messages.test.ts` — reversed input, closed/open iteration, missing marker
+- `packages/web/src/experiments/console/components/inspect/console-inspect-selection.ts` — `?node=` / live / approval / first-row precedence
+- `packages/web/src/experiments/console/components/inspect/console-inspect-selection.test.ts` — valid query wins, awaiting is inspect-running, graph clears row id
+
+**Acceptance criteria verified**:
+- [x] Create resolve-room-kind.test.ts, select-room-data.test.ts, select-node-room-messages.test.ts, and console-inspect-selection.test.ts covering all node body types and selection precedence.
+- [x] Implement resolve-room-kind.ts with RoomKind and NodeBodyKind identifying bodies by schema keys, qualifying loop-group children with dot-separated ids, and returning agent room with nodeType 'unknown' only after approval and event fallbacks fail.
+- [x] Implement select-room-data.ts with selectNodeStdout, selectGateChrome, selectChildRun, selectRouteDecision, and selectLoopGroupChrome returning typed data without throwing on malformed payloads.
+- [x] Implement select-node-room-messages.ts sorting messages by seq, preserving full transcript for non-loop selections, slicing loop rows from matching iteration_started to terminal/next-start, and returning full transcript if iteration markers are missing.
+- [x] Implement console-inspect-selection.ts with readNodeSearchParam, resolveInitialInspectSelection, and selectInspectNode where valid ?node= wins, falling back to first inspect-running node, then declared approval, then first log row.
+- [x] bun test src/experiments/console/components/inspect/resolve-room-kind.test.ts src/experiments/console/components/inspect/select-room-data.test.ts src/experiments/console/components/inspect/select-node-room-messages.test.ts src/experiments/console/components/inspect/console-inspect-selection.test.ts passes from packages/web.
+
+**Learnings**:
+- Mirror `packages/web/src/components/workflows/resolve-room-kind.ts`, `select-room-data.ts`, and `NodeRoom.selectNodeRoomMessages`; import generated types from console skills, not `@/lib/api`.
+- `RunStatus` lives in `experiments/console/lib/run-status.ts` (not re-exported from skills). `inspectStatus('awaiting') === 'running'` is the live-node fallback.
+- URL selection is node-only (`logRowId: null`); Log-row clicks pass both ids through `selectInspectNode`, Graph clicks pass `null` for the row id.
+
+---
+
+## 2026-09-07 — US-005: Render the Console-Owned Node Room
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/test/install-happy-dom.ts` — snapshot/restore Happy DOM globals for React 19 tests
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx` — multi-kind inspect room with 1s live agent polling
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx` — agent, stdout, gate, child, route, loop-group, polling, no Epic 6 UI
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/experiments/console/test/install-happy-dom.ts installing and restoring global DOM environment for React 19 tests.
+- [x] Create ConsoleNodeRoom.test.tsx testing agent transcript, tool entries, live polling (1s setInterval), stdout pre, gate decision controls, child run link, route decision, loop-group view, and absence of Epic 6 UI.
+- [x] Implement ConsoleNodeRoom.tsx adhering to ConsoleNodeRoomProps interface with onClose, loadMessages, and stable room header.
+- [x] Poll node messages via refetch() every 1,000 ms only when isLive is true and room kind is 'agent'; clear interval on dependency change and unmount.
+- [x] Render agent messages (text, tool, status) in server sequence order; render tool inputs/outputs as formatted JSON; format markdown text; map status 'awaiting' to 'running'.
+- [x] Render bash/script stdout in pre with exit code and truncation metadata; render gate message with ApprovalPanel when canDecide is true; render child workflow run deep-link /console/p/:projectId/r/:childRunId.
+- [x] Do not read, render, or import pending_interactions, AskCard, or ChatComposer; do not display 'Waiting on you' or 'awaiting' labels.
+- [x] NODE_ENV=development bun test src/experiments/console/components/ConsoleNodeRoom.test.tsx passes from packages/web.
+
+**Learnings**:
+- `**/src/test/**` does not ignore `experiments/console/test/`; `*.test.tsx` is linted (unlike `*.test.ts`). Prefer `T[]` aliases over `Array<() => void>`.
+- useEntity cache survives unmount; tests must `invalidate('run-node-messages')` in afterEach.
+- `iteration_started` contains the substring `started`, so sliced-transcript assertions should not use `not.toContain('started')`.
+
+---
+
