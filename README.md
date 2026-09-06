@@ -300,6 +300,18 @@ It never runs `docker compose down -v` or removes volumes — deploys preserve a
 After pulling new code, redeploy with `./scripts/deploy-pm2.sh` — it rebuilds the web UI and restarts the app.
 `pm2 restart archon` alone only restarts the process and does NOT rebuild the frontend, so UI changes would not appear.
 
+To pick up workflow YAML changes without killing in-flight runs:
+
+```bash
+./scripts/deploy-pm2.sh --reload-workflows
+```
+
+That runs `bun run generate:bundled` and does **not** restart PM2.
+Host PM2 is source mode (`bun src/index.ts`), so discovery re-reads `.archon/workflows/` on the next list/run.
+New files under `defaults/` must be `git add`ed first.
+After pulling code or UI changes, use the full deploy — that path still restarts.
+
+
 Manage the running install:
 
 ```bash
@@ -310,7 +322,7 @@ pm2 stop archon             # stop the app (Postgres container keeps running)
 ```
 
 Default port is 3090 (override with `PORT` in `.env`).
-Optional flags: `--with-auth` (Caddy forward-auth login sidecar) and `--startup` (survive reboot via `pm2 startup`).
+Optional flags: `--with-auth` (Caddy forward-auth login sidecar), `--startup` (survive reboot via `pm2 startup`), and `--reload-workflows` (YAML-only refresh, no PM2 restart).
 
 ### Laptop — development (no PM2)
 

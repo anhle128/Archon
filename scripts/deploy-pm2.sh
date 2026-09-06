@@ -10,6 +10,8 @@ RUN_COMPOSE=1
 BUILD_WEB=1
 RUN_STARTUP=0
 SAVE_PM2=1
+RELOAD_WORKFLOWS=0
+
 COMPOSE_PROFILES="${ARCHON_PM2_COMPOSE_PROFILES:-}"
 COMPOSE_SERVICES="${ARCHON_PM2_COMPOSE_SERVICES:-}"
 
@@ -22,13 +24,21 @@ CLI tools (claude, codex, git, gh), while optional sidecar services continue
 to run through Docker Compose.
 
 Options:
-  --with-db        Start the compose postgres service with profile "with-db".
-  --with-auth      Start the compose auth-service with profile "auth".
-  --no-compose     Do not run Docker Compose services.
-  --no-build       Skip bun install and web build.
-  --no-save        Skip "pm2 save".
-  --startup        Run "pm2 startup" after starting the app.
-  -h, --help       Show this help.
+  --with-db             Start the compose postgres service with profile "with-db".
+  --with-auth           Start the compose auth-service with profile "auth".
+  --no-compose          Do not run Docker Compose services.
+  --no-build            Skip bun install and web build.
+  --no-save             Skip "pm2 save".
+  --startup             Run "pm2 startup" after starting the app.
+  --reload-workflows    Refresh workflow defaults without restarting PM2.
+                        Runs `bun run generate:bundled` (same step as
+                        `bun run dev`) and leaves in-flight runs running.
+                        Host PM2 is source mode: discovery re-reads
+                        `.archon/workflows/` on the next list/run.
+                        New files under defaults/ must be `git add`ed first.
+                        Use a full deploy after code or UI changes.
+  -h, --help            Show this help.
+
 
 Environment:
   ARCHON_PM2_NAME               PM2 app name. Default: archon
@@ -47,6 +57,8 @@ Notes:
     so they do not fight the host service for PORT.
   - This script never runs "docker compose down -v", "docker volume rm", or any
     other volume/database reset. Deploys must preserve existing history.
+  - `--reload-workflows` does not install, build, touch Compose, or restart
+    PM2. That is the path for YAML-only updates on a live Mac Mini install.
 USAGE
 }
 
@@ -107,6 +119,30 @@ resolve_bun() {
   return 1
 }
 
+wait_for_health() {
+  local port health_url ui_url
+  port="$(get_env_value PORT || true)"
+  port="${port:-3090}"
+  health_url="http://127.0.0.1:$port/api/health"
+  ui_url="http://127.0.0.1:$port/"
+
+  echo "Waiting for Archon health check: $health_url"
+  for _ in $(seq 1 30); do
+    if curl -fsS "$health_url" >/dev/null 2>&1; then
+      echo "Archon is healthy."
+      echo "Open Archon at: $ui_url"
+      pm2 status "$APP_NAME"
+      exit 0
+    fi
+    sleep 1
+  done
+
+  echo "Archon did not become healthy within 30 seconds." >&2
+  echo "Check logs with: pm2 logs $APP_NAME" >&2
+  exit 1
+}
+
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --with-db)
@@ -129,6 +165,9 @@ while [ "$#" -gt 0 ]; do
     --startup)
       RUN_STARTUP=1
       ;;
+    --reload-workflows)
+      RELOAD_WORKFLOWS=1
+      ;;
     -h | --help)
       usage
       exit 0
@@ -142,8 +181,6 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-require_command docker "Install Docker Desktop or Docker Engine first."
-require_command pm2 "Install PM2 first, for example: npm install -g pm2"
 
 if ! BUN_BIN="$(resolve_bun)"; then
   echo "Missing required command: bun" >&2
@@ -158,6 +195,27 @@ if [ ! -f .env ]; then
   echo "Missing .env. Create it from .env.example and set your local credentials." >&2
   exit 1
 fi
+
+if [ "$RELOAD_WORKFLOWS" -eq 1 ]; then
+  require_command pm2 "Install PM2 first, for example: npm install -g pm2"
+  if ! pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+    echo "PM2 app '$APP_NAME' is not running." >&2
+    echo "Start it first with: $ROOT_DIR/scripts/deploy-pm2.sh" >&2
+    exit 1
+  fi
+
+  echo "Refreshing bundled workflow defaults without restarting PM2..."
+  echo "In-flight runs keep the definition they started with."
+  "$BUN_BIN" run generate:bundled
+
+  echo "Host PM2 reads workflow YAML from disk on each list/run."
+  echo "Did not restart '$APP_NAME'."
+  wait_for_health
+fi
+
+require_command docker "Install Docker Desktop or Docker Engine first."
+require_command pm2 "Install PM2 first, for example: npm install -g pm2"
+
 
 DATABASE_URL="$(get_env_value DATABASE_URL || true)"
 if [ "$RUN_COMPOSE" -eq 1 ] && [ -n "$DATABASE_URL" ]; then
@@ -228,22 +286,4 @@ if [ "$RUN_STARTUP" -eq 1 ]; then
   pm2 startup
 fi
 
-PORT="$(get_env_value PORT || true)"
-PORT="${PORT:-3090}"
-HEALTH_URL="http://127.0.0.1:$PORT/api/health"
-UI_URL="http://127.0.0.1:$PORT/"
-
-echo "Waiting for Archon health check: $HEALTH_URL"
-for _ in $(seq 1 30); do
-  if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
-    echo "Archon is healthy."
-    echo "Open Archon at: $UI_URL"
-    pm2 status "$APP_NAME"
-    exit 0
-  fi
-  sleep 1
-done
-
-echo "Archon did not become healthy within 30 seconds." >&2
-echo "Check logs with: pm2 logs $APP_NAME" >&2
-exit 1
+wait_for_health
