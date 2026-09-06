@@ -142,7 +142,7 @@ function getLog(): ReturnType<typeof createLogger> {
 interface ApiWorkflowNodeState {
   nodeId: string;
   name: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'awaiting';
   retryEpoch: number;
   duration?: number;
   error?: string;

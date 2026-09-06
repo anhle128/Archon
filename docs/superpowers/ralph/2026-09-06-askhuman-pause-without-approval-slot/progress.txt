@@ -1,0 +1,45 @@
+## Codebase Patterns
+
+### NodeState is a projection superset of NodeOutput
+- **Where**: `packages/workflows/src/schemas/workflow-run.ts`
+- **Pattern**: `awaiting` is a projection-only node status. `nodeStateSchema` / `workflowStepStatusSchema` include it; `nodeOutputSchema` and `workflowRunStatusSchema` do not. The compile-time assertion is one-way: `NodeOutput['state'] extends NodeState`.
+- **Example**: `type AssertNodeOutputStateIsNodeState = NodeOutput['state'] extends NodeState ? true : never;`
+
+### Projector pending overlay
+- **Where**: `packages/workflows/src/retry-state.ts` `projectLatestEffectiveNodeStates(events, pending?)`
+- **Pattern**: `node_awaiting` sets `state: 'awaiting'` and preserves existing `output` (does not copy event output). `interaction_resolved` is a no-op. After events, each pending row with `status === 'pending'` forces that `node_id` to `awaiting`. Answered/purged rows do not overlay.
+- **Example**: `projectLatestEffectiveNodeStates(events, [{ node_id: 'review', status: 'pending' }])`
+
+### Widening NodeState requires API local union until US-006
+- **Where**: `packages/server/src/routes/api.ts` `ApiWorkflowNodeState.status`
+- **Pattern**: GET run maps `projected.state` onto a local status union. Until US-006 switches `workflowNodeStateSchema.status` to `nodeStateSchema`, that local union must include `awaiting` or `@archon/server` type-check fails.
+
+---
+
+## 2026-09-06 — US-001: Add awaiting to node status enums and projector
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/schemas/workflow-run.ts` — added `awaiting` to step/node status enums; one-way NodeOutput assertion
+- `packages/workflows/src/schemas.test.ts` — contract test that `awaiting` parses as NodeState/step status and is rejected by NodeOutput
+- `packages/workflows/src/retry-state.ts` — `RetryNodeProjection.state` is `NodeState`; projector accepts pending overlay
+- `packages/workflows/src/retry-state.test.ts` — node_awaiting, interaction_resolved, pending overlay tests
+- `packages/server/src/routes/api.ts` — include `awaiting` on `ApiWorkflowNodeState.status` so projector output type-checks
+
+**Acceptance criteria verified**:
+- [x] packages/workflows/src/schemas/workflow-run.ts adds 'awaiting' to workflowStepStatusSchema and nodeStateSchema while keeping workflowRunStatusSchema and nodeOutputSchema free of awaiting.
+- [x] Compile-time type assertion confirms NodeOutput['state'] extends NodeState without requiring NodeState to equal NodeOutput['state'].
+- [x] packages/workflows/src/schemas.test.ts verifies nodeStateSchema and workflowStepStatusSchema parse 'awaiting' while nodeOutputSchema rejects it.
+- [x] RetryNodeProjection.state in packages/workflows/src/retry-state.ts uses NodeState instead of NodeOutput['state'].
+- [x] projectLatestEffectiveNodeStates accepts an optional pending array of { node_id: string; status: string }.
+- [x] A node_awaiting event sets the node projection state to 'awaiting' without writing output.
+- [x] An interaction_resolved event does not change node state and never completes the node.
+- [x] Pending rows with status === 'pending' overlay 'awaiting' onto a running node, while answered pending rows do not overlay awaiting.
+- [x] packages/workflows/src/retry-state.test.ts passes all new projection tests, and existing retry/step tests remain green.
+
+**Learnings**:
+- `bun x eslint path/to/*.test.ts --max-warnings 0` warns on ignored test files; lint production files only.
+- Expanding `NodeState` immediately breaks `packages/server` because GET run assigns `projected.state` to a hardcoded status union.
+- The Edit tool truncated large files in this worktree; surgical whole-block replacement was safer.
+
+---

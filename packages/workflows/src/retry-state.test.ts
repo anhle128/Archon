@@ -169,3 +169,44 @@ describe('retry DAG state projection', () => {
     expect(state).toMatchObject({ state: 'completed', retry_epoch: 1, output: 'fixed' });
   });
 });
+
+test('maps node_awaiting to awaiting without completing the node', () => {
+  const states = projectLatestEffectiveNodeStates([
+    { event_type: 'node_started', step_name: 'review', data: {} },
+    {
+      event_type: 'node_awaiting',
+      step_name: 'review',
+      data: { node_id: 'review', tool_use_id: 'toolu_1', kind: 'ask' },
+    },
+  ]);
+  expect(states.get('review')?.state).toBe('awaiting');
+});
+
+test('does not complete a node on interaction_resolved', () => {
+  const states = projectLatestEffectiveNodeStates([
+    { event_type: 'node_started', step_name: 'review', data: {} },
+    { event_type: 'node_awaiting', step_name: 'review', data: { node_id: 'review' } },
+    {
+      event_type: 'interaction_resolved',
+      step_name: 'review',
+      data: { node_id: 'review', tool_use_id: 'toolu_1' },
+    },
+  ]);
+  expect(states.get('review')?.state).toBe('awaiting');
+});
+
+test('pending rows overlay awaiting onto a running node', () => {
+  const states = projectLatestEffectiveNodeStates(
+    [{ event_type: 'node_started', step_name: 'review', data: {} }],
+    [{ node_id: 'review', status: 'pending' }]
+  );
+  expect(states.get('review')?.state).toBe('awaiting');
+});
+
+test('answered pending rows do not overlay awaiting', () => {
+  const states = projectLatestEffectiveNodeStates(
+    [{ event_type: 'node_started', step_name: 'review', data: {} }],
+    [{ node_id: 'review', status: 'answered' }]
+  );
+  expect(states.get('review')?.state).toBe('running');
+});

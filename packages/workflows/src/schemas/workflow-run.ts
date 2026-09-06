@@ -49,6 +49,7 @@ export const workflowStepStatusSchema = z.enum([
   'completed',
   'failed',
   'skipped',
+  'awaiting',
 ]);
 
 export type WorkflowStepStatus = z.infer<typeof workflowStepStatusSchema>;
@@ -57,7 +58,14 @@ export type WorkflowStepStatus = z.infer<typeof workflowStepStatusSchema>;
 // NodeState
 // ---------------------------------------------------------------------------
 
-export const nodeStateSchema = z.enum(['pending', 'running', 'completed', 'failed', 'skipped']);
+export const nodeStateSchema = z.enum([
+  'pending',
+  'running',
+  'completed',
+  'failed',
+  'skipped',
+  'awaiting',
+]);
 
 export type NodeState = z.infer<typeof nodeStateSchema>;
 
@@ -497,15 +505,11 @@ export const artifactTypeSchema = z.enum([
 export type ArtifactType = z.infer<typeof artifactTypeSchema>;
 
 // ---------------------------------------------------------------------------
-// Compile-time assertion: NodeOutput must cover all NodeState values.
-// If NodeState gains a new value, this line becomes a type error as a reminder
-// to update NodeOutput.
+// Compile-time assertion: every executable NodeOutput state is a NodeState.
+// Projection-only states such as `awaiting` may exist on NodeState without a
+// matching NodeOutput variant.
 // ---------------------------------------------------------------------------
 
-type AssertNodeOutputCoversNodeState = NodeOutput['state'] extends NodeState
-  ? NodeState extends NodeOutput['state']
-    ? true
-    : never
-  : never;
-const nodeOutputStateCoverage: AssertNodeOutputCoversNodeState = true;
-void nodeOutputStateCoverage; // suppress unused-variable lint warning
+type AssertNodeOutputStateIsNodeState = NodeOutput['state'] extends NodeState ? true : never;
+const nodeOutputStateIsNodeState: AssertNodeOutputStateIsNodeState = true;
+void nodeOutputStateIsNodeState;

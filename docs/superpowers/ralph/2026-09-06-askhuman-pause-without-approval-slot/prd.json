@@ -19,8 +19,8 @@
       "technicalNotes": "Follow plan Task 1 at docs/superpowers/plans/2026-09-06-askhuman-pause-without-approval-slot.md:417-505. Modify packages/workflows/src/schemas/workflow-run.ts, packages/workflows/src/schemas.test.ts, packages/workflows/src/retry-state.ts, and packages/workflows/src/retry-state.test.ts.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/workflows/src/schemas/workflow-run.ts, packages/workflows/src/schemas.test.ts, packages/workflows/src/retry-state.ts, packages/workflows/src/retry-state.test.ts, packages/server/src/routes/api.ts (ApiWorkflowNodeState.status widened so projector awaiting type-checks)."
     },
     {
       "id": "US-002",
