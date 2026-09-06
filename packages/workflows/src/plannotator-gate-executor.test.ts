@@ -16,6 +16,7 @@ import {
   readFileSync,
   realpathSync,
   writeFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
 } from 'node:fs';
@@ -264,10 +265,13 @@ function releaseDecision(
   attempt: number,
   payload: Record<string, unknown>
 ): void {
+  const controlPath = join(fake.controlDir, `${gateAttemptKey(gateId, attempt)}.control.json`);
+  const temporary = `${controlPath}.${process.pid}.tmp`;
   writeFileSync(
-    join(fake.controlDir, `${gateAttemptKey(gateId, attempt)}.control.json`),
+    temporary,
     JSON.stringify({ payload, stdout: 'fake stdout', stderr: 'fake stderr', exitCode: 0 })
   );
+  renameSync(temporary, controlPath);
 }
 
 async function waitForInvocations(fake: FakePlannotator, count: number): Promise<unknown[][]> {
