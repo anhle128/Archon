@@ -1,0 +1,297 @@
+## Codebase Patterns
+
+### Ask submit keys on tool_use_id
+- **Where**: `packages/web/src/components/workflows/NodeTranscriptPane.tsx`, `packages/server/src/routes/api.ts` `resolvePendingInteraction`
+- **Pattern**: Card submit/decline must call `onSubmitAsk(interaction.tool_use_id, body)`. The server resolves pending Asks by `tool_use_id`, not `interaction.id`. `emptyAskActionStates` is a factory — pass it as the `useState` lazy initializer (`useState(emptyAskActionStates)`), not `useState(emptyAskActionStates())`. Named read-only Ask forms use a disabled `fieldset`; happy-dom does not propagate `fieldset.disabled` to `input.disabled`. Transcript query key is `[runId, nodeId]`, so fixtures that share those ids must `queryClient.clear()` between cases. Loop-slice isolation needs a post-loop message; the default FIXTURE iter-2 row is at the transcript tail.
+- **Example**: `void onSubmitAsk(interaction.tool_use_id, body);`
+
+### Real queryClient invalidation spies
+- **Where**: `packages/web/src/stores/workflow-store.ts`, `packages/web/src/stores/workflow-store.test.ts`
+- **Pattern**: `handleWorkflowStatus` invalidates via `invalidateWorkflowQueries()` when status is `running`, `paused`, or terminal. Tests spy on the real imported `queryClient.invalidateQueries`, assert `{ queryKey: ['workflowRun'] }` with `toHaveBeenCalledWith`, and `mockRestore` in `afterEach`. Do not `mock.module` the query client.
+- **Example**: `spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);`
+
+### Awaiting vs CAP-7 chrome
+- **Where**: `packages/web/src/components/workflows/awaiting-chrome.ts`, `WorkflowAskChrome.tsx`
+- **Pattern**: Count only `kind === 'ask' && status === 'pending'`. Awaiting is `paused` plus count > 0. CAP-7 is `startsWith('AskHuman is not supported by provider')`. `nodeStatusLabel` rewrites only `awaiting` to `waiting on you`. Chrome is mutually exclusive: failed + CAP-7 renders an error banner and no pill; otherwise the warning pill. Pill click calls `onRequestGraphView` then `onSelectAwaitingNode`; both are no-ops when `firstAwaitingNodeId` is null. Native `<button>` lets tests invoke the function component and fire `onClick` without happy-dom. React 19 test `ReactElement.props` is `unknown` — read `className` through a typed helper.
+- **Example**: `if (nodeId === null) { return; }`
+
+### In-tree Ask decline dialog
+- **Where**: `packages/web/src/components/workflows/AskCard.tsx`
+- **Pattern**: Keep Other-selected flags and Other text in separate state so custom text equal to a listed option cannot move the checked indicator. Project an empty-string sentinel while Other text is empty so `isAskDraftValid` keeps Submit disabled. Decline confirmation is an in-tree `role="alertdialog"` using `Button`; Radix `AlertDialogContent` portals and does not mount under this package's happy-dom harness even when `onClick` fires. Tests drive controlled inputs through the fiber `__reactProps$` onChange, matching `WorkflowEnvManageDialog.test.tsx`.
+- **Example**: `const isOtherOn = otherSelected[question.id] ?? false;`
+
+### Independent Ask action vs presentation
+- **Where**: `packages/web/src/components/workflows/ask-answer-controller.ts`, `packages/web/src/components/workflows/ask-card-presentation.ts`
+- **Pattern**: Inject `postAnswer`, `setActionState`, `invalidate`, and `now`. Own a private `Set<string>` for in-flight ids; add before POST and delete in `finally` after invalidation. Duplicate in-flight submits return without a second POST. Emit `sending` then `accepted` / `rejected-late` (HTTP 409 via `getApiErrorStatus`) / `error` (`Error.message` or `Failed to answer.`). Success and 409 invalidate; catch invalidation with `console.warn('[AskAnswer] Failed to invalidate query cache', { runId, requestId, error })` and keep the terminal local state. Presentation precedence: `rejected-late` over canonical, then `sending`, then `parseAskAnswer(interaction.answer)` over local `accepted`, then local error, then pending. `failed-resume` requires an effective answer plus `nodeStatus === 'failed'` and `nodeError.startsWith('Could not resume the AskHuman session')`. Malformed canonical payloads set `error: 'Malformed canonical answer'` and stay `answered` without throwing.
+- **Example**: `if (inFlight.has(requestId)) { return; }`
+
+### Loop-safe Ask placement
+- **Where**: `packages/web/src/components/workflows/merge-agent-room-items.ts`
+- **Pattern**: Filter `kind === 'ask'` + node + `pending|answered` in GET order. An Ask is anchored when `tool_use_id` matches a tool message `payload.id` in the full transcript and is kept only if that tool id is also in `visibleMessages`. Unanchored Asks are kept only when the last visible message id equals the sorted full-transcript tail. Merge sorts by `seq`, places matching cards immediately after the tool row, and appends leftover selected rows once using `ask:${interaction.id}`.
+- **Example**: `return visible[visible.length - 1].id === full[full.length - 1].id;`
+
+### NodeRoom generic slots need a runtime Fragment import
+- **Where**: `packages/web/src/components/workflows/NodeRoom.tsx`
+- **Pattern**: `NodeRoom.tsx` otherwise uses `React.*` only as erased types. Keyed `React.Fragment` is a runtime value and throws `React is not defined` under `NODE_ENV=development` `renderToStaticMarkup`. Import `{ Fragment } from 'react'` and key it with `message.id` so each message stays adjacent to `renderAfterMessage`. Loading suppresses both slots; empty transcripts replace the placeholder with `renderAtEnd`; error renders Retry then `renderAtEnd`.
+- **Example**: `import { Fragment } from 'react';`
+
+### Ask envelope parser rejects extra keys
+- **Where**: `packages/web/src/components/workflows/parse-ask-envelope.ts`
+- **Pattern**: Pure TypeScript type guards, no Zod or `@archon/workflows`. Reuse one `isPlainObject` helper (object, not null, not array). Strict answer decoding matches the canonical Zod `.strict()` union by requiring exact own keys via `Object.keys` length plus membership. Duplicate question IDs are tracked in a local `Set<string>` and fail the whole envelope. Draft Other values must be trimmed non-empty and are only legal when `allowOther` is true; listed options match exactly without trimming.
+- **Example**: `return keys.length === allowed.length && allowed.every((key) => keys.includes(key));`
+
+### Typed Ask answer client
+- **Where**: `packages/web/src/lib/api.ts` beside `getWorkflowRun`
+- **Pattern**: Export generated schema types, wrap the existing `fetchJSON` helper once with `encodeURIComponent` path params, and extract HTTP status via `typeof === 'object'`, a null guard, the `in` operator, and `typeof status === 'number'` — never `any` assertions. Client tests spy on `globalThis.fetch` and assign `window.location.origin` because `assertApiResponseOk` builds `new URL(url, window.location.origin)` on non-2xx.
+- **Example**: `return typeof status === 'number' ? status : null;`
+
+### GET-run viewer presentation
+- **Where**: `packages/server/src/routes/api.ts` GET `/api/workflows/runs/:runId`; schema in `packages/server/src/routes/schemas/workflow.schemas.ts`
+- **Pattern**: Compute `viewer_is_starter` from `resolveAuthContext(c)` vs `run.user_id` (never a Better Auth session id). Look up `starter_display_name` with `userDb.getUserById` only when `run.user_id` is non-null; trim `display_name` and fall back to `run.user_id`. Starter-less runs return `false` and `null` with no lookup.
+- **Example**: `const starterDisplayName = starter?.display_name?.trim() || run.user_id;`
+
+### mock.module users factory must stub getUserById
+- **Where**: `packages/server/src/routes/api.workflow-runs.test.ts`
+- **Pattern**: `mock.module()` merges; an omitted export keeps the real implementation. Calling `userDb.getUserById` without adding it to the users factory opens a real DB. Stub `getUserById` next to `findOrCreateUserByPlatformIdentity` and reset it in the GET-run `beforeEach`.
+
+---
+
+## 2026-09-07 — US-001: Extend GET run with viewer and starter presentation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — required `viewer_is_starter` boolean and `starter_display_name` nullable string on `workflowRunDetailSchema`
+- `packages/server/src/routes/api.ts` — GET-run handler resolves requester and starter presentation
+- `packages/server/src/routes/api.workflow-runs.test.ts` — table-driven presentation cases plus OpenAPI required-field assertions; stub `getUserById`
+- `packages/web/src/lib/api.generated.d.ts` — regenerated `WorkflowRunDetail` with both fields
+
+**Acceptance criteria verified**:
+- [x] workflowRunDetailSchema adds required viewer_is_starter: z.boolean() and starter_display_name: z.string().nullable()
+- [x] GET handler uses resolveAuthContext(c) and sets viewer_is_starter true only when requester.userId === run.user_id
+- [x] Starter display name from userDb.getUserById, trimmed, fallback to run.user_id; starter-less returns false/null without lookup
+- [x] Unit tests cover signed-in starter, teammate, unsigned viewer, starter with no display name, and starter-less run
+- [x] OpenAPI assertions pass and api.generated.d.ts exports updated WorkflowRunDetail
+
+**Learnings**:
+- Existing GET-run fixtures are starter-less (`user_id: null`), so a default `getUserById` mock returning null is enough for prior tests
+- Trusted test identity is the `X-Archon-User` header; `findOrCreateUserByPlatformIdentity` mock returns `id: platformUserId`
+- Regenerating web types from an in-process OpenAPI dump (`registerApiRoutes` + `openapi-typescript` on the JSON) avoids colliding with the already-bound port 3090
+
+---
+
+## 2026-09-07 — US-002: Add typed Ask answer client
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.ts` — export PendingInteraction, AskAnswerBody, WorkflowRunActionResponse; add answerAskHuman and getApiErrorStatus
+- `packages/web/src/lib/api.ask.test.ts` — URL encoding, POST JSON headers/body, and getApiErrorStatus matrix including inherited status
+
+**Acceptance criteria verified**:
+- [x] packages/web/src/lib/api.ts exports types PendingInteraction, AskAnswerBody, and WorkflowRunActionResponse from generated schema components.
+- [x] answerAskHuman(runId, requestId, body) issues a single POST request to /api/workflows/runs/:runId/ask/:requestId/answer with encodeURIComponent on runId and requestId, JSON content type, and stringified body.
+- [x] getApiErrorStatus(error: unknown): number | null extracts numeric own or inherited status from an object error without using any assertions, returning null for non-objects, null, or non-numeric status.
+- [x] Unit tests in packages/web/src/lib/api.ask.test.ts verify URL encoding, headers, payload forwarding, and getApiErrorStatus matrix, passing via bun test src/lib/api.ask.test.ts.
+
+**Learnings**:
+- Reuse `fetchJSON` so non-2xx behavior stays identical to every other web client
+- Inherited status must use `'status' in error`, not `Object.hasOwn`; `Object.create({ status: 409 })` is the own-vs-inherited fixture
+- `packages/web` eslint ignores test files; pass production paths only, or `--no-warn-ignored` if linting tests explicitly
+
+---
+
+## 2026-09-07 — US-003: Parse Ask envelopes, answers, and valid drafts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/parse-ask-envelope.ts` — parseAskEnvelope, isQuestionValid, isAskDraftValid, draftToAnswerBody, parseAskAnswer
+- `packages/web/src/components/workflows/parse-ask-envelope.test.ts` — ordered parse, malformed table, validity matrix, strict answer codec
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/parse-ask-envelope.ts exporting AskQuestion, AskDraftValue, AskDraft, parseAskEnvelope, parseAskAnswer, isQuestionValid, isAskDraftValid, and draftToAnswerBody.
+- [x] parseAskEnvelope returns AskQuestion[] in original envelope order for valid envelopes; returns null for non-objects, missing/empty questions, invalid types, missing prompt/selection/options, non-boolean allowOther, or duplicate question IDs.
+- [x] isQuestionValid and isAskDraftValid enforce single-select (valid option or non-empty trimmed other if allowOther) and multi-select (non-empty array of valid options/trimmed other) rules, requiring all questions in the draft to be valid.
+- [x] draftToAnswerBody converts a complete valid draft into { answers: Array<{ questionId: string; value: string | string[] }> } in envelope order.
+- [x] parseAskAnswer decodes strictly either { decline: true } or valid answers array with non-empty questionId and string/string[] values, returning null for invalid or extra-keyed objects.
+- [x] Unit tests in packages/web/src/components/workflows/parse-ask-envelope.test.ts cover happy paths, malformed envelopes, validity matrix, and answer decoding, passing via bun test src/components/workflows/parse-ask-envelope.test.ts.
+
+**Learnings**:
+- eslint `array-type` forbids `Array<T>` in production files; use `T[]`
+- `@archon/web` eslint ignores `**/*.test.ts`; lint the production parser path only
+- Extra-key rejection must use own enumerable `Object.keys`, not the `in` operator, to match Zod `.strict()`
+
+---
+
+## 2026-09-07 — US-004: Add loop-safe placement and generic transcript slots
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/merge-agent-room-items.ts` — selectVisibleNodeAskInteractions + mergeAgentRoomItems
+- `packages/web/src/components/workflows/merge-agent-room-items.test.ts` — kind/node/status filter, loop-slice isolation, merge order
+- `packages/web/src/components/workflows/NodeRoom.tsx` — renderAfterMessage and renderAtEnd slots
+- `packages/web/src/components/workflows/NodeRoom.test.tsx` — generic slot DOM order, empty replacement, error-after-retry
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/merge-agent-room-items.ts exporting AgentRoomItem, selectVisibleNodeAskInteractions, and mergeAgentRoomItems.
+- [x] selectVisibleNodeAskInteractions filters for kind === 'ask', selected nodeId, and status pending|answered in GET order; excludes purged and permission rows.
+- [x] An Ask matching a tool row in the full transcript is included only when that tool row is in visibleMessages; an unanchored Ask is included only when visibleMessages reaches the end of the full transcript.
+- [x] mergeAgentRoomItems sorts visible messages by seq, places matching Ask cards immediately after their tool message, and appends remaining unanchored cards at the end.
+- [x] NodeRoomProps is extended with renderAfterMessage and renderAtEnd.
+- [x] NodeRoom renders renderAfterMessage immediately after msg, renderAtEnd after the slice or in place of empty placeholder, and renderAtEnd after Retry on error.
+- [x] Tests in merge-agent-room-items.test.ts and NodeRoom.test.tsx pass with bun test.
+
+**Learnings**:
+- `React.Fragment` in NodeRoom requires `import { Fragment } from 'react'` because existing `React.*` usages are type-only
+- Empty full transcript is treated as at-tail so unanchored Asks still appear on a node with no messages yet
+
+---
+
+## 2026-09-07 — US-005: Implement independent Ask mutation and presentation state
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/ask-answer-controller.ts` — per-request in-flight Set, sending/accepted/rejected-late/error transitions, success/409 invalidation with warn-on-failure
+- `packages/web/src/components/workflows/ask-answer-controller.test.ts` — deferred-promise success, same-id dedupe with concurrent other id, 409/Error/non-Error matrix, invalidation warn
+- `packages/web/src/components/workflows/ask-card-presentation.ts` — viewState derivation from canonical answer, local action, and exact resume-error prefix
+- `packages/web/src/components/workflows/ask-card-presentation.test.ts` — pending/sending/answered/declined/canonical/rejected-late/error/malformed matrix plus failed-resume vs lint failed
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/ask-answer-controller.ts exporting AskActionState, AskActionStateByRequest, AskAnswerController, and createAskAnswerController.
+- [x] createAskAnswerController maintains a private in-flight Set<string>; duplicate calls for the same in-flight requestId return immediately without a second POST, while different request IDs can run concurrently.
+- [x] The controller transitions state to sending before POST, accepted with submitted answer and resolvedAt ISO timestamp upon success, rejected-late for HTTP 409, and error for other exceptions. Success and 409 trigger invalidation, catching and warning on failure without reverting final state.
+- [x] Create packages/web/src/components/workflows/ask-card-presentation.ts exporting AskCardViewState, AskCardPresentation, and resolveAskCardPresentation.
+- [x] resolveAskCardPresentation derives viewState (pending, sending, answered, declined, rejected-late, failed-resume), preferring canonical interaction answer over local accepted answer, and retaining rejected-late even after refetch.
+- [x] failed-resume is selected only when an accepted/canonical answer exists, nodeStatus is 'failed', and nodeError starts with 'Could not resume the AskHuman session'; unrelated node failures remain answered or declined.
+- [x] Unit tests in packages/web/src/components/workflows/ask-answer-controller.test.ts and ask-card-presentation.test.ts pass with bun test.
+
+**Learnings**:
+- Hold POST promises with a real deferred instead of timer sleeps so sending vs accepted is asserted on the same tick
+- `getApiErrorStatus` already reads inherited `status`, so 409 fixtures can be `Object.assign(new Error('conflict'), { status: 409 })`
+- Invalidation warn copy matches `[WorkflowStore] Failed to invalidate query cache` with runId/requestId
+
+---
+
+## 2026-09-07 — US-006: Render the accessible Ask card
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/AskCard.tsx` — AskCard + InvalidAskCard: accessible form, native radios/checkboxes, Other textarea, starter/teammate states, lifecycle stamps, payload disclosure
+- `packages/web/src/components/workflows/AskCard.test.tsx` — static markup plus happy-dom submit, decline, Other, read-only, and focus tests
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/AskCard.tsx exporting AskCard and InvalidAskCard matching the locked component interfaces.
+- [x] The card renders an accessible form with aria-label='question from agent, N questions', agent header, node ID, elapsed waiting duration, and fieldset legends with radio (single) or checkbox (multi) controls.
+- [x] When allowOther is true, selecting Other reveals a text input labelled 'Other answer for <prompt>' with aria-required='true'; custom text equal to a listed option does not jump the selected option.
+- [x] Only the first actionable card with autoFocus=true focuses its first input; non-starter view renders disabled controls, omits Submit/Decline, and displays 'Waiting for <starter> to answer'.
+- [x] Submit is disabled until the draft is fully valid; submitting calls onSubmit with the ordered answer body; Decline triggers AlertDialog ('Decline this ask?' / 'The agent will be told you declined') and calls onDecline.
+- [x] Resolved states display question-labelled summaries: Answered ('Answered · by you' for starter, 'Answered' for teammate), Declined, Already answered, or Resume failed stamp with error text.
+- [x] All valid card states render a 'View payload' disclosure with pretty-printed JSON; InvalidAskCard renders non-interactive role='alert' with 'Invalid Ask payload' and disclosure without form actions.
+- [x] Unit tests in packages/web/src/components/workflows/AskCard.test.tsx pass with bun test under NODE_ENV=development.
+
+**Learnings**:
+- `renderToStaticMarkup` HTML-escapes JSON in `<pre>` as `&quot;`; assert through visible text, not raw markup.
+- React 19 `dateTime` stays camelCase in SSR markup (`dateTime=` not `datetime=`).
+- happy-dom native input events do not reliably update React 19 controlled inputs; invoke `__reactProps$` onChange.
+- Radix AlertDialog portals do not appear in this happy-dom harness; an in-tree `role="alertdialog"` satisfies the copy and confirm/cancel contract.
+
+---
+
+## 2026-09-07 — US-007: Add awaiting and CAP-7 presentation chrome
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/awaiting-chrome.ts` — countPendingAsks, isAskAwaitingRun, firstAwaitingNodeId, isAskHumanUnsupportedError, nodeStatusLabel
+- `packages/web/src/components/workflows/awaiting-chrome.test.ts` — pending-only count, paused awaiting, prefix CAP-7, input-order first node
+- `packages/web/src/components/workflows/WorkflowAskChrome.tsx` — warning `Awaiting input (n)` pill vs CAP-7 error banner
+- `packages/web/src/components/workflows/WorkflowAskChrome.test.tsx` — click order, no-op without awaiting node, exclusive error banner
+- `packages/web/src/components/workflows/StatusIcon.tsx` — awaiting glyph with text-warning and aria-label `waiting on you`
+- `packages/web/src/components/workflows/StatusIcon.test.tsx` — warning tokens, accessible label, no error class
+- `packages/web/src/components/workflows/ExecutionDagNode.tsx` — warning border/background, pulse, motion-reduce, visible waiting on you
+- `packages/web/src/components/workflows/ExecutionDagNode.test.tsx` — awaiting vs running/failed treatments
+- `packages/web/src/components/workflows/NodeRunList.tsx` — awaiting warning tokens + nodeStatusLabel
+- `packages/web/src/components/workflows/NodeRunList.test.tsx` — awaiting row keeps running/failed treatments
+- `packages/web/src/components/workflows/LegacyNodeRoom.tsx` — awaiting warning header + nodeStatusLabel
+- `packages/web/src/components/workflows/LegacyNodeRoom.test.tsx` — awaiting header vs running/failed
+
+**Acceptance criteria verified**:
+- [x] Create awaiting-chrome.ts exporting countPendingAsks, isAskAwaitingRun (paused + pending > 0), firstAwaitingNodeId, isAskHumanUnsupportedError (prefix 'AskHuman is not supported by provider'), and nodeStatusLabel('awaiting') returning 'waiting on you'.
+- [x] Create WorkflowAskChrome.tsx rendering warning button 'Awaiting input (n)' when run is paused with pending Asks; clicking it calls onRequestGraphView then onSelectAwaitingNode(firstAwaitingId).
+- [x] When run status is failed and error matches isAskHumanUnsupportedError, WorkflowAskChrome renders an error banner with the full persisted message and no awaiting pill.
+- [x] StatusIcon.tsx adds an awaiting glyph with text-warning and accessible label 'waiting on you'.
+- [x] ExecutionDagNode.tsx renders awaiting border, background, visible 'waiting on you' label, optional pulse, and motion-reduce:animate-none.
+- [x] NodeRunList.tsx and LegacyNodeRoom.tsx render awaiting status with text-warning and nodeStatusLabel(status).
+- [x] Tests in awaiting-chrome.test.ts, WorkflowAskChrome.test.tsx, StatusIcon.test.tsx, ExecutionDagNode.test.tsx, NodeRunList.test.tsx, and LegacyNodeRoom.test.tsx pass with bun test.
+
+**Learnings**:
+- Native `<button>` on WorkflowAskChrome lets tests call the function component and fire `onClick` without happy-dom.
+- React 19 `ReactElement.props` is `unknown` in this package; read `className` through a small helper.
+- `nodeStatusLabel` is identity for every status except `awaiting`, so existing running/failed copy stays intact.
+
+---
+
+## 2026-09-07 — US-008: Invalidate Ask data on paused SSE
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/stores/workflow-store.ts` — add `event.status === 'paused'` to the `handleWorkflowStatus` invalidation predicate
+- `packages/web/src/stores/workflow-store.test.ts` — spy on the real query client for paused, running, and terminal statuses
+
+**Acceptance criteria verified**:
+- [x] packages/web/src/stores/workflow-store.ts adds event.status === 'paused' to the query invalidation predicate in handleWorkflowStatus.
+- [x] When a paused status event arrives, queryClient.invalidateQueries is called for queryKey: ['workflowRun'].
+- [x] Existing invalidations for running and terminal statuses remain intact.
+- [x] Unit tests in packages/web/src/stores/workflow-store.test.ts prove invalidation on paused status via the real query client and pass with bun test.
+
+**Learnings**:
+- Spy on the imported `queryClient` rather than mocking `@/lib/query-client`; `toHaveBeenCalledWith({ queryKey: ['workflowRun'] })` avoids untyped `mock.calls` map callbacks that fail `tsc`.
+- Do not use StrReplace on large test files after a truncated Read window — it can write the Read elision marker into the file.
+
+---
+
+## 2026-09-07 — US-009: Integrate Ask cards through the complete legacy run surface
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — export mapper/query types; own Ask action state + controller; pass merged `workflow.status` and Ask props; render `WorkflowAskChrome`
+- `packages/web/src/components/workflows/WorkflowExecution.test.tsx` — mapper coverage and fresh empty action-state factory
+- `packages/web/src/components/workflows/NodeTranscriptPane.tsx` — poll paused; compose anchored/unanchored Ask cards; submit via `tool_use_id`
+- `packages/web/src/components/workflows/NodeTranscriptPane.test.tsx` — polling matrix, anchored submit, loop isolation, error-path cards, focus, named read-only
+- `packages/web/src/components/workflows/LegacyNodeRoom.tsx` — thread Ask props on the agent branch; drop `isLive`
+- `packages/web/src/components/workflows/LegacyNodeRoom.test.tsx` — required Ask props
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` — thread Ask props; drop `isLive`; keep Resizable* imports
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx` — three-door access, bash isolation, composer never answers
+
+**Acceptance criteria verified**:
+- [x] WorkflowExecution.tsx exports WorkflowRunQueryData, mapWorkflowRunDetail, and emptyAskActionStates; maps pendingInteractions, viewerIsStarter, starterDisplayName, and runError (string only) from GET run.
+- [x] WorkflowExecution manages AskActionStateByRequest (reset per run ID), instantiates memoized controller with answerAskHuman and invalidation, renders WorkflowAskChrome beside StatusBadge, and passes mapped props and merged workflow.status.
+- [x] NodeTranscriptPane.tsx updates refetch interval to poll every 1000ms for pending, running, and paused statuses, stopping only on terminal statuses.
+- [x] NodeTranscriptPane composes anchored cards via renderAfterMessage and unanchored cards via renderAtEnd; on transcript query error, renders all cards after the Retry UI.
+- [x] LegacyGraphLogsPane and LegacyNodeRoom thread Ask props only to agent rooms, removing stale isLive props and selecting nodeState from visibleNodeStates.
+- [x] Integration tests in NodeTranscriptPane.test.tsx, LegacyNodeRoom.test.tsx, LegacyGraphLogsPane.test.tsx, and WorkflowExecution.test.tsx verify three-door room access, loop isolation, named read-only state, transcript error resilience, non-agent room isolation, and composer isolation.
+
+**Learnings**:
+- Answer mutation requestId is `tool_use_id`, not `interaction.id`.
+- Named read-only assertions should target `fieldset[disabled]`; happy-dom does not set `input.disabled` from a disabled fieldset.
+- Editing `LegacyGraphLogsPane.tsx` can drop unused-looking Resizable* imports that tests still require.
+
+---
+
+## 2026-09-07 — US-010: Run regressions, validate, and close sprint tracking
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — removed conflict-diagnostic block, stamped matching `2026-09-07 05:26:55 +0700` timestamps, marked `6-5-answer-the-ask-in-the-legacy-node-room` done
+
+**Acceptance criteria verified**:
+- [x] Focused web logic, store, and legacy component tests all pass without warnings or unhandled rejections.
+- [x] packages/server route tests in api.workflow-runs.test.ts pass completely.
+- [x] bun run type-check, bun run lint, and bun run format:check pass from repository root with zero errors or warnings.
+- [x] bun run validate passes from repository root.
+- [x] Scope guards confirm no Ask components are imported by packages/web/src/experiments/console or packages/web/src/lib/run-graph, and no diffs exist in workflows, providers, migrations, RunChatComposer.tsx, or ChatTimeline.tsx.
+- [x] sprint-status.yaml removes the conflict-diagnostic block, updates timestamps, and marks 6-5-answer-the-ask-in-the-legacy-node-room as done.
+
+**Learnings**:
+- `rg` with no matches exits 1; that is the success condition for the Command Center / run-graph import guard.
+- Sprint YAML last_updated comment and YAML field must share the same +0700 timestamp; leave 6-4/6-6/6-7 and epic-6 in-progress.
+
+---
+
