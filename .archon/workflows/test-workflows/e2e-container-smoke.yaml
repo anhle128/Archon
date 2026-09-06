@@ -8,6 +8,11 @@
 # The HOST-folder-unchanged and clean-teardown assertions live in the CI job
 # (.github/workflows/e2e-smoke.yml): they can only be observed from the host after
 # the container is gone, because Phase B discards the overlay on teardown.
+#
+# CI runs this against a mktemp scratch folder that is NOT a git repository
+# (`--folder --container --cwd $SCRATCH`). Pre-node retry checkpoints are git
+# refs and must no-op on that cwd; inventing a repo for the smoke would hide
+# the folder-project contract this job exists to protect.
 name: e2e-container-smoke
 description: "Container-isolation smoke. Asserts bash nodes run in-container (hostname == container id, overlay mounts present) and an overlay write is visible in the merged view. Host-unchanged + teardown are asserted by the CI job."
 

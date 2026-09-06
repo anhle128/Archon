@@ -1,4 +1,5 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import type { PendingInteraction } from '@archon/workflows/schemas/pending-interaction';
 
 // ---------------------------------------------------------------------------
 // Mock DB modules before importing the module under test
@@ -49,6 +50,37 @@ mock.module('../services/cleanup-service', () => ({
   reclaimContainerEnv: mockReclaimContainerEnv,
 }));
 
+const mockListPendingInteractions = mock(() => Promise.resolve([] as PendingInteraction[]));
+const mockResolvePendingInteraction = mock(() =>
+  Promise.resolve({
+    interaction: {
+      id: 'pi-1',
+      workflow_run_id: 'run-1',
+      node_id: 'ask-node',
+      tool_use_id: 'tool-1',
+      kind: 'ask' as const,
+      status: 'answered' as const,
+      envelope: {},
+      answer: { decline: true },
+      provider_session_id: 'sess-1',
+      created_at: new Date(),
+      resolved_at: new Date(),
+      resolved_by: 'starter-1',
+    },
+    resumed: false,
+    remaining_pending: 1,
+  })
+);
+mock.module('../db/workflow-pending-interactions', () => ({
+  listPendingInteractions: mockListPendingInteractions,
+  resolvePendingInteraction: mockResolvePendingInteraction,
+}));
+
+const mockEmit = mock((_event: unknown) => undefined);
+mock.module('@archon/workflows/event-emitter', () => ({
+  getWorkflowEventEmitter: () => ({ emit: mockEmit }),
+}));
+
 const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
@@ -72,6 +104,10 @@ const {
   resumeWorkflow,
   abandonWorkflow,
   resetWorkflowNodeSessions,
+  answerAskHuman,
+  AskHumanRunNotFoundError,
+  AskHumanAuthenticationRequiredError,
+  AskHumanForbiddenError,
 } = await import('./workflow-operations');
 
 // ---------------------------------------------------------------------------
@@ -100,6 +136,39 @@ function makePausedRun(overrides: Record<string, unknown> = {}) {
     working_path: '/workspace/worktree',
     ...overrides,
   };
+}
+
+const ANSWER_SENTINEL = 'UNIQUE_ANSWER_SENTINEL_US006';
+const PROMPT_SENTINEL = 'UNIQUE_PROMPT_SENTINEL_US006';
+
+function makePendingInteraction(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
+  return {
+    id: 'pi-1',
+    workflow_run_id: 'run-1',
+    node_id: 'ask-node',
+    tool_use_id: 'tool-1',
+    kind: 'ask',
+    status: 'pending',
+    envelope: { questions: [{ id: 'q1', prompt: PROMPT_SENTINEL }] },
+    answer: null,
+    provider_session_id: 'sess-1',
+    created_at: new Date(),
+    resolved_at: null,
+    resolved_by: null,
+    ...overrides,
+  };
+}
+
+function loggerAndEmitPayloads(): string {
+  return JSON.stringify([
+    ...mockLogger.fatal.mock.calls,
+    ...mockLogger.error.mock.calls,
+    ...mockLogger.warn.mock.calls,
+    ...mockLogger.info.mock.calls,
+    ...mockLogger.debug.mock.calls,
+    ...mockLogger.trace.mock.calls,
+    ...mockEmit.mock.calls,
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -861,9 +930,225 @@ describe('getWorkflowStatus', () => {
   });
 });
 
+describe('answerAskHuman', () => {
+  const starterId = 'starter-1';
+  const answerBody = {
+    answers: [{ questionId: 'q1', value: ANSWER_SENTINEL }],
+  } as const;
+
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockResolvePendingInteraction.mockReset();
+    mockResolvePendingInteraction.mockResolvedValue({
+      interaction: makePendingInteraction({
+        status: 'answered',
+        answer: { answers: [{ questionId: 'q1', value: ANSWER_SENTINEL }] },
+        resolved_at: new Date(),
+        resolved_by: starterId,
+      }),
+      resumed: false,
+      remaining_pending: 1,
+    });
+    mockEmit.mockClear();
+    mockLogger.fatal.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.warn.mockClear();
+    mockLogger.info.mockClear();
+    mockLogger.debug.mockClear();
+    mockLogger.trace.mockClear();
+  });
+
+  test('requires an authenticated actor', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+
+    await expect(
+      answerAskHuman({
+        runId: 'run-1',
+        requestId: 'tool-1',
+        body: answerBody,
+        actorUserId: undefined,
+      })
+    ).rejects.toBeInstanceOf(AskHumanAuthenticationRequiredError);
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('rejects a different starter even when that actor is admin upstream', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+
+    await expect(
+      answerAskHuman({
+        runId: 'run-1',
+        requestId: 'tool-1',
+        body: answerBody,
+        actorUserId: 'admin-upstream',
+      })
+    ).rejects.toBeInstanceOf(AskHumanForbiddenError);
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('rejects an unowned run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: null }));
+
+    await expect(
+      answerAskHuman({
+        runId: 'run-1',
+        requestId: 'tool-1',
+        body: answerBody,
+        actorUserId: starterId,
+      })
+    ).rejects.toBeInstanceOf(AskHumanForbiddenError);
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('passes the matching starter as resolved_by', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+
+    await answerAskHuman({
+      runId: 'run-1',
+      requestId: 'tool-1',
+      body: answerBody,
+      actorUserId: starterId,
+    });
+
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-1',
+      tool_use_id: 'tool-1',
+      answer: answerBody,
+      resolved_by: starterId,
+    });
+  });
+
+  test('throws AskHumanRunNotFoundError when the run is missing', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(null);
+
+    await expect(
+      answerAskHuman({
+        runId: 'run-missing',
+        requestId: 'tool-1',
+        body: answerBody,
+        actorUserId: starterId,
+      })
+    ).rejects.toBeInstanceOf(AskHumanRunNotFoundError);
+    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+  });
+
+  test('logs and emits only after persistence resolves and omits answer/prompt sentinels', async () => {
+    const pausedRun = makePausedRun({ user_id: starterId });
+    mockGetWorkflowRun.mockResolvedValueOnce(pausedRun);
+    const answered = makePendingInteraction({
+      status: 'answered',
+      answer: { answers: [{ questionId: 'q1', value: ANSWER_SENTINEL }] },
+      envelope: { questions: [{ id: 'q1', prompt: PROMPT_SENTINEL }] },
+      resolved_at: new Date(),
+      resolved_by: starterId,
+    });
+    let resolvePersistence!: (value: {
+      interaction: PendingInteraction;
+      resumed: boolean;
+      remaining_pending: number;
+    }) => void;
+    const persistence = new Promise<{
+      interaction: PendingInteraction;
+      resumed: boolean;
+      remaining_pending: number;
+    }>(resolve => {
+      resolvePersistence = resolve;
+    });
+    mockResolvePendingInteraction.mockReset();
+    mockResolvePendingInteraction.mockReturnValueOnce(persistence);
+
+    const pending = answerAskHuman({
+      runId: 'run-1',
+      requestId: 'tool-1',
+      body: answerBody,
+      actorUserId: starterId,
+    });
+    await Promise.resolve();
+    expect(mockLogger.info).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+
+    resolvePersistence({
+      interaction: answered,
+      resumed: true,
+      remaining_pending: 0,
+    });
+    const result = await pending;
+
+    expect(result.run).toBe(pausedRun);
+    expect(result.interaction).toBe(answered);
+    expect(result.resumed).toBe(true);
+    expect(result.remainingPending).toBe(0);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      {
+        workflowRunId: 'run-1',
+        nodeId: 'ask-node',
+        toolUseId: 'tool-1',
+        declined: false,
+        resumed: true,
+      },
+      'workflow.ask_resolved'
+    );
+    expect(mockEmit).toHaveBeenCalledWith({
+      type: 'interaction_resolved',
+      runId: 'run-1',
+      nodeId: 'ask-node',
+      resumed: true,
+    });
+    const payloads = loggerAndEmitPayloads();
+    expect(payloads).not.toContain(ANSWER_SENTINEL);
+    expect(payloads).not.toContain(PROMPT_SENTINEL);
+  });
+
+  test('logs declined true after a decline commit', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+    mockResolvePendingInteraction.mockResolvedValueOnce({
+      interaction: makePendingInteraction({
+        status: 'answered',
+        answer: { decline: true },
+        resolved_at: new Date(),
+        resolved_by: starterId,
+      }),
+      resumed: false,
+      remaining_pending: 0,
+    });
+
+    await answerAskHuman({
+      runId: 'run-1',
+      requestId: 'tool-1',
+      body: { decline: true },
+      actorUserId: starterId,
+    });
+
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ declined: true, resumed: false }),
+      'workflow.ask_resolved'
+    );
+  });
+
+  test('propagates typed persistence errors without remapping', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+    const persistenceError = new Error('already resolved');
+    persistenceError.name = 'PendingInteractionAlreadyResolvedError';
+    mockResolvePendingInteraction.mockRejectedValueOnce(persistenceError);
+
+    await expect(
+      answerAskHuman({
+        runId: 'run-1',
+        requestId: 'tool-1',
+        body: answerBody,
+        actorUserId: starterId,
+      })
+    ).rejects.toBe(persistenceError);
+    expect(mockLogger.info).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+
 describe('resumeWorkflow', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockClear();
+    mockListPendingInteractions.mockReset();
+    mockListPendingInteractions.mockResolvedValue([]);
   });
 
   test.each(['failed', 'paused', 'cancelled'] as const)(
@@ -882,6 +1167,38 @@ describe('resumeWorkflow', () => {
 
     await expect(resumeWorkflow('run-1')).rejects.toThrow(
       "Cannot resume run with status 'completed'"
+    );
+  });
+
+  test('rejects any run with a pending interaction', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'paused' }));
+    mockListPendingInteractions.mockResolvedValueOnce([makePendingInteraction()]);
+
+    await expect(resumeWorkflow('run-1')).rejects.toThrow(
+      'Answer or decline the Ask before resuming run run-1'
+    );
+  });
+
+  test('accepts an already-running run with an answered Ask and zero pending', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    mockListPendingInteractions.mockResolvedValueOnce([
+      makePendingInteraction({
+        status: 'answered',
+        answer: { answers: [{ questionId: 'q1', value: 'yes' }] },
+        resolved_at: new Date(),
+        resolved_by: 'starter-1',
+      }),
+    ]);
+
+    const run = await resumeWorkflow('run-1');
+    expect(run.status).toBe('running');
+  });
+
+  test('rejects a plain running run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+
+    await expect(resumeWorkflow('run-1')).rejects.toThrow(
+      "Cannot resume run with status 'running'"
     );
   });
 

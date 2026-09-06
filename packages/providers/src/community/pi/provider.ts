@@ -7,13 +7,14 @@ import { createLogger } from '@archon/paths';
 // package.json read at module load (see the header note below). Used only to
 // annotate the per-call ResourceLoader local.
 import type { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
-import type { ThinkingLevel } from '@earendil-works/pi-ai';
+import type { ThinkingLevel, ToolResultMessage } from '@earendil-works/pi-ai';
 
 import type {
   AskHumanControlError,
   IAgentProvider,
   MessageChunk,
   ProviderCapabilities,
+  ResumeInteraction,
   SendQueryOptions,
   SystemPromptInput,
 } from '../../types';
@@ -282,6 +283,130 @@ Guidelines:
 - Be concise in your responses.
 - Show file paths clearly when working with files.`;
 
+const ASK_RESUME_FAILED_MESSAGE = 'Could not resume the AskHuman session';
+
+function hasAskResumeInteractions(
+  interactions: readonly ResumeInteraction[] | undefined
+): interactions is readonly ResumeInteraction[] {
+  return (interactions?.length ?? 0) > 0;
+}
+
+function buildAskToolResult(interaction: ResumeInteraction): ToolResultMessage {
+  return {
+    role: 'toolResult',
+    toolCallId: interaction.tool_use_id,
+    toolName: 'AskHuman',
+    content: [
+      {
+        type: 'text',
+        text: interaction.declined ? 'declined' : JSON.stringify(interaction.payload),
+      },
+    ],
+    isError: false,
+    timestamp: Date.now(),
+  };
+}
+
+function isToolResultMessage(value: unknown): value is ToolResultMessage {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as {
+    role?: unknown;
+    toolCallId?: unknown;
+    toolName?: unknown;
+    content?: unknown;
+    isError?: unknown;
+  };
+  return (
+    candidate.role === 'toolResult' &&
+    typeof candidate.toolCallId === 'string' &&
+    typeof candidate.toolName === 'string' &&
+    Array.isArray(candidate.content) &&
+    typeof candidate.isError === 'boolean'
+  );
+}
+
+function askToolResultsMatch(existing: ToolResultMessage, expected: ToolResultMessage): boolean {
+  return (
+    existing.toolCallId === expected.toolCallId &&
+    existing.toolName === expected.toolName &&
+    existing.isError === expected.isError &&
+    JSON.stringify(existing.content) === JSON.stringify(expected.content)
+  );
+}
+
+function findExistingAskToolResult(
+  messages: readonly unknown[],
+  toolCallId: string
+): ToolResultMessage | undefined {
+  for (const message of messages) {
+    if (isToolResultMessage(message) && message.toolCallId === toolCallId) {
+      return message;
+    }
+  }
+  return undefined;
+}
+
+function throwAskResumeFailed(errorClass: string): never {
+  getLog().error({ errorClass }, 'pi.ask_resume_failed');
+  throw new Error(ASK_RESUME_FAILED_MESSAGE);
+}
+
+function asAskSessionManager(value: unknown): {
+  appendMessage: (message: ToolResultMessage) => unknown;
+  buildSessionContext: () => { messages: readonly unknown[] };
+} {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    typeof (value as { appendMessage?: unknown }).appendMessage !== 'function' ||
+    typeof (value as { buildSessionContext?: unknown }).buildSessionContext !== 'function'
+  ) {
+    throwAskResumeFailed('missing_session_manager');
+  }
+  return value as {
+    appendMessage: (message: ToolResultMessage) => unknown;
+    buildSessionContext: () => { messages: readonly unknown[] };
+  };
+}
+
+function applyAskResumeToSession(
+  sessionManager: unknown,
+  interactions: readonly ResumeInteraction[]
+): ToolResultMessage {
+  const manager = asAskSessionManager(sessionManager);
+  manager.buildSessionContext();
+  let lastExpected: ToolResultMessage | undefined;
+  for (const interaction of interactions) {
+    const expected = buildAskToolResult(interaction);
+    lastExpected = expected;
+    const existing = findExistingAskToolResult(
+      manager.buildSessionContext().messages,
+      interaction.tool_use_id
+    );
+    if (existing) {
+      if (!askToolResultsMatch(existing, expected)) {
+        throwAskResumeFailed('conflicting_tool_result');
+      }
+      continue;
+    }
+    manager.appendMessage(expected);
+  }
+  if (lastExpected === undefined) {
+    throwAskResumeFailed('missing_interactions');
+  }
+  const tail = manager.buildSessionContext().messages.at(-1);
+  if (!isToolResultMessage(tail) || !askToolResultsMatch(tail, lastExpected)) {
+    throwAskResumeFailed('transcript_tail_mismatch');
+  }
+  return lastExpected;
+}
+
+function agentTranscriptTail(session: {
+  agent?: { state?: { messages?: readonly unknown[] } };
+}): unknown {
+  return session.agent?.state?.messages?.at(-1);
+}
+
 /**
  * Pi community provider — wraps `@earendil-works/pi-coding-agent`'s full
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
@@ -326,7 +451,7 @@ export class PiProvider implements IAgentProvider {
         buildDefaultPiTools,
       },
       { hydratePiResourceLoader, createNoopResourceLoader, getOrCreateReloadedExtensionLoader },
-      { resolvePiSession },
+      sessionResolver,
       { createArchonUIBridge, createArchonUIContext },
       { buildPiNativeToolDefinitions },
     ] = await Promise.all([
@@ -339,6 +464,7 @@ export class PiProvider implements IAgentProvider {
       import('./native-tools'),
     ]);
     const { createAgentSession } = piCodingAgent;
+    const { resolvePiSession } = sessionResolver;
     hydratePiToolFactories(piCodingAgent);
     hydratePiResourceLoader(piCodingAgent);
 
@@ -577,12 +703,37 @@ export class PiProvider implements IAgentProvider {
     //    id) or an existing session (resume id matches a file); if the id
     //    was provided but not found, it falls through to a new session and
     //    the caller surfaces a resume_failed warning (matches the Codex
-    //    provider's fallback pattern for the same condition).
-    const { sessionManager, resumeFailed } = await resolvePiSession(
-      cwd,
-      resumeSessionId,
-      piCodingAgent.SessionManager
-    );
+    //    provider's fallback pattern for the same condition). AskHuman resume
+    //    sets requireExisting and never cold-creates.
+    const resumeInteractions = requestOptions?.resumeInteractions;
+    const askResume = hasAskResumeInteractions(resumeInteractions);
+    let sessionManager!: ReturnType<(typeof piCodingAgent.SessionManager)['create']>;
+    let resumeFailed = false;
+    try {
+      const resolved = await resolvePiSession(
+        cwd,
+        resumeSessionId,
+        piCodingAgent.SessionManager,
+        askResume ? { requireExisting: true } : undefined
+      );
+      sessionManager = resolved.sessionManager;
+      resumeFailed = resolved.resumeFailed;
+    } catch (err) {
+      if (askResume) {
+        const errorClass =
+          err instanceof sessionResolver.PiSessionResumeRequiredError
+            ? err.name
+            : err instanceof Error
+              ? err.constructor.name
+              : 'unknown';
+        getLog().error({ errorClass }, 'pi.ask_resume_failed');
+        throw new Error(ASK_RESUME_FAILED_MESSAGE);
+      }
+      throw err;
+    }
+    if (askResume && resumeFailed) {
+      throwAskResumeFailed('missing_session');
+    }
     if (resumeFailed) {
       yield {
         type: 'system',
@@ -766,6 +917,20 @@ export class PiProvider implements IAgentProvider {
     const piCustomTools =
       nativeToolDefs.length > 0 ? [...(baseTools ?? []), ...nativeToolDefs] : filteredTools;
 
+    let askResumeExpectedTail: ToolResultMessage | undefined;
+    if (askResume) {
+      try {
+        askResumeExpectedTail = applyAskResumeToSession(sessionManager, resumeInteractions);
+      } catch (err) {
+        if (err instanceof Error && err.message === ASK_RESUME_FAILED_MESSAGE) {
+          throw err;
+        }
+        const errorClass = err instanceof Error ? err.constructor.name : 'unknown';
+        getLog().error({ errorClass }, 'pi.ask_resume_failed');
+        throw new Error(ASK_RESUME_FAILED_MESSAGE);
+      }
+    }
+
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd,
       // model is omitted when not yet resolved (extension provider path).
@@ -797,6 +962,13 @@ export class PiProvider implements IAgentProvider {
         : {}),
     });
     askSessionRef.current = session;
+    if (askResume && askResumeExpectedTail) {
+      const tail = agentTranscriptTail(session);
+      if (!isToolResultMessage(tail) || !askToolResultsMatch(tail, askResumeExpectedTail)) {
+        session.dispose();
+        throwAskResumeFailed('agent_tail_mismatch');
+      }
+    }
 
     // Extension models aren't in the static catalog — skip the fallback warning.
     if (modelFallbackMessage && model) {
@@ -884,19 +1056,32 @@ export class PiProvider implements IAgentProvider {
       getLog().debug('pi.semaphore_acquired');
     }
     try {
-      yield* withResumedOutcome(
+      const bridged = withResumedOutcome(
         bridgeSession(
           session,
           effectivePrompt,
           requestOptions?.abortSignal,
           outputFormat?.schema,
-          uiBridge
+          uiBridge,
+          askResume ? 'continue' : 'prompt'
         ),
         resumedOutcome(resumeSessionId, !resumeFailed)
       );
+      for await (const chunk of bridged) {
+        if (askResume && chunk.type === 'result' && chunk.isError) {
+          yield { ...chunk, errors: [ASK_RESUME_FAILED_MESSAGE] };
+        } else {
+          yield chunk;
+        }
+      }
     } catch (err) {
       if (askControlError) {
         throw askControlError;
+      }
+      if (askResume) {
+        const errorClass = err instanceof Error ? err.constructor.name : 'unknown';
+        getLog().error({ errorClass }, 'pi.ask_resume_failed');
+        throw new Error(ASK_RESUME_FAILED_MESSAGE);
       }
       getLog().error({ err, piProvider: parsed.provider }, 'pi.prompt_failed');
       throw err;

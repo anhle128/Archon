@@ -64,12 +64,14 @@ export {
 export {
   changedFiles,
   isGitWorkTree,
+  parseNameStatusZ,
   parsePorcelainV1Z,
   projectChangedFiles,
 } from './changed-files';
 export type {
   ChangedFile,
   ChangedFileStatus,
+  ChangedFilesRequest,
   ChangedFilesResult,
   PorcelainEntry,
 } from './changed-files';

@@ -1,0 +1,367 @@
+## Codebase Patterns
+
+### Isolated OpenAPI generation uses a private server
+- **Where**: `packages/web` `generate:types`; `packages/server`
+- **Pattern**: `generate:types` hardcodes port 3090. If another checkout already owns 3090, start an isolated server (`ARCHON_HOME` temp dir, empty `DATABASE_URL`, `skipPlatformAdapters: true`, `HOST=127.0.0.1`, a free port) and run `openapi-typescript` against that `/api/openapi.json`. Do not kill or reuse a foreign 3090 process.
+- **Example**: `bun x openapi-typescript http://127.0.0.1:59953/api/openapi.json -o packages/web/src/lib/api.generated.d.ts`
+
+### CLI resume tests must mock pending-interaction helpers
+- **Where**: `packages/cli/src/commands/workflow.test.ts`; `packages/core/src/operations/workflow-operations.ts`
+- **Pattern**: `mock.module()` merges. `resumeWorkflow` now calls `listPendingInteractions`, so omitting `@archon/core/db/workflow-pending-interactions` leaves the real SQLite helper and fails with `unable to open database file` (#2240). Default the mock to an empty pending list.
+- **Example**: `listPendingInteractions: mock(() => Promise.resolve([]))`
+
+
+### Pi Ask resume requires the existing session and continues the agent
+- **Where**: `packages/providers/src/community/pi/{session-resolver,event-bridge,provider}.ts`
+- **Pattern**: Non-empty `resumeInteractions` sets `requireExisting: true` (throws `PiSessionResumeRequiredError` instead of `SessionManager.create`), appends matching `ToolResultMessage` rows (or verifies identical existing ones), checks the transcript tail, then `bridgeSession(..., 'continue')` so `session.agent.continue()` runs and `session.prompt` never does. Failures log `{ errorClass }` as `pi.ask_resume_failed` and replace isError `errors` with `Could not resume the AskHuman session`. Continue-mode event-bridge logs must not include raw `err` or `errorMessage`.
+- **Example**: `bridgeSession(session, effectivePrompt, abortSignal, schema, uiBridge, askResume ? 'continue' : 'prompt')`
+
+### Claude Ask resume uses a provider-owned prompt and never forks
+- **Where**: `packages/providers/src/claude/provider.ts`
+- **Pattern**: `buildClaudeAskResumePrompt` formats answer/decline blocks and a continuation instruction. Non-empty `resumeInteractions` requires `resumeSessionId`, forces `forkSession: false`, skips subprocess retries, logs only `{ errorClass }` on `claude.ask_resume_failed`, and replaces isError `errors` with `Could not resume the AskHuman session`.
+- **Example**: `const queryPrompt = hasAskResume && resumeInteractions ? buildClaudeAskResumePrompt(resumeInteractions) : prompt;`
+
+### Ask re-entry maps rows in runLayers; first stream pass only
+- **Where**: `packages/workflows/src/dag-executor.ts`
+- **Pattern**: `executeDagWorkflow` loads `listPendingInteractions` once, rejects any `pending` row, and fails on answered Ask `node_id`s missing from static DAG step names (`<loopGroupId>.<bodyNodeId>` included). `mapAnsweredAskResume` sorts by `created_at` then `id`, parses `askAnswerBodySchema`, maps decline to `{ payload: 'declined', declined: true }`, and requires one shared non-empty `provider_session_id`. Command/prompt/loop get `resumeInteractions` only on the first stream pass of the first resumed iteration, with `forkSession: false` and zero engine retries. Resume failures log `workflow.ask_resume_failed` with ids only and write `Could not resume the AskHuman session`.
+- **Example**: `const askResume = mapAnsweredAskResume(ctx.answeredAskRows, stepNamePrefix + node.id);`
+
+### Ask hydrate skips a second resume CAS
+- **Where**: `packages/workflows/src/executor.ts`
+- **Pattern**: `inspectResumableRun` lists pending interactions after the DAG snapshot. Pending Ask rows throw `Answer or decline the Ask before resuming run <id>` and never claim. Answered Ask rows (`kind === 'ask' && status === 'answered'`) make a first-node run resumable via internal `hasAnsweredAsk`. `hydrateResumableRun` returns the candidate as `preCreatedRun` without `resumeWorkflowRun` only when `status === 'running' && hasAnsweredAsk`; failed/paused/cancelled still CAS.
+- **Example**: `const alreadyRunningFromAsk = candidate.status === 'running' && inspected.hasAnsweredAsk;`
+
+### Ask answer route keeps real operations; auto-resume is ask-answer
+- **Where**: `packages/server/src/routes/api.ts`, `packages/server/src/routes/api.workflow-runs.test.ts`
+- **Pattern**: Import and decorate `askAnswerBodySchema.openapi('AskAnswerBody')`. Register POST `/api/workflows/runs/{runId}/ask/{requestId}/answer` via `registerOpenApiRoute`. Keep real `answerAskHuman`; mock `resolvePendingInteraction` plus typed pending errors on `@archon/core/db/workflow-pending-interactions`, and map `X-Archon-User` through `@archon/core/db/users`. `tryAutoResumeAfterGate(run, 'ask-answer', actorUserId)` only after `resumed === true`. Intermediate answers and non-web parents return 200 without dispatch.
+- **Example**: `await tryAutoResumeAfterGate(result.run, 'ask-answer', requester?.userId)`
+
+### Operations own post-commit Ask signals; resume never calls resumeWorkflowRun
+- **Where**: `packages/core/src/operations/workflow-operations.ts`
+- **Pattern**: `answerAskHuman` authorizes the starter (`actorUserId` required, must equal non-null `run.user_id`, no admin override), calls `resolvePendingInteraction` once, then logs `workflow.ask_resolved` and emits identifier-only `interaction_resolved` only after that promise resolves. Return the pre-resolution run. `resumeWorkflow` lists pending rows, rejects any `pending` status, and accepts `running` only when at least one Ask row is `answered`. Do not call `resumeWorkflowRun` from either operation. Mock `../db/workflow-pending-interactions` and `@archon/workflows/event-emitter` before importing operations tests.
+- **Example**: `getLog().info({ workflowRunId, nodeId, toolUseId, declined, resumed }, 'workflow.ask_resolved')`
+
+### Live interaction_resolved is identifier-only; persisted mapper branches on purged
+- **Where**: `packages/workflows/src/event-emitter.ts`, `packages/server/src/adapters/web/workflow-bridge.ts`, `packages/adapters/src/chat/slack/workflow-bridge.ts`
+- **Pattern**: Live `InteractionResolvedEvent` is `{ type, runId, nodeId, resumed }` only. The web live mapper emits `workflow_status` with `status: event.resumed ? 'running' : 'paused'`. The persisted mapper checks `data.purged` first (`terminal_status === 'failed'` → failed, else cancelled), then `data.resumed` (true → running, missing/unknown → paused). Add the type to `DASHBOARD_SOURCE_EVENT_TYPES`. Slack handles the case with `break` and sends no message. Never copy toolUseId/envelope/answer/questions/options/approval onto SSE.
+- **Example**: `status: event.resumed ? 'running' : 'paused'`
+
+### Resolve is on the pending store port; purge is not
+- **Where**: `packages/workflows/src/store.ts`, `packages/core/src/workflows/store-adapter.ts`
+- **Pattern**: Add only `resolvePendingInteraction(input: ResolvePendingInteractionInput): Promise<ResolvePendingInteractionResult>` to `IWorkflowPendingInteractionStore`. Adapter delegates to the core DB helper. Do not add purge to the port. Each test file owns its own typed stub; do not introduce a cross-suite mock factory.
+- **Example**: `resolvePendingInteraction: input => workflowPendingInteractionDb.resolvePendingInteraction(input)`
+
+### Terminal purge is query-scoped; workflows.ts calls in
+- **Where**: `packages/core/src/db/workflow-pending-interactions.ts`, `packages/core/src/db/workflows.ts`
+- **Pattern**: `purgePendingInteractionsInTransaction` takes the caller's `query` and must not open a nested transaction. It selects pending rows in store order (`created_at ASC, id ASC`), CAS-updates only `pending` → `purged` with `resolved_at`, leaves `answer`/`resolved_by` null, and writes one id-only `interaction_resolved` event. `workflows.ts` may import this helper; the reverse import is a cycle. Call purge only after a winning status CAS. `failOrphanedRuns` locks running ids first, updates that set, then purges each selected id.
+- **Example**: `await purgePendingInteractionsInTransaction(query, id, 'cancelled')`
+
+### Query-scoped resume is shared, callers own the transaction
+- **Where**: `packages/core/src/db/workflow-resume-transition.ts`
+- **Pattern**: `resumeWorkflowRunInTransaction` takes an already-open `query`. `'standard'` keeps failed/paused/cancelled/stale-running; `'paused-ask'` matches only `status = 'paused'`. `workflow-pending-interactions.ts` must not import `workflows.ts` (cycle). Public `resumeWorkflowRun` still owns CAS-miss probe and final select.
+- **Example**: `resumeWorkflowRunInTransaction(query, id, dialect, 'paused-ask')`
+
+### Canonical AskHuman contracts live in the engine schema module
+- **Where**: `packages/workflows/src/schemas/pending-interaction.ts`
+- **Pattern**: Import `z` from `@hono/zod-openapi` and derive types with `z.infer`. Answer/resolve objects use `.strict()`. `askHumanQuestionSchema` is exported without `.strict()` so AskHuman's accepted question shape stays unchanged. `@archon/providers/types` may add `ResumeInteraction` but must not import `@archon/workflows`.
+- **Example**: `askAnswerBodySchema` is a two-arm union of `{ answers: [...] }` (min 1) and `{ decline: true }`; mixed bodies fail because both arms are strict.
+
+### Providers contract types stay SDK-free
+- **Where**: `packages/providers/src/types.ts` (`SendQueryOptions`)
+- **Pattern**: Add provider-neutral resume fields on `SendQueryOptions`; do not thread answers through node prompts.
+- **Example**: `resumeInteractions?: readonly ResumeInteraction[]`
+
+---
+
+## 2026-09-06 — US-001: Define AskHuman answer and provider contracts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/schemas/pending-interaction.ts` — added ask answer, question, and resolve schemas with `z.infer` types
+- `packages/workflows/src/schemas/pending-interaction.test.ts` — variant, multi, rejection, unknown-key, and type-inference coverage
+- `packages/workflows/src/ask-human.ts` — re-imported `askHumanQuestionSchema` without changing accepted shape
+- `packages/providers/src/types.ts` — added `ResumeInteraction` and `SendQueryOptions.resumeInteractions`
+
+**Acceptance criteria verified**:
+- [x] pending-interaction.ts defines askAnswerItemSchema, askAnswerBodySchema, resolvePendingInteractionInputSchema, and resolvePendingInteractionResultSchema using z from `@hono/zod-openapi` and z.infer
+- [x] askAnswerBodySchema accepts answers (min 1) or `{ decline: true }`, and rejects empty answers, false decline, and mixed unions
+- [x] askHumanQuestionSchema is exported from pending-interaction.ts and re-imported into ask-human.ts without altering its accepted shape
+- [x] ResumeInteraction and optional resumeInteractions added to SendQueryOptions
+- [x] pending-interaction.test.ts verifies acceptance, type inferences, and unknown-key/invalid-shape rejection
+- [x] `bun test src/schemas/pending-interaction.test.ts` and `bun test src/ask-human.test.ts` in packages/workflows, and `bun x tsc --noEmit` in packages/providers
+
+**Learnings**:
+- Fresh worktree had no node_modules; `bun install` from the lockfile is required before focused tests.
+- ESLint ignores test files when they are passed as explicit paths; lint production sources only (or use `--no-warn-ignored`).
+- `askHumanQuestionSchema` must not gain `.strict()`; that would change the existing AskHuman accepted shape.
+
+---
+
+## 2026-09-06 — US-002: Implement atomic answer CAS and shared resume primitive
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/workflow-resume-transition.ts` — shared resume primitive, eligibility, lock/status clauses
+- `packages/core/src/db/workflows.ts` — delegates resume SQL to the shared primitive; keeps CAS-miss probe and final select
+- `packages/core/src/db/workflow-pending-interactions.ts` — `resolvePendingInteraction` with envelope validation, row CAS, last-pending paused-ask resume, id-only `interaction_resolved`
+- `packages/core/src/db/workflow-pending-interactions.test.ts` — winning path, rollback, sibling pending, validation, redaction
+
+**Acceptance criteria verified**:
+- [x] workflow-resume-transition.ts exports WorkflowTransactionQuery, ResumeEligibility, ORPHAN_RESUME_STALE_DAYS, resumableWorkflowStatusClause, workflowRunLockClause, resumeWorkflowRunInTransaction
+- [x] workflows.ts delegates resume SQL and status predicates while preserving public resumeWorkflowRun behavior
+- [x] resolvePendingInteraction uses withTransaction and locks run + interaction rows (FOR UPDATE on Postgres)
+- [x] typed errors: NotFound, AlreadyResolved, RunNotPaused, ValidationError
+- [x] semantic envelope validation without logging prompt/answer sentinels
+- [x] CAS to answered, last-pending paused-ask resume only when remaining pending is zero
+- [x] interaction_resolved event with step_name = node_id and non-sensitive data
+- [x] bun test workflow-pending-interactions.test.ts, workflows.test.ts, workflows.resume-cas.integration.test.ts
+
+**Learnings**:
+- SQLite `RAISE(IGNORE)` on BEFORE UPDATE is a reliable way to force a resume CAS miss inside the same transaction without mocking `executeQuery`.
+- Do not destructure snake_case schema fields into locals; eslint naming-convention requires camelCase aliases.
+- `isDecline` must be a type predicate or `answer.answers` does not narrow after the early return.
+
+---
+
+## 2026-09-06 — US-003: Purge pending interactions on terminal transitions
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/workflow-pending-interactions.ts` — added `purgePendingInteractionsInTransaction`
+- `packages/core/src/db/workflow-pending-interactions.test.ts` — pending-only purge + safe event assertion
+- `packages/core/src/db/workflows.ts` — cancel/fail/orphan/reject-cancel call purge after winning CAS
+- `packages/core/src/db/workflows.test.ts` — winning purge vs no-op, complete does not purge
+- `packages/core/src/db/workflows.resume-cas.integration.test.ts` — real SQLite lifecycle purge coverage
+
+**Acceptance criteria verified**:
+- [x] purgePendingInteractionsInTransaction transitions only pending rows to purged, sets resolved_at, writes one interaction_resolved event per row
+- [x] Purge events contain { node_id, tool_use_id, kind: 'ask', purged: true, resumed: false, terminal_status } and omit envelope/answer data
+- [x] cancelWorkflowRun, cancelRecoveryWorkflowRun, resolveAndCancelApprovalGate, failWorkflowRun, and failOrphanedRuns invoke purge inside the winning transaction
+- [x] No-op or non-winning status transitions do not purge rows or emit purge events
+- [x] completeWorkflowRun does not purge interactions
+- [x] bun test workflow-pending-interactions.test.ts, workflows.test.ts, workflows.resume-cas.integration.test.ts
+
+**Learnings**:
+- Keep envelope out of the purge SELECT so a corrupt stored question cannot block cancel/fail.
+- failOrphanedRuns must lock and collect running ids first, then UPDATE that locked set, then purge each selected id — a single unscoped UPDATE cannot attach per-run purge events correctly.
+
+---
+
+## 2026-09-06 — US-004: Expose pending-interaction resolution store port and update doubles
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/store.ts` — added resolvePendingInteraction to IWorkflowPendingInteractionStore
+- `packages/core/src/workflows/store-adapter.ts` — delegated resolvePendingInteraction to core DB
+- `packages/core/src/workflows/store-adapter.test.ts` — mock + exact input/output delegation test
+- `packages/workflows/src/ask-human.test.ts` — typed resolve stub
+- `packages/workflows/src/dag-executor.test.ts` — typed resolve stub
+- `packages/workflows/src/executor.test.ts` — typed resolve stub
+- `packages/workflows/src/executor-preamble.test.ts` — typed resolve stub
+- `packages/workflows/src/plannotator-gate-executor.test.ts` — typed resolve stub
+- `packages/workflows/src/plannotator-gate-supervisor.test.ts` — typed resolve stub on Pick
+- `packages/workflows/src/script-node-deps.test.ts` — typed resolve stub
+- `packages/workflows/src/subrun.test.ts` — typed resolve stub on InMemoryStore
+
+**Acceptance criteria verified**:
+- [x] IWorkflowPendingInteractionStore adds resolvePendingInteraction(input: ResolvePendingInteractionInput): Promise<ResolvePendingInteractionResult>
+- [x] store-adapter.ts delegates resolvePendingInteraction to core DB resolvePendingInteraction
+- [x] store-adapter.test.ts tests exact input/output passing
+- [x] All listed IWorkflowStore doubles implement typed resolvePendingInteraction stubs (no purge)
+- [x] bun test src/workflows/store-adapter.test.ts in packages/core and bun x tsc --noEmit in packages/workflows
+
+**Learnings**:
+- The pending store port is resolve-only; purge stays an internal DB lifecycle helper and must not appear on IWorkflowPendingInteractionStore or test doubles.
+- Workflow `tsconfig.json` excludes `**/*.test.ts`, so `bun x tsc --noEmit` does not typecheck doubles; class doubles that `implements IWorkflowStore` still need the method for local correctness.
+- Do not introduce a shared mock factory; repeat the typed stub inside each test file that already owns the double.
+
+---
+
+## 2026-09-06 — US-005: Map AskHuman resolution as a refetch event
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/event-emitter.ts` — added InteractionResolvedEvent to the live union
+- `packages/workflows/src/event-emitter.test.ts` — subscriber receives identifier-only interaction_resolved
+- `packages/server/src/adapters/web/workflow-bridge.ts` — live running/paused mapping, persisted answered vs purged mapping, dashboard allowlist, dataBool helper
+- `packages/server/src/adapters/web/workflow-bridge.test.ts` — resumed true/false payload-isolation tests
+- `packages/server/src/adapters/web/dashboard-event-poller.test.ts` — allowlist plus answered running and purged cancelled refetch triggers
+- `packages/adapters/src/chat/slack/workflow-bridge.ts` — explicit interaction_resolved break
+- `packages/adapters/src/chat/slack/workflow-bridge.test.ts` — asserts no Slack message
+
+**Acceptance criteria verified**:
+- [x] InteractionResolvedEvent { type: 'interaction_resolved'; runId; nodeId; resumed } added to WorkflowEmitterEvent
+- [x] Live web bridge maps to workflow_status with status running when resumed, paused otherwise
+- [x] interaction_resolved added to DASHBOARD_SOURCE_EVENT_TYPES; answered rows map running/paused; purged rows map failed/cancelled
+- [x] Neither live nor persisted SSE mappings leak toolUseId, envelope, answer, questions, options, or approval
+- [x] Slack handles case 'interaction_resolved': break without sending chat messages
+- [x] bun test src/event-emitter.test.ts; bun test src/adapters/web/workflow-bridge.test.ts; bun test src/adapters/web/dashboard-event-poller.test.ts; bun test src/chat/slack/workflow-bridge.test.ts
+
+**Learnings**:
+- Do not add interaction_resolved to ROW_WORKFLOW_STATUS; that table is a static event_type→status map and cannot branch on resumed vs purged.
+- Purge rows store both `purged: true` and `resumed: false`; check purged first or they would refetch as paused.
+- Missing persisted `resumed` must fail safe to paused, never running.
+
+---
+
+## 2026-09-06 — US-006: Own AskHuman answer and resume operations
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/operations/workflow-operations.ts` — added AskHuman typed errors, `answerAskHuman`, and Ask-aware `resumeWorkflow`
+- `packages/core/src/operations/workflow-operations.test.ts` — authorization, post-commit log/emit isolation, and resume pending/running coverage
+
+**Acceptance criteria verified**:
+- [x] workflow-operations.ts exports AskHumanRunNotFoundError, AskHumanAuthenticationRequiredError, AskHumanForbiddenError, and answerAskHuman(input): Promise<AnswerAskHumanResult>
+- [x] answerAskHuman requires actorUserId, matches it strictly against run.user_id (no admin override, unowned run rejected), and calls resolvePendingInteraction
+- [x] Logs workflow.ask_resolved with workflowRunId, nodeId, toolUseId, declined, resumed only after commit, omitting answer/envelope payloads
+- [x] Emits live interaction_resolved event after commit
+- [x] resumeWorkflow rejects any run with a pending interaction
+- [x] resumeWorkflow accepts an already-running run if it has at least one answered Ask row and zero pending rows; rejects plain running runs
+- [x] bun test src/operations/workflow-operations.test.ts in packages/core (64 pass)
+
+**Learnings**:
+- Log and emit only after the persistence promise resolves; a deferred mock is the proof, not call-order on a resolved Promise.
+- Preserve typed DB errors by rethrowing the same instance; do not map them by message text.
+- StrReplace on large files in this harness can truncate; patch with unique full-block replacement and assert the file grew.
+
+---
+
+## 2026-09-07 — US-007: Register starter-only AskHuman answer route and auto-dispatch
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — added `askAnswerRequestSchema` as `askAnswerBodySchema.openapi('AskAnswerBody')`
+- `packages/server/src/routes/api.ts` — registered the Ask answer POST route, typed error mapping, and `ask-answer` auto-resume
+- `packages/server/src/routes/api.workflow-runs.test.ts` — starter auth, status mapping, and auto-dispatch coverage
+
+**Acceptance criteria verified**:
+- [x] packages/server/src/routes/schemas/workflow.schemas.ts defines askAnswerRequestSchema decorated with .openapi('AskAnswerBody')
+- [x] packages/server/src/routes/api.ts registers POST /api/workflows/runs/{runId}/ask/{requestId}/answer using registerOpenApiRoute
+- [x] Route maps responses to 200, 400, 401, 403, 404, 409, and 500
+- [x] When resumed is true and run has a web parent conversation, route calls tryAutoResumeAfterGate with action 'ask-answer'
+- [x] Non-web parent or intermediate answer (resumed: false) returns 200 without auto-dispatching
+- [x] bun test src/routes/api.workflow-runs.test.ts in packages/server (160 pass)
+
+**Learnings**:
+- Keep the real `answerAskHuman` operation under test; mock the DB CAS and users header mapping, not the operations module.
+- StrReplace on large files in this harness can truncate; patch with unique full-block replacement and assert the file grew.
+- `X-Archon-User` resolves through `findOrCreateUserByPlatformIdentity`; identity-map the header value to a deterministic user id in tests.
+
+---
+
+## 2026-09-07 — US-008: Hydrate operation-resumed AskHuman runs without second CAS
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/executor.ts` — inspect pending/answered Asks; skip resume CAS when already running with answered Ask
+- `packages/workflows/src/executor.test.ts` — first-node inspection, pending rejection, already-running hydrate, preserved failed/paused/cancelled CAS
+
+**Acceptance criteria verified**:
+- [x] inspectResumableRun inspects pending interactions; treats runs with zero completed nodes but answered Ask rows as resumable
+- [x] inspectResumableRun and hydrateResumableRun reject pending Ask rows with 'Answer or decline the Ask before resuming run <id>'
+- [x] hydrateResumableRun returns the candidate as preCreatedRun without calling store.resumeWorkflowRun when already running with answered Ask rows
+- [x] Existing failed, paused, and cancelled run resume behaviors remain intact
+- [x] bun test src/executor.test.ts in packages/workflows (122 pass)
+
+**Learnings**:
+- StrReplace on large files in this harness can truncate; patch with unique full-block replacement in Python and assert the file grew.
+- Do not return null for a pending Ask — orchestrator treats inspect-null as a fresh start. Throw the safe error instead.
+- Skip the resume CAS only for `running && hasAnsweredAsk`; a running candidate without answered Ask must still call resumeWorkflowRun.
+
+---
+
+## 2026-09-07 — US-009: Re-enter AskHuman nodes with resume interactions
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — load pending rows, map ordered resumeInteractions, session override, first-pass-only options, sanitized resume failure
+- `packages/workflows/src/dag-executor.test.ts` — command/prompt/loop mapping, retry isolation, repeated Ask pause, missing-node, loop-group body prefix
+
+**Acceptance criteria verified**:
+- [x] executeDagWorkflow loads pending interactions; rejects pending rows; verifies answered node_ids against static DAG step names
+- [x] runLayers maps answered Ask rows for stepNamePrefix + node.id into ResumeInteraction[] in store order; decline maps to 'declined'
+- [x] provider_session_id overrides sequential and persist_session cursors
+- [x] Command/prompt get resumeInteractions on first stream pass only; loops on first pass of first resumed iteration
+- [x] forkSession false, zero engine retries, answers never appended to the prompt
+- [x] Resume failure writes node_failed with 'Could not resume the AskHuman session', logs workflow.ask_resume_failed with ids only, no answer sentinels
+- [x] A new AskHumanAwaitingError during the continued turn pauses normally
+- [x] bun test src/dag-executor.test.ts in packages/workflows (602 pass)
+
+**Learnings**:
+- Pass answered Ask rows through RunLayersContext into loop_group body contexts; map per node with stepNamePrefix + node.id.
+- Strip resumeInteractions on structured-output reasks by deleting the field on a copied SendQueryOptions object.
+- Provider resume throws must not go through getLog().error({ err }) or logNodeError(err.message); those serialize answer sentinels.
+
+---
+
+## 2026-09-07 — US-010: Continue Claude after AskHuman answers
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/claude/provider.ts` — export `buildClaudeAskResumePrompt`; Ask-resume branch forces no-fork, provider prompt, no subprocess retry, sanitized logs and isError errors
+- `packages/providers/src/claude/provider.test.ts` — builder, resume options, throw sanitization, isError mapping, non-Ask fork regression
+
+**Acceptance criteria verified**:
+- [x] `buildClaudeAskResumePrompt` formats answers or decline text and ends with continuation instruction
+- [x] When resumeInteractions is present, Claude requires resumeSessionId, sets options.resume, forces forkSession false, and passes the generated resume prompt instead of the executor prompt
+- [x] Resume failures bypass Claude subprocess retry, log safe error class without raw err/stderrContext, and map isError terminal result to ['Could not resume the AskHuman session'] while preserving usage/token/cost
+- [x] Non-Ask Claude queries retain existing prompt, fork, classification, and retry behavior
+- [x] bun test src/claude/provider.test.ts (154 pass) and bun test src/claude/askhuman-resume-spike.test.ts (7 pass) in packages/providers
+
+**Learnings**:
+- Override `options.stderr` on the Ask-resume path so subprocess stderr never logs answer sentinels before the catch.
+- Do not pass the raw SDK error as `cause`; Pino may serialize it later.
+- Empty `resumeInteractions` is non-Ask; only a non-empty array takes the resume branch.
+
+---
+
+## 2026-09-07 — US-011: Continue Pi after AskHuman answers
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/pi/session-resolver.ts` — `requireExisting` option and `PiSessionResumeRequiredError` (no `SessionManager.create` on missing/ENOENT/ENOTDIR)
+- `packages/providers/src/community/pi/session-resolver.test.ts` — required-session throw coverage plus existing fallback tests unchanged
+- `packages/providers/src/community/pi/event-bridge.ts` — `startMode: 'prompt' | 'continue'`; continue calls `session.agent.continue()` and redacts continue-mode error logs
+- `packages/providers/src/community/pi/event-bridge.test.ts` — continue vs default prompt spies and dispose
+- `packages/providers/src/community/pi/provider.ts` — required resolve, ordered AskHuman tool results, tail checks, continue-mode bridge, sanitized throws and isError errors
+- `packages/providers/src/community/pi/provider.test.ts` — ordered injection, missing session, idempotent reuse, conflicts, tail mismatch, sentinel sanitization, non-Ask regression
+
+**Acceptance criteria verified**:
+- [x] session-resolver.ts adds `{ requireExisting?: boolean }`; when true and session missing/ENOENT/ENOTDIR, throws `PiSessionResumeRequiredError` without `SessionManager.create`
+- [x] event-bridge.ts adds `startMode: 'prompt' | 'continue'` (default `'prompt'`); `'continue'` executes `session.agent.continue()` and never `session.prompt`
+- [x] provider.ts sets `requireExisting: true` when `resumeInteractions` is non-empty; appends ToolResultMessage in order or verifies identical existing result; verifies transcript tail
+- [x] Invokes `bridgeSession` with `startMode: 'continue'`; sanitizes thrown errors and replaces isError terminal errors with `['Could not resume the AskHuman session']` without raw payload leakage
+- [x] bun test session-resolver.test.ts, event-bridge.test.ts, provider.test.ts, and askhuman-resume.characterization.test.ts in packages/providers
+
+**Learnings**:
+- Do not destructure PascalCase class names from dynamic imports (`PiSessionResumeRequiredError`); access them as `sessionResolver.PiSessionResumeRequiredError` to satisfy naming-convention.
+- Continue-mode event-bridge must not log raw `err` or `errorMessage` — both leak answer sentinels into the mock logger payload.
+- Run `askhuman-resume.characterization.test.ts` in its own `bun test` process; `provider.test.ts` `mock.module` of `@earendil-works/pi-coding-agent` poisons AuthStorage.inMemory in the same process.
+
+---
+
+## 2026-09-07 — US-012: Regenerate API contract, full validation, and mark Story 6.3 done
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated against an isolated OpenAPI server; includes POST `/api/workflows/runs/{runId}/ask/{requestId}/answer` and `AskAnswerBody`
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — marked `6-3-answer-or-decline-the-ask-so-the-node-can-continue` as `done`
+
+**Acceptance criteria verified**:
+- [x] packages/web/src/lib/api.generated.d.ts regenerated and reflects POST `/api/workflows/runs/{runId}/ask/{requestId}/answer` and `AskAnswerBody`
+- [x] Package-isolated test suites pass in packages/workflows, packages/core, packages/server, packages/adapters, and packages/providers
+- [x] `bun run validate` exits 0 with no ESLint warnings and clean typechecks
+- [x] No migration files, database inventory discrepancies, or dependency lockfile versions modified
+- [x] sprint-status.yaml marks `6-3-answer-or-decline-the-ask-so-the-node-can-continue` as done
+
+**Learnings**:
+- `generate:types` cannot share another checkout's 3090; use a private server and `openapi-typescript` against that URL.
+- `bun run validate` pulled in CLI tests that now hit live SQLite via `resumeWorkflow` → `listPendingInteractions`; mock the pending-interaction module (merge-mock, same as #2240).
+- Never combine `provider.test.ts` and `askhuman-resume.characterization.test.ts` in one `bun test` process.
+
+**Blocker Ledger**:
+BLOCKER US-012 | gate=bun run validate | cause=packages/web/src/components/workflows/build-run-graph-input.ts:35 TS2366 Function lacks ending return statement (missing awaiting case; same fingerprint on clean stash) | action=chore(unblock) effd63f4 add case 'awaiting': return status | 2026-09-07
+BLOCKER US-012 | gate=bun test src/commands/workflow.test.ts (via bun run validate) | cause=packages/cli/src/commands/workflow.test.ts:6442 expected Cannot resume run with status 'completed', received unable to open database file (resumeWorkflow lists pending rows; same fingerprint on clean stash) | action=chore(unblock) 8318cd5b mock @archon/core/db/workflow-pending-interactions | 2026-09-07
+
+---

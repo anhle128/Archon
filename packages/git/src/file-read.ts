@@ -5,6 +5,7 @@ import { lstat, open, readlink } from 'fs/promises';
 import { join } from 'path';
 
 import * as exec from './exec';
+import { FULL_GIT_OBJECT_ID_RE, parseGitObjectId, resolveCommitParents } from './git-oid';
 import { containLiveGitFilePath, GitPathError, parseGitFilePath } from './git-path';
 import { readGitStdoutWindow, streamGitStdout } from './git-stream';
 import type { RepoPath, WorktreePath } from './types';
@@ -65,13 +66,16 @@ export type FileAtResult = FileAtBytesResult | FileAtStreamResult;
 export interface FileDiffRequest {
   cursor?: string;
   signal?: AbortSignal;
+  commit?: string;
 }
 
 export interface FileDiffResult {
   path: string;
   status: 'M';
-  scope: 'now';
-  ref: 'live';
+  scope: 'now' | 'commit';
+  // 'live' is the Now sentinel; commit diffs use a full object name.
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- locked FileDiffResult contract
+  ref: 'live' | string;
   hunks: DiffHunk[];
   cursor: string;
   truncated: boolean;
@@ -516,6 +520,9 @@ export async function fileAt(
   request?: FileAtRequest
 ): Promise<FileAtResult> {
   const path = parseGitFilePath(relativePath);
+  if (source.kind === 'tree' && FULL_GIT_OBJECT_ID_RE.test(source.treeIsh)) {
+    await resolveCommitParents(workingPath, source.treeIsh);
+  }
   const signal = request?.signal;
   const inspected = await inspectFile(workingPath, path, source);
   const intent = request?.intent ?? 'full';
@@ -590,12 +597,17 @@ async function inspectHead(
   }
 }
 
-function rawFallbackResult(path: string, binary: boolean): FileDiffResult {
+function rawFallbackResult(
+  path: string,
+  binary: boolean,
+  scope: FileDiffResult['scope'],
+  ref: FileDiffResult['ref']
+): FileDiffResult {
   return {
     path,
     status: 'M',
-    scope: 'now',
-    ref: 'live',
+    scope,
+    ref,
     hunks: [],
     cursor: '',
     truncated: false,
@@ -623,12 +635,104 @@ export async function fileDiff(
   const signal = request?.signal;
   throwIfAborted(signal);
 
+  if (request?.commit !== undefined) {
+    const commit = parseGitObjectId(request.commit);
+    const parents = await resolveCommitParents(workingPath, commit);
+    const after = await inspectTree(workingPath, path, commit);
+    const afterClass = await classifyInspected(after, signal);
+    let before: InspectedFile | undefined;
+    if (parents[0] !== undefined) {
+      try {
+        before = await inspectTree(workingPath, path, parents[0]);
+      } catch (error) {
+        if (!(error instanceof GitFileError && error.code === 'not_found')) throw error;
+      }
+    }
+    const beforeClass = before === undefined ? undefined : await classifyInspected(before, signal);
+    if (
+      needsRawFallback(afterClass) ||
+      (beforeClass !== undefined && needsRawFallback(beforeClass))
+    ) {
+      return rawFallbackResult(
+        path,
+        afterClass.binary || (beforeClass?.binary ?? false),
+        'commit',
+        commit
+      );
+    }
+    const version = hashIdentity([after.contentHash, before?.contentHash ?? '']);
+    const startIndex = decodeAxisCursor(request?.cursor, 'h', version);
+    const pager = new HunkPageAccumulator(startIndex);
+    const args =
+      parents[0] === undefined
+        ? [
+            '--no-optional-locks',
+            '--literal-pathspecs',
+            'diff-tree',
+            '--no-commit-id',
+            '--root',
+            '-p',
+            '--no-color',
+            '--no-ext-diff',
+            '--no-textconv',
+            '--text',
+            `-U${String(VIEWER_DIFF_CONTEXT_LINES)}`,
+            commit,
+            '--',
+            path,
+          ]
+        : [
+            '--no-optional-locks',
+            '--literal-pathspecs',
+            'diff-tree',
+            '--no-commit-id',
+            '-p',
+            '--no-color',
+            '--no-ext-diff',
+            '--no-textconv',
+            '--text',
+            `-U${String(VIEWER_DIFF_CONTEXT_LINES)}`,
+            parents[0],
+            commit,
+            '--',
+            path,
+          ];
+    const stream = streamGitStdout({ workingPath, args, signal, acceptExitCodes: [0] });
+    const reader = stream.getReader();
+    try {
+      await visitUnifiedDiffChunks(readStreamChunks(reader), (hunk: DiffHunk): HunkPageDecision => {
+        return pager.push(hunk);
+      });
+    } finally {
+      if (pager.result().truncated) await reader.cancel();
+      else reader.releaseLock();
+    }
+    pager.finish();
+    const page = pager.result();
+    return {
+      path,
+      status: 'M',
+      scope: 'commit',
+      ref: commit,
+      hunks: page.hunks,
+      cursor: page.truncated ? encodeViewerCursor('h', page.nextIndex, version) : '',
+      truncated: page.truncated,
+      binary: false,
+      fileFallback: false,
+    };
+  }
+
   const worktree = await inspectWorktree(workingPath, path);
   const worktreeClass = await classifyInspected(worktree, signal);
   const head = await inspectHead(workingPath, path);
   const headClass = head === undefined ? undefined : await classifyInspected(head, signal);
   if (needsRawFallback(worktreeClass) || (headClass !== undefined && needsRawFallback(headClass))) {
-    return rawFallbackResult(path, worktreeClass.binary || (headClass?.binary ?? false));
+    return rawFallbackResult(
+      path,
+      worktreeClass.binary || (headClass?.binary ?? false),
+      'now',
+      'live'
+    );
   }
 
   const version = hashIdentity([worktree.contentHash, head?.contentHash ?? '']);

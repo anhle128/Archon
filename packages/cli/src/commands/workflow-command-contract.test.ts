@@ -104,6 +104,23 @@ mock.module('@archon/workflows/event-emitter', () => ({
     subscribeForConversation: mock(() => mock(() => undefined)),
   })),
 }));
+mock.module('@archon/core/db/workflow-pending-interactions', () => ({
+  listPendingInteractions: mock(() => Promise.resolve([])),
+  resolvePendingInteraction: mock(() =>
+    Promise.resolve({
+      interaction: {
+        id: 'pending-contract',
+        workflow_run_id: 'run-contract',
+        node_id: 'ask',
+        tool_use_id: 'tool-contract',
+        kind: 'ask',
+        status: 'answered',
+      },
+      resumed: true,
+      remaining_pending: 0,
+    })
+  ),
+}));
 mock.module('@archon/git', () => ({
   fileAt: mock(async () => ({
     path: 'x.ts',

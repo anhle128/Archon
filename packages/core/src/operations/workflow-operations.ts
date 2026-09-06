@@ -1,11 +1,16 @@
 /**
- * Shared workflow business logic — approve, reject, status, resume, abandon.
+ * Shared workflow business logic — approve, reject, status, resume, abandon, AskHuman.
  *
  * Both CLI and command-handler are thin formatting adapters over these functions.
  * Operations throw on errors; callers catch and format for their platform.
  */
 import { createLogger, captureApprovalResolved } from '@archon/paths';
 import { randomUUID } from 'node:crypto';
+import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
+import type {
+  AskAnswerBody,
+  PendingInteraction,
+} from '@archon/workflows/schemas/pending-interaction';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
@@ -17,6 +22,10 @@ import type {
   ApprovalContext,
   LoopGateRunMetadata,
 } from '@archon/workflows/schemas/workflow-run';
+import {
+  listPendingInteractions,
+  resolvePendingInteraction,
+} from '../db/workflow-pending-interactions';
 import * as workflowDb from '../db/workflows';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 
@@ -77,6 +86,41 @@ export interface ReviewOpenOperationResult {
   codebaseId: string | null;
   /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
   conversationId: string;
+}
+
+export class AskHumanRunNotFoundError extends Error {
+  constructor(readonly runId: string) {
+    super(`Workflow run not found: ${runId}`);
+    this.name = 'AskHumanRunNotFoundError';
+  }
+}
+
+export class AskHumanAuthenticationRequiredError extends Error {
+  constructor() {
+    super('Authentication required');
+    this.name = 'AskHumanAuthenticationRequiredError';
+  }
+}
+
+export class AskHumanForbiddenError extends Error {
+  constructor(readonly runId: string) {
+    super(`Not allowed to answer AskHuman for run ${runId}`);
+    this.name = 'AskHumanForbiddenError';
+  }
+}
+
+export interface AnswerAskHumanInput {
+  runId: string;
+  requestId: string;
+  body: AskAnswerBody;
+  actorUserId: string | undefined;
+}
+
+export interface AnswerAskHumanResult {
+  run: WorkflowRun;
+  interaction: PendingInteraction;
+  resumed: boolean;
+  remainingPending: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,15 +244,97 @@ export async function getWorkflowStatus(): Promise<WorkflowStatusData> {
 /**
  * Validate that a run can be resumed and return it.
  * Does NOT execute the workflow — callers decide whether to run.
+ *
+ * A pending Ask blocks resume on every status. An already-running run is
+ * accepted only when at least one Ask row is answered and none remain pending
+ * (the answer operation already won the paused→running CAS).
  */
 export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
   const run = await getRunOrThrow(runId, 'operations.workflow_resume_lookup_failed');
+  const interactions = await listPendingInteractions(runId);
+  if (interactions.some(row => row.status === 'pending')) {
+    throw new Error(`Answer or decline the Ask before resuming run ${runId}`);
+  }
+  const hasAnsweredAsk = interactions.some(row => row.kind === 'ask' && row.status === 'answered');
+  if (run.status === 'running' && hasAnsweredAsk) {
+    return run;
+  }
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
     throw new Error(
       `Cannot resume run with status '${run.status}'. Only failed, paused, or cancelled runs can be resumed.`
     );
   }
   return run;
+}
+
+/**
+ * Answer or decline one pending AskHuman interaction.
+ *
+ * Authorizes the run starter, invokes the persistence CAS once, then logs and
+ * emits identifier-only signals after commit. Does not call resumeWorkflowRun;
+ * last-pending resume happens inside the persistence transaction.
+ */
+export async function answerAskHuman(input: AnswerAskHumanInput): Promise<AnswerAskHumanResult> {
+  const run = await loadAskHumanRun(input.runId);
+  const actorUserId = assertAskHumanActor(run, input.actorUserId);
+  const resolved = await resolvePendingInteraction({
+    workflow_run_id: input.runId,
+    tool_use_id: input.requestId,
+    answer: input.body,
+    resolved_by: actorUserId,
+  });
+  const { remaining_pending: remainingPending } = resolved;
+  const declined = 'decline' in input.body;
+  getLog().info(
+    {
+      workflowRunId: input.runId,
+      nodeId: resolved.interaction.node_id,
+      toolUseId: resolved.interaction.tool_use_id,
+      declined,
+      resumed: resolved.resumed,
+    },
+    'workflow.ask_resolved'
+  );
+  getWorkflowEventEmitter().emit({
+    type: 'interaction_resolved',
+    runId: input.runId,
+    nodeId: resolved.interaction.node_id,
+    resumed: resolved.resumed,
+  });
+  return {
+    run,
+    interaction: resolved.interaction,
+    resumed: resolved.resumed,
+    remainingPending,
+  };
+}
+
+async function loadAskHumanRun(runId: string): Promise<WorkflowRun> {
+  let run: WorkflowRun | null;
+  try {
+    run = await workflowDb.getWorkflowRun(runId);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error(
+      { err, errorType: err.constructor.name, runId },
+      'operations.workflow_ask_lookup_failed'
+    );
+    throw new Error(`Failed to look up workflow run ${runId}: ${err.message}`);
+  }
+  if (!run) {
+    throw new AskHumanRunNotFoundError(runId);
+  }
+  return run;
+}
+
+function assertAskHumanActor(run: WorkflowRun, actorUserId: string | undefined): string {
+  if (actorUserId === undefined || actorUserId === '') {
+    throw new AskHumanAuthenticationRequiredError();
+  }
+  if (run.user_id === null || run.user_id !== actorUserId) {
+    throw new AskHumanForbiddenError(run.id);
+  }
+  return actorUserId;
 }
 
 export interface AbandonWorkflowResult {

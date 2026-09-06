@@ -7,22 +7,23 @@ export const gitDiffRoute = createRoute({
   method: 'get',
   path: '/api/workflows/runs/{runId}/git/diff',
   tags: ['Workflows'],
-  summary: "Read a run's Now git hunks for a modified file",
+  summary: "Read a run's Now or commit git hunks for a modified file",
   request: {
     params: z.object({ runId: z.string().min(1) }),
     query: z.object({
       path: z.string(),
       cursor: z.string().optional(),
+      ref: z.string().optional(),
     }),
   },
   responses: {
     200: {
       content: { 'application/json': { schema: gitDiffResponseSchema } },
-      description: 'Ready Now hunks or a CAP-6 empty envelope',
+      description: 'Ready Now or commit hunks or a CAP-6 empty envelope',
     },
     400: {
       content: { 'application/json': { schema: errorSchema } },
-      description: 'Invalid file path',
+      description: 'Invalid file path or Invalid commit ref',
     },
     404: {
       content: { 'application/json': { schema: errorSchema } },

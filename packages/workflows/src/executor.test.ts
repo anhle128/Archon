@@ -176,7 +176,13 @@ import {
 import { keepAwake } from './utils/keep-awake';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig, GitSnapshotContext } from './deps';
 import type { IWorkflowStore } from './store';
-import type { AppliedEnvOverlay, LoopGroupNode, WorkflowDefinition, WorkflowRun } from './schemas';
+import type {
+  AppliedEnvOverlay,
+  LoopGroupNode,
+  PendingInteraction,
+  WorkflowDefinition,
+  WorkflowRun,
+} from './schemas';
 import { applyEnvOverlay } from './env-overlay';
 import { isLoopGroupNode, isPromptNode } from './schemas';
 import {
@@ -252,6 +258,24 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
       resolved_by: null,
     }),
     listPendingInteractions: async () => [],
+    resolvePendingInteraction: async input => ({
+      interaction: {
+        id: 'pending-1',
+        workflow_run_id: input.workflow_run_id,
+        node_id: 'review',
+        tool_use_id: input.tool_use_id,
+        kind: 'ask' as const,
+        status: 'answered' as const,
+        envelope: {},
+        answer: input.answer,
+        provider_session_id: 'sess-1',
+        created_at: new Date(),
+        resolved_at: new Date(),
+        resolved_by: input.resolved_by,
+      },
+      resumed: false,
+      remaining_pending: 0,
+    }),
     ...overrides,
   };
 }
@@ -304,6 +328,24 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     status: 'running',
     started_at: new Date().toISOString(),
     metadata: {},
+    ...overrides,
+  };
+}
+
+function makeAskRow(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
+  return {
+    id: 'ask-1',
+    workflow_run_id: 'run-1',
+    node_id: 'ask-node',
+    tool_use_id: 'tool-1',
+    kind: 'ask',
+    status: 'answered',
+    envelope: {},
+    answer: { answers: [{ questionId: 'q1', value: 'yes' }] },
+    provider_session_id: 'sess-1',
+    created_at: new Date('2026-01-01T00:00:00.000Z'),
+    resolved_at: new Date('2026-01-01T00:01:00.000Z'),
+    resolved_by: 'user-1',
     ...overrides,
   };
 }
@@ -2531,6 +2573,71 @@ describe('inspectResumableRun', () => {
     expect(result).toBeNull();
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
   });
+
+  it('treats a first-node run with answered Ask rows as resumable', async () => {
+    const candidate = makeRun({ id: 'run-1', status: 'running' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
+      listPendingInteractions: mock(async () => [makeAskRow()]),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('inspect must not claim');
+      }),
+    });
+    const result = await inspectResumableRun(makeDeps(store), candidate);
+    expect(result).not.toBeNull();
+    expect(result?.priorCompletedNodes.size).toBe(0);
+    expect(result?.hasAnsweredAsk).toBe(true);
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('rejects a still-pending Ask without claiming the run', async () => {
+    const candidate = makeRun({ id: 'run-1', status: 'paused' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
+      listPendingInteractions: mock(async () => [
+        makeAskRow({ status: 'pending', answer: null, resolved_at: null, resolved_by: null }),
+      ]),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('inspect must not claim');
+      }),
+    });
+    await expect(inspectResumableRun(makeDeps(store), candidate)).rejects.toThrow(
+      'Answer or decline the Ask before resuming run run-1'
+    );
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('rejects a still-pending Permission without claiming the run', async () => {
+    const candidate = makeRun({ id: 'run-1', status: 'paused' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
+      listPendingInteractions: mock(async () => [
+        makeAskRow({
+          kind: 'permission',
+          status: 'pending',
+          answer: null,
+          resolved_at: null,
+          resolved_by: null,
+        }),
+      ]),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('inspect must not claim');
+      }),
+    });
+    await expect(inspectResumableRun(makeDeps(store), candidate)).rejects.toThrow(
+      'Answer or decline the Ask before resuming run run-1'
+    );
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
 });
 
 describe('hydrateResumableRun', () => {
@@ -2674,6 +2781,106 @@ describe('hydrateResumableRun', () => {
     });
     const deps = makeDeps(store);
     await expect(hydrateResumableRun(deps, candidate)).rejects.toThrow('DB write failed');
+  });
+
+  it('rejects a still-pending Ask without calling resumeWorkflowRun', async () => {
+    const candidate = makeRun({ id: 'run-1', status: 'paused' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map([['n1', 'out1']]),
+        tokens: { input: 0, output: 0 },
+      })),
+      listPendingInteractions: mock(async () => [
+        makeAskRow({ status: 'pending', answer: null, resolved_at: null, resolved_by: null }),
+      ]),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('hydrate must not claim a pending Ask');
+      }),
+    });
+    await expect(hydrateResumableRun(makeDeps(store), candidate)).rejects.toThrow(
+      'Answer or decline the Ask before resuming run run-1'
+    );
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('rejects a still-pending Permission without calling resumeWorkflowRun', async () => {
+    const candidate = makeRun({ id: 'run-1', status: 'paused' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map([['n1', 'out1']]),
+        tokens: { input: 0, output: 0 },
+      })),
+      listPendingInteractions: mock(async () => [
+        makeAskRow({
+          kind: 'permission',
+          status: 'pending',
+          answer: null,
+          resolved_at: null,
+          resolved_by: null,
+        }),
+      ]),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('hydrate must not claim a pending Permission');
+      }),
+    });
+    await expect(hydrateResumableRun(makeDeps(store), candidate)).rejects.toThrow(
+      'Answer or decline the Ask before resuming run run-1'
+    );
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('returns the already-running candidate without a second resume CAS', async () => {
+    const candidate = makeRun({ id: 'run-1', status: 'running' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        tokens: { input: 0, output: 0 },
+      })),
+      listPendingInteractions: mock(async () => [makeAskRow()]),
+      resumeWorkflowRun: mock(async () => {
+        throw new Error('must not resume an already-running Ask');
+      }),
+    });
+    const result = await hydrateResumableRun(makeDeps(store), candidate);
+    expect(result).not.toBeNull();
+    expect(result?.preCreatedRun).toBe(candidate);
+    expect(result?.priorCompletedNodes.size).toBe(0);
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('still claims failed, paused, and cancelled runs that have answered Ask rows', async () => {
+    for (const status of ['failed', 'paused', 'cancelled'] as const) {
+      const candidate = makeRun({ id: `run-${status}`, status });
+      const resumed = makeRun({ id: `run-${status}`, status: 'running' });
+      const store = makeStore({
+        getDagResumeSnapshot: mock(async () => ({
+          completedNodeOutputs: new Map(),
+          tokens: { input: 0, output: 0 },
+        })),
+        listPendingInteractions: mock(async () => [
+          makeAskRow({ workflow_run_id: `run-${status}` }),
+        ]),
+        resumeWorkflowRun: mock(async () => resumed),
+      });
+      const result = await hydrateResumableRun(makeDeps(store), candidate);
+      expect(result?.preCreatedRun).toBe(resumed);
+      expect(store.resumeWorkflowRun).toHaveBeenCalledWith(`run-${status}`);
+    }
+  });
+
+  it('does not skip the resume CAS for a running candidate without answered Ask', async () => {
+    const candidate = makeRun({ id: 'run-running', status: 'running' });
+    const resumed = makeRun({ id: 'run-running', status: 'running' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map([['n1', 'out1']]),
+        tokens: { input: 0, output: 0 },
+      })),
+      resumeWorkflowRun: mock(async () => resumed),
+    });
+    const result = await hydrateResumableRun(makeDeps(store), candidate);
+    expect(result?.preCreatedRun).toBe(resumed);
+    expect(store.resumeWorkflowRun).toHaveBeenCalledWith('run-running');
   });
 });
 

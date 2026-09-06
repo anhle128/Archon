@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import { fileDiff, toWorktreePath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 
-import { isValidGitFilePath } from './path-input';
+import { isValidGitFilePath, isValidGitObjectId } from './path-input';
 import { loadRunCheckout } from './run-checkout';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -15,6 +15,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 type ClassifiedGitReadError =
   | 'invalid_path'
+  | 'invalid_ref'
   | 'file_not_found'
   | 'invalid_cursor'
   | 'stale_cursor'
@@ -24,6 +25,10 @@ function classifyGitReadError(error: unknown): ClassifiedGitReadError {
   if (typeof error !== 'object' || error === null) return 'git_read_failed';
   const candidate = error as { name?: unknown; code?: unknown };
   if (candidate.name === 'GitPathError') return 'invalid_path';
+  if (candidate.name === 'GitCommitRefError') return 'invalid_ref';
+  if (candidate.name === 'GitFileError' && candidate.code === 'invalid_ref') {
+    return 'invalid_ref';
+  }
   if (candidate.name === 'GitFileError' && candidate.code === 'not_found') {
     return 'file_not_found';
   }
@@ -49,6 +54,12 @@ export async function handleGitDiff(
     return apiError(c, 400, 'Invalid file path');
   }
 
+  const ref = c.req.query('ref');
+  if (ref !== undefined && !isValidGitObjectId(ref)) {
+    getLog().info({ runId, errorType: 'invalid_ref' }, 'git.diff_failed');
+    return apiError(c, 400, 'Invalid commit ref');
+  }
+
   try {
     const gate = await loadRunCheckout(runId);
 
@@ -66,6 +77,7 @@ export async function handleGitDiff(
       const result = await fileDiff(toWorktreePath(gate.workingPath), path, {
         cursor: c.req.query('cursor') ?? '',
         signal: c.req.raw.signal,
+        commit: ref,
       });
       getLog().info(
         { runId, binary: result.binary, truncated: result.truncated },
@@ -82,6 +94,10 @@ export async function handleGitDiff(
       if (classified === 'invalid_path') {
         getLog().info({ runId, errorType: 'invalid_path' }, 'git.diff_failed');
         return apiError(c, 400, 'Invalid file path');
+      }
+      if (classified === 'invalid_ref') {
+        getLog().info({ runId, errorType: 'invalid_ref' }, 'git.diff_failed');
+        return apiError(c, 400, 'Invalid commit ref');
       }
       if (classified === 'file_not_found') {
         getLog().info({ runId, errorType: 'file_not_found' }, 'git.diff_failed');

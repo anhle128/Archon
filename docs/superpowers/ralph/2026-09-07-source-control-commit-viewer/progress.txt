@@ -1,0 +1,278 @@
+## Codebase Patterns
+
+### Ralph loop model assertions follow the YAML fixture
+- **Where**: `packages/workflows/src/dag-executor.test.ts`, `packages/workflows/src/loader.test.ts`
+- **Pattern**: Native Ralph fixture tests load `.archon/workflows/defaults/speckit-ralph-native-feature.yaml`. When that YAML's `ralph-loop-run` model/effort changes, update the loader dual-model contract and the dag-executor native Ralph completion assertion together. Do not keep a stale grok/high comment.
+- **Example**: `expect(loopNode?.model).toBe('alibaba-token-plan/deepseek-v4-pro'); expect(options.nodeConfig?.effort).toBe('max');`
+
+### Compute Reload pending from incoming snapshots, not refs
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-tab.tsx` `onReload`
+- **Pattern**: `dispatch` does not update `snapshotRef` until the next render. Compute each reducer's pending with `pendingAfterReceive(current, incoming, same)` in the same turn as the three `Promise.all` refetches, then load `pendingViewer` from that pending file. Include `commitSnapshotState.pending` in `hasPending` and gate acceptance on a matching scoped viewer.
+- **Example**: `pendingListRequestRef.current = { id, runId, commitOid: expanded?.oid ?? null };`
+
+### Set viewerScopeRef before starting a viewer request
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-tab.tsx` `onOpenScopedFile`
+- **Pattern**: Assign `viewerScopeRef.current = scope` and `setViewerScope(scope)` synchronously before `beginRequest()`. Capture `fetchSpy` into a const before `waitFor` closures so tsc does not re-widen `let fetchSpy`.
+- **Example**: `viewerScopeRef.current = scope; setViewerScope(scope);`
+
+### Route commit changes separately from Now in mockGitRoutes
+- **Where**: `packages/web/src/component-integration/source-control-tab.test.tsx` `mockGitRoutes`
+- **Pattern**: Parse `ref` from `/git/changes` with `new URL(url, 'http://archon.local')`. A present `ref` must not increment the Now `changesCall` counter. Story 2.1 Enter-to-expand tests need `onCommitChanges`.
+- **Example**: `if (ref !== null) { commitChangesCall += 1; ... }`
+
+
+### Isolate nested History keyboard at the listbox boundary
+- **Where**: `packages/web/src/components/workflows/source-control/commit-history-graph.tsx` `onKeyDown`
+- **Pattern**: Return when `event.currentTarget !== event.target` so nested `ChangedFilesList` Arrow/Enter/Space cannot move or collapse the outer History row. Enter/Space on the History listbox itself calls `onToggleCommit`.
+- **Example**: `if (event.currentTarget !== event.target) return;`
+
+### SourceControlPanel expand props are required
+- **Where**: `source-control-panel.tsx`, `source-control-tab.tsx`, `source-control-tab.test.tsx`
+- **Pattern**: `expandedCommit`, `commitSnapshot`, `commitLoadState`, `onToggleCommit`, and `onOpenCommitFile` are required. Direct `createElement(SourceControlPanel, …)` tests must pass idle/null stubs. Derive files with `commitSnapshot != null` because `undefined !== null` is true.
+- **Example**: `props.commitSnapshot != null && props.commitSnapshot.emptyReason === undefined`
+
+### Split Changes vs commit selected paths
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-panel.tsx`
+- **Pattern**: `selectedNowPath` for Changes, `selectedCommitPath` for History files, so the same path cannot appear selected in both lists.
+- **Example**: `selectedPath={props.selectedNowPath}` vs `selectedPath={props.selectedCommitPath}`
+
+### Regenerate OpenAPI types from a worktree-specific port
+- **Where**: `packages/web/package.json` `generate:types`, `packages/web/src/lib/api.generated.d.ts`
+- **Pattern**: `generate:types` is hardcoded to `http://localhost:3090/api/openapi.json`. When 3090 is already bound, start this worktree's server on a free port and run `bun x openapi-typescript http://localhost:<port>/api/openapi.json -o src/lib/api.generated.d.ts`. Never hand-edit the generated file. Confirm `ref` on `/git/changes` and `/git/diff`.
+- **Example**: `PORT=39079 bun run dev:server` then `bun x openapi-typescript http://localhost:39079/api/openapi.json -o src/lib/api.generated.d.ts`
+
+### Locked GitFileSource union needs a redundant-constituents disable
+- **Where**: `packages/web/src/lib/api.ts` `GitFileSource`
+- **Pattern**: `'worktree' | 'head' | string` is the locked contract; it trips `@typescript-eslint/no-redundant-type-constituents` the same way `'live' | string` does. Keep the union and disable the next line.
+- **Example**: `// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- locked GitFileSource contract`
+
+### Validate HTTP ref before checkout lookup
+- **Where**: `packages/server/src/routes/git/changes-handler.ts`, `diff-handler.ts`, `file-handler.ts`
+- **Pattern**: `c.req.query('ref') !== undefined` plus `isValidGitObjectId` rejects empty `ref=` and `HEAD` before `loadRunCheckout`. Now listing must call `changedFiles(path)` with one argument. Map `GitCommitRefError` / `GitFileError` `invalid_ref` to HTTP 400 `{ error: 'Invalid commit ref' }` and log `{ runId, errorType: 'invalid_ref' }` without the OID.
+- **Example**: `if (ref !== undefined && !isValidGitObjectId(ref)) return apiError(c, 400, 'Invalid commit ref');`
+
+### Isolate commit fileDiff fixtures and spawn spies
+- **Where**: `packages/git/src/file-read.test.ts` `commit fileDiff`
+- **Pattern**: Bun runs tests concurrently. Give each commit fileDiff case its own repo under the describe temp root. When spying `child_process.spawn`, assert the `diff-tree` argv only — flattened calls can include concurrent Now `git diff HEAD` spawns.
+- **Example**: `const diffTree = spawnedArgv.find(args => args.includes('diff-tree')); expect(diffTree).not.toContain('HEAD');`
+
+### Keep explicit root vs parent fileDiff argv
+- **Where**: `packages/git/src/file-read.ts` `fileDiff`
+- **Pattern**: Two literal `diff-tree` argv arrays like `changedFiles` (root inserts `--root` after `--no-commit-id` and omits parent; non-root is `parentOid commitOid`). Commit branch uses `acceptExitCodes: [0]`; Now keeps `git diff HEAD` with `[0, 1]`. `fileAt` only calls `resolveCommitParents` when `treeIsh` matches `FULL_GIT_OBJECT_ID_RE` so `HEAD` stays unchanged.
+- **Example**: `if (source.kind === 'tree' && FULL_GIT_OBJECT_ID_RE.test(source.treeIsh)) await resolveCommitParents(workingPath, source.treeIsh);`
+
+### Git-oid helpers stay package-internal
+- **Where**: `packages/git/src/git-oid.ts`, `packages/git/src/index.ts`
+- **Pattern**: `parseGitObjectId`, `resolveCommitParents`, `FULL_GIT_OBJECT_ID_RE`, and `GitCommitRefError` are imported by sibling modules. Export `parseNameStatusZ` and `ChangedFilesRequest` from the package root; do not re-export git-oid symbols.
+- **Example**: `import { parseGitObjectId, resolveCommitParents } from './git-oid';`
+
+### Keep explicit root vs parent diff-tree argv
+- **Where**: `packages/git/src/changed-files.ts` `changedFiles`
+- **Pattern**: Two literal argv arrays (root uses `--root` and omits parent; non-root is `parentOid commitOid`). Do not extract a one-use builder (Rule of Three). Now porcelain stays on the no-`commit` branch and must not call `parseGitObjectId` or `resolveCommitParents`.
+- **Example**: `parents[0] === undefined ? [..., '--root', ..., commit] : [..., parents[0], commit]`
+
+### Isolate commit-listing fixtures per test
+- **Where**: `packages/git/src/changed-files.test.ts` `commit changedFiles`
+- **Pattern**: Bun runs tests concurrently. Give merge-commit coverage its own repo under the describe temp root instead of mutating the sibling test's checkout.
+
+---
+
+## 2026-09-07 — US-001: Commit object-name parsing and commit changedFiles
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/git-oid.ts` — FULL_GIT_OBJECT_ID_RE, GitCommitRefError, parseGitObjectId, resolveCommitParents
+- `packages/git/src/git-oid.test.ts` — SHA-1/SHA-256 parse cases; root/child parents; missing/blob/unreachable rejects
+- `packages/git/src/changed-files.ts` — parseNameStatusZ; ChangedFilesRequest; commit diff-tree listing
+- `packages/git/src/changed-files.test.ts` — name-status projection, commit listing, first-parent merge
+- `packages/git/src/index.ts` — export parseNameStatusZ and ChangedFilesRequest only
+
+**Acceptance criteria verified**:
+- [x] Create packages/git/src/git-oid.ts exporting FULL_GIT_OBJECT_ID_RE, GitCommitRefError, parseGitObjectId(raw: string), and resolveCommitParents(workingPath, oid).
+- [x] parseGitObjectId accepts 40-character SHA-1 and 64-character SHA-256 lowercase hex strings; rejects short, uppercase, live, HEAD, and peel syntax with GitCommitRefError.
+- [x] resolveCommitParents verifies commit object type via git rev-parse --verify --quiet OID^{commit}, reachability via git merge-base --is-ancestor OID HEAD, and returns parents in order via git rev-list --parents -n 1 OID; throws GitCommitRefError for non-commit, non-existent, or unreachable commit objects.
+- [x] Implement parseNameStatusZ(stdout: string) in packages/git/src/changed-files.ts; project ordinary M/A/D/T records, rename records (R100 -> old D + new A), copy records (C100 -> new A), preserve spaces and newlines, and fail fast on malformed records.
+- [x] Export parseNameStatusZ from packages/git/src/index.ts; do not export parseGitObjectId, resolveCommitParents, FULL_GIT_OBJECT_ID_RE, or GitCommitRefError from package root.
+- [x] Update changedFiles(workingPath, request?) to accept ChangedFilesRequest with optional commit string; when commit is supplied, run git diff-tree name-status with --root for root commits or parentOid commitOid for commits with parents; compute revision as sha256(oid + '\0' + stdout).
+- [x] Ensure changedFiles without commit retains existing porcelain Now behavior byte-for-byte.
+- [x] Pass tests in packages/git/src/git-oid.test.ts and packages/git/src/changed-files.test.ts.
+
+**Learnings**:
+- `bun x eslint path/to/*.test.ts --max-warnings 0` fails because test files are ignored; lint production files only.
+- Merge listing must not share a checkout with the special-name commit test under Bun's concurrent runner.
+
+---
+
+## 2026-09-07 — US-002: Commit-scoped fileDiff and fileAt reachability check
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/file-read.ts` — FileDiffRequest.commit, FileDiffResult.scope/ref, fileAt HEAD-reachability gate, commit diff-tree vs first parent/--root
+- `packages/git/src/file-read.test.ts` — commit diff, colon path, binary fallback, unreachable fileAt, paged cursor identity
+
+**Acceptance criteria verified**:
+- [x] Update FileDiffRequest to accept optional commit string, and FileDiffResult to include scope: 'now' | 'commit' and ref: 'live' | string.
+- [x] In fileAt, validate any source.kind === 'tree' with a full object name treeIsh against resolveCommitParents before reading the tree; reject unreachable commits with GitCommitRefError.
+- [x] In fileDiff, when commit is provided, validate the OID and resolve its parents; for a root commit spawn git diff-tree with --root, and for a non-root commit spawn with parentOid commitOid; use -U3 context lines and acceptExitCodes: [0].
+- [x] For commit fileDiff, inspect after-side commit tree and before-side parent tree (or null for root); if either side is image, hex, or >50 MiB, return hunks: [], fileFallback: true, scope: 'commit', ref: commitOid, and binary set based on NUL detection.
+- [x] Commit text diffs feed stdout incrementally into HunkPageAccumulator, returning hunks with scope: 'commit' and ref: commitOid.
+- [x] Now fileDiff retains scope: 'now' and ref: 'live' using git diff HEAD with acceptExitCodes: [0, 1].
+- [x] Pass all tests in packages/git/src/file-read.test.ts, including commit diff, raw blob, binary fallback, pagination identity, special paths, and unreachable commit rejection.
+
+**Learnings**:
+- `'live' | string` trips `@typescript-eslint/no-redundant-type-constituents`; keep the locked union with a one-line disable.
+- Spawn spies must target the `diff-tree` argv, not every concurrent git spawn.
+- Isolate each commit fileDiff test in its own repo under the describe temp root.
+
+---
+
+## 2026-09-07 — US-003: HTTP ref query parameter and commit file source
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/git/path-input.ts` — `isValidGitObjectId` (40/64 lowercase hex)
+- `packages/server/src/routes/git/changes-route.ts` — optional `ref` query; HTTP 400 Invalid commit ref
+- `packages/server/src/routes/git/changes-handler.ts` — validate ref before checkout; one-arg Now `changedFiles`; `{ commit }` for commit lists; GitCommitRefError → 400
+- `packages/server/src/routes/git/diff-route.ts` — optional `ref`; Now-or-commit summary
+- `packages/server/src/routes/git/diff-handler.ts` — `commit: ref` into `fileDiff`; classify `invalid_ref`
+- `packages/server/src/routes/git/file-handler.ts` — `source=worktree|head|FULL_OID`; GitCommitRefError/GitFileError invalid_ref → 400
+- `packages/server/src/routes/api.ts` — Now-or-commit comments on changes/diff
+- `packages/server/src/routes/api.git-changes.test.ts` — commit ref, empty ref, unreachable, CAP-6, file source tests
+
+**Acceptance criteria verified**:
+- [x] Add isValidGitObjectId(raw: string): boolean to packages/server/src/routes/git/path-input.ts matching 40 or 64 character lowercase hex.
+- [x] Update changes-route.ts to accept optional query param ref: z.string().optional() and document HTTP 400 Invalid commit ref.
+- [x] Update changes-handler.ts: if ref is provided and not isValidGitObjectId, return HTTP 400 { error: 'Invalid commit ref' }; pass { commit: ref } to changedFiles; catch GitCommitRefError and return HTTP 400 { error: 'Invalid commit ref' }; log git.changes_failed with errorType: 'invalid_ref'; keep CAP-6 and missing run handling.
+- [x] Update diff-route.ts to accept optional query param ref: z.string().optional() and document HTTP 400 Invalid commit ref.
+- [x] Update diff-handler.ts: if ref is provided and not isValidGitObjectId, return HTTP 400 { error: 'Invalid commit ref' }; pass commit: ref to fileDiff; map GitCommitRefError to HTTP 400 { error: 'Invalid commit ref' } with errorType: 'invalid_ref'.
+- [x] Update file-handler.ts: accept source query matching 'worktree', 'head', or isValidGitObjectId(source); map full object name to { kind: 'tree', treeIsh: source }; map invalid source to HTTP 400 Invalid file source; map GitCommitRefError to HTTP 400 Invalid commit ref.
+- [x] Update route comments in packages/server/src/routes/api.ts to describe changes and diff as Now-or-commit.
+- [x] Pass all isolated tests in packages/server/src/routes/api.git-changes.test.ts covering valid commit ref, invalid ref, unreachable commit, commit diff, and commit file reads.
+
+**Learnings**:
+- Empty `ref=` is `''`, not undefined — only an absent query parameter selects Now.
+- Now `changedFiles` must be invoked with one argument; a trailing `undefined` fails `mock.calls[0].length === 1`.
+- Do not log the commit OID on `invalid_ref` paths.
+
+---
+
+## 2026-09-07 — US-004: Web git clients and generated types
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated; `ref` on git changes/diff plus 400 Invalid commit ref
+- `packages/web/src/lib/api.ts` — `assertCommitRef`, `GitFileSource` includes full object names, clients send optional `ref`
+- `packages/web/src/lib/api.git-changes.test.ts` — ref encoding, invalid-ref assertion, gitFileUrl commit source
+
+**Acceptance criteria verified**:
+- [x] Regenerate packages/web/src/lib/api.generated.d.ts from the running server OpenAPI document; verify ref appears in GET /api/workflows/runs/{runId}/git/changes and /git/diff query parameters.
+- [x] In packages/web/src/lib/api.ts, define GitFileSource as 'worktree' | 'head' | string; implement assertCommitRef validating FULL_GIT_OBJECT_ID_RE.
+- [x] Update getWorkflowRunGitChanges(runId, options?) to accept { ref?: string; signal?: AbortSignal } and validate ref before request.
+- [x] Update getWorkflowRunGitDiff(runId, path, options?) to accept { cursor?: string; ref?: string; signal?: AbortSignal } and validate ref before request.
+- [x] Update gitFileUrl to validate source with assertCommitRef when source is not 'worktree' or 'head'.
+- [x] Pass client unit tests in packages/web/src/lib/api.git-changes.test.ts covering ref encoding, invalid ref assertion, and signal forwarding.
+
+**Learnings**:
+- Port 3090 was already bound; generate types from this worktree's server on 39079 with openapi-typescript, then stop only that server.
+- `'worktree' | 'head' | string` needs the same redundant-constituents disable as `'live' | string`.
+
+---
+
+## 2026-09-07 — US-005: Inline commit file list in History
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/commit-graph-row.tsx` — `expanded` prop and `aria-expanded` on the row button
+- `packages/web/src/components/workflows/source-control/commit-history-graph.tsx` — inline `ChangedFilesList`, dynamic virtualizer height, nested keyboard isolation
+- `packages/web/src/components/workflows/source-control/commit-history-graph.test.tsx` — expand, loading/error copy, nested virtualization heights
+- `packages/web/src/components/workflows/source-control/source-control-panel.tsx` — thread expand state; keep Changes pinned; split selected paths
+- `packages/web/src/components/workflows/source-control/source-control-panel.test.tsx` — pinned Changes + empty commit copy
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — pass idle expand stubs so the new required panel props type-check
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — same stubs on direct `SourceControlPanel` mounts
+
+**Acceptance criteria verified**:
+- [x] Update CommitGraphRow to accept expanded: boolean and set aria-expanded on the row button.
+- [x] Update CommitHistoryGraph to accept expandedOid, commitFiles, commitFilesLoadState, selectedPath, onToggleCommit, and onOpenFile.
+- [x] Render ChangedFilesList inline beneath the expanded commit row with max height 240px; render Loading files for loading, Could not refresh files for error, and No file changes when commitFiles is empty.
+- [x] Configure virtualizer with measureElement and dynamic estimateSize (COMMIT_ROW_HEIGHT for collapsed, +36 for empty/loading/error, +Math.min(240, count*28+16) for populated); call virtualizer.measure() when expansion state or files change.
+- [x] Isolate keyboard events in CommitHistoryGraph: return early when event.currentTarget !== event.target so nested ChangedFilesList navigation does not bubble; Enter/Space on listbox toggles commit expand.
+- [x] Update SourceControlPanel to thread commit state and callbacks to CommitHistoryGraph while keeping Changes pinned.
+- [x] Pass tests in commit-history-graph.test.tsx and source-control-panel.test.tsx.
+
+**Learnings**:
+- Expanded History total size for 4 commits is 24+36+72=132 (loading) and 24+240+72=336 (populated); nested list 200×28=5600.
+- Direct `createElement(SourceControlPanel)` tests omit new required props unless stubs are added.
+- `commitSnapshot !== null` still reads `.emptyReason` when the prop is undefined; use `!= null`.
+
+---
+
+## 2026-09-07 — US-006: Load commit files into the shared viewer
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — ViewerScope, commit snapshot reducer + query, scope-aware loadViewerFile/openers
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — commit changes mock routing; expand/M/A/D/fallback/collapse tests
+
+**Acceptance criteria verified**:
+- [x] ViewerScope type defaults to `{ kind: 'now' }`
+- [x] Dedicated sourceControlSnapshotReducer + useQuery `['workflowRunGitChanges', runId, expandedCommit?.oid]`
+- [x] onToggleCommit toggles expand without mutating the open viewer
+- [x] onOpenCommitFile sets commit scope and opens FileViewer
+- [x] M uses diff `ref: scope.oid`; A uses file `source: scope.oid`; D uses file `source: scope.parentOid`
+- [x] fileFallback true falls back to raw file `source: scope.oid`
+- [x] Collapse hides inline files and keeps the open commit viewer
+- [x] Mounted integration tests covering commit M, A, D, and binary fallback
+
+**Learnings**:
+- `calledUrls(fetchSpy)` inside `waitFor` fails tsc because `let fetchSpy` is re-widened in closures; capture a const first.
+- Enter on History now fetches `?ref=`; Story 2.1 keyboard tests must stub `onCommitChanges`.
+- Leave scoped paging and 3-snapshot Reload to US-007.
+
+---
+
+## 2026-09-07 — US-007: Scope-safe paging, Reload freeze, and keyboard isolation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — scoped onLoadMore, three-snapshot Reload, Return-to-Now, CAP-6/missing-file accept, History collapse without closing commit viewer
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — Return-to-Now, commit Load more text/hunks, frozen Reload, nested History keyboard
+
+**Acceptance criteria verified**:
+- [x] onLoadMore reads viewerScopeRef.current; passes ref: scope.oid for commit diffs and source: rawSourceFor(file, scope) for commit text pages; validates matching ref and contentHash before appending.
+- [x] Selecting any file in Changes list synchronously resets viewerScope and viewerScopeRef to { kind: 'now' } (Return-to-Now).
+- [x] Implement atomic Reload: refetch Now changes, History log, and expanded commit changes (if any) concurrently; update pending snapshots and pendingViewer; do not overwrite displayed content until user clicks 'Changed on disk — Reload'.
+- [x] Implement onAcceptPending: if the open file is no longer present in the accepted snapshot, or if any snapshot is CAP-6, close viewer; otherwise accept all pending snapshots and replace viewer with matching pendingViewer.
+- [x] If accepted History list no longer contains the expanded commit, collapse the inline list but keep the open commit viewer readable.
+- [x] Ensure keyboard navigation in nested Commit files list (Arrow keys, Enter, Space) is isolated and does not trigger parent row collapse or double activation.
+- [x] Pass all remaining mounted integration tests in packages/web/src/component-integration/source-control-tab.test.tsx.
+
+**Learnings**:
+- After dispatch, snapshot refs still hold the pre-reload state until render; derive pending in-memory from the incoming snapshots.
+- Do not cancel ordinary commit expansion from abortCurrent; only cancel `['workflowRunGitChanges', runId, commitOid]` when that oid was stored on a Reload pendingListRequest.
+- Return-to-Now is only the Changes opener (`onOpenFile` → `{ kind: 'now' }`); collapsing History must not reset viewer scope.
+
+---
+
+## 2026-09-07 — US-008: Acceptance gates and sprint status
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` — 2-2-open-a-commits-files-in-the-same-viewer: done, epic-2: done, last_updated: 2026-09-07
+- `packages/workflows/src/dag-executor.test.ts` — unblock: native Ralph loop model/effort match YAML
+- `packages/workflows/src/loader.test.ts` — unblock: dual-model contract match YAML
+
+**Acceptance criteria verified**:
+- [x] Focused tests: git-oid/changed-files/file-read (53), server git-changes+checkout-gate (85), web api.git-changes (26), commit-history-graph+panel (24), source-control-tab (51); all exit 0
+- [x] Package test scripts: packages/git, packages/server, packages/web all exit 0
+- [x] bun run format:check, git diff --check, bun run validate all exit 0
+- [x] Acceptance matrix covered by those suites: inline expand, reachability, special paths, FileViewer reuse, M parent→commit, A/D blobs, binary fallback, Return-to-Now, frozen Reload, keyboard isolation, no console/WorkflowExecution contamination
+- [x] No new package-root I/O exports in packages/git/src/index.ts; bun.lock unmodified vs merge-base
+- [x] sprint-status.yaml updated
+
+**Learnings**:
+- `bun run validate` failed first on a pre-existing workflows fixture assertion (`dag-executor.test.ts:6934` expected `xai-oauth/grok-4.5`, YAML has `alibaba-token-plan/deepseek-v4-pro` @ `max`). Unblock commit aligned tests to the YAML; story files were never dirty.
+- Manual `/legacy/workflows/runs/:id` browser smoke was not started; this worktree is the live Ralph run checkout. Automated suites are the UI evidence.
+
+BLOCKER US-008 | gate=`bun run validate` | cause=packages/workflows/src/dag-executor.test.ts:6934 expect(loopNode?.model).toBe("xai-oauth/grok-4.5") received "alibaba-token-plan/deepseek-v4-pro"; same fingerprint on clean base; culprit outside story (YAML already updated) | action=chore(unblock): align dag-executor + loader native Ralph assertions to speckit-ralph-native-feature.yaml model/effort | 2026-09-07
+
+---

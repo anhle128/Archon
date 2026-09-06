@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 
 import { execFileAsync } from './exec';
+import { parseGitObjectId, resolveCommitParents } from './git-oid';
 import type { RepoPath, WorktreePath } from './types';
 
 export type ChangedFileStatus = 'M' | 'A' | 'D';
@@ -19,6 +20,10 @@ export interface PorcelainEntry {
 export interface ChangedFilesResult {
   files: ChangedFile[];
   revision: string;
+}
+
+export interface ChangedFilesRequest {
+  commit?: string;
 }
 
 function isRenameOrCopy(xy: string): boolean {
@@ -53,6 +58,30 @@ export function parsePorcelainV1Z(stdout: string): PorcelainEntry[] {
     entries.push({ xy, path });
   }
 
+  return entries;
+}
+
+export function parseNameStatusZ(stdout: string): PorcelainEntry[] {
+  const records = stdout.split('\0');
+  if (records.length > 0 && records[records.length - 1] === '') records.pop();
+  const entries: PorcelainEntry[] = [];
+  for (let index = 0; index < records.length; ) {
+    const status = records[index] ?? '';
+    if (status.length === 0) throw new Error('Malformed git name-status output');
+    const code = status[0];
+    if (code === 'R' || code === 'C') {
+      const origPath = records[index + 1];
+      const path = records[index + 2];
+      if (!origPath || !path) throw new Error('Malformed git name-status output');
+      entries.push({ xy: code, path, origPath });
+      index += 3;
+      continue;
+    }
+    const path = records[index + 1];
+    if (!path) throw new Error('Malformed git name-status output');
+    entries.push({ xy: code === 'U' ? 'UU' : code, path });
+    index += 2;
+  }
   return entries;
 }
 
@@ -107,8 +136,55 @@ export async function isGitWorkTree(workingPath: RepoPath | WorktreePath): Promi
 }
 
 export async function changedFiles(
-  workingPath: RepoPath | WorktreePath
+  workingPath: RepoPath | WorktreePath,
+  request?: ChangedFilesRequest
 ): Promise<ChangedFilesResult> {
+  if (request?.commit !== undefined) {
+    const commit = parseGitObjectId(request.commit);
+    const parents = await resolveCommitParents(workingPath, commit);
+    const args =
+      parents[0] === undefined
+        ? [
+            '-C',
+            workingPath,
+            '--literal-pathspecs',
+            '--no-optional-locks',
+            'diff-tree',
+            '--no-commit-id',
+            '--root',
+            '-r',
+            '--name-status',
+            '-z',
+            '-M',
+            '-C',
+            commit,
+          ]
+        : [
+            '-C',
+            workingPath,
+            '--literal-pathspecs',
+            '--no-optional-locks',
+            'diff-tree',
+            '--no-commit-id',
+            '-r',
+            '--name-status',
+            '-z',
+            '-M',
+            '-C',
+            parents[0],
+            commit,
+          ];
+    const status = await execFileAsync('git', args);
+    return {
+      files: projectChangedFiles(parseNameStatusZ(status.stdout)),
+      revision: createHash('sha256')
+        .update(commit)
+        .update('\0')
+        .update(status.stdout)
+        .digest('hex'),
+    };
+  }
+
   const status = await execFileAsync('git', [
     '-C',
     workingPath,

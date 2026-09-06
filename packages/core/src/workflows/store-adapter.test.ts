@@ -160,9 +160,17 @@ mock.module('../db/workflow-node-messages', () => ({
 }));
 const mockInsertPendingInteraction = mock(() => Promise.resolve({ id: 'pend-1' }));
 const mockListPendingInteractions = mock(() => Promise.resolve([]));
+const mockResolvePendingInteraction = mock(() =>
+  Promise.resolve({
+    interaction: { id: 'pend-1' },
+    resumed: false,
+    remaining_pending: 0,
+  })
+);
 mock.module('../db/workflow-pending-interactions', () => ({
   insertPendingInteraction: mockInsertPendingInteraction,
   listPendingInteractions: mockListPendingInteractions,
+  resolvePendingInteraction: mockResolvePendingInteraction,
 }));
 
 class TestTransformError extends Error {
@@ -327,6 +335,7 @@ describe('createWorkflowStore', () => {
       'listNodeMessages',
       'insertPendingInteraction',
       'listPendingInteractions',
+      'resolvePendingInteraction',
     ];
     for (const method of requiredMethods) {
       expect(typeof store[method]).toBe('function');
@@ -433,6 +442,38 @@ describe('createWorkflowStore', () => {
     const result = await store.listPendingInteractions('run-1');
     expect(mockListPendingInteractions).toHaveBeenCalledWith('run-1');
     expect(result).toBe(rows);
+  });
+
+  test('delegates resolvePendingInteraction with the exact input and result', async () => {
+    const input = {
+      workflow_run_id: 'run-1',
+      tool_use_id: 'toolu_1',
+      answer: { decline: true as const },
+      resolved_by: 'user-1',
+    };
+    const result = {
+      interaction: {
+        id: 'pend-1',
+        workflow_run_id: 'run-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_1',
+        kind: 'ask' as const,
+        status: 'answered' as const,
+        envelope: { questions: [] },
+        answer: { decline: true },
+        provider_session_id: 'sess-1',
+        created_at: new Date('2026-09-06T00:00:00.000Z'),
+        resolved_at: new Date('2026-09-06T00:00:01.000Z'),
+        resolved_by: 'user-1',
+      },
+      resumed: true,
+      remaining_pending: 0,
+    };
+    mockResolvePendingInteraction.mockResolvedValueOnce(result);
+    const store = createWorkflowStore();
+    const actual = await store.resolvePendingInteraction(input);
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith(input);
+    expect(actual).toBe(result);
   });
 
   test('delegates getWorkflowRunStatus to DB and returns typed status', async () => {

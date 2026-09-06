@@ -13,7 +13,10 @@ import {
   routeLoopDecisionEventDataSchema,
 } from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
-import { pendingInteractionSchema } from '@archon/workflows/schemas/pending-interaction';
+import {
+  askAnswerBodySchema,
+  pendingInteractionSchema,
+} from '@archon/workflows/schemas/pending-interaction';
 import {
   nodeMessageTextSchema,
   nodeMessageToolSchema,
@@ -300,6 +303,9 @@ export const retryWorkflowNodeResponseSchema = z
     checkoutStrategy: retryWorkflowNodeCheckoutStrategySchema,
   })
   .openapi('RetryWorkflowNodeResponse');
+
+/** POST /api/workflows/runs/:runId/ask/:requestId/answer request body. */
+export const askAnswerRequestSchema = askAnswerBodySchema.openapi('AskAnswerBody');
 
 /** POST /api/workflows/runs/:runId/approve request body. */
 export const approveWorkflowRunBodySchema = z

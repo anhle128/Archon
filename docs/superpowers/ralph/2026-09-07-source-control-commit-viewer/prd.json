@@ -1,0 +1,178 @@
+{
+  "feature": "Open a Commit's Files in the Same Viewer",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Commit object-name parsing and commit changedFiles",
+      "description": "As an operator, I want to list changed files for a specific commit reachable from HEAD, so that I can inspect modified, added, and deleted files for historical commits.",
+      "acceptanceCriteria": [
+        "Create packages/git/src/git-oid.ts exporting FULL_GIT_OBJECT_ID_RE, GitCommitRefError, parseGitObjectId(raw: string), and resolveCommitParents(workingPath, oid).",
+        "parseGitObjectId accepts 40-character SHA-1 and 64-character SHA-256 lowercase hex strings; rejects short, uppercase, live, HEAD, and peel syntax with GitCommitRefError.",
+        "resolveCommitParents verifies commit object type via git rev-parse --verify --quiet OID^{commit}, reachability via git merge-base --is-ancestor OID HEAD, and returns parents in order via git rev-list --parents -n 1 OID; throws GitCommitRefError for non-commit, non-existent, or unreachable commit objects.",
+        "Implement parseNameStatusZ(stdout: string) in packages/git/src/changed-files.ts; project ordinary M/A/D/T records, rename records (R100 -> old D + new A), copy records (C100 -> new A), preserve spaces and newlines, and fail fast on malformed records.",
+        "Export parseNameStatusZ from packages/git/src/index.ts; do not export parseGitObjectId, resolveCommitParents, FULL_GIT_OBJECT_ID_RE, or GitCommitRefError from package root.",
+        "Update changedFiles(workingPath, request?) to accept ChangedFilesRequest with optional commit string; when commit is supplied, run git diff-tree name-status with --root for root commits or parentOid commitOid for commits with parents; compute revision as sha256(oid + '\\0' + stdout).",
+        "Ensure changedFiles without commit retains existing porcelain Now behavior byte-for-byte.",
+        "Pass tests in packages/git/src/git-oid.test.ts and packages/git/src/changed-files.test.ts."
+      ],
+      "technicalNotes": "Plan Task 1 (docs/superpowers/plans/2026-09-07-source-control-commit-viewer.md:312-773). Create packages/git/src/git-oid.ts and git-oid.test.ts; modify packages/git/src/changed-files.ts, changed-files.test.ts, and index.ts. Locked contracts at lines 122-145, 165-176, 199-237.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/git/src/git-oid.ts, packages/git/src/git-oid.test.ts, packages/git/src/changed-files.ts, packages/git/src/changed-files.test.ts, packages/git/src/index.ts."
+    },
+    {
+      "id": "US-002",
+      "title": "Commit-scoped fileDiff and fileAt reachability check",
+      "description": "As an operator, I want commit-scoped diffs and file reads to compare against the commit's first parent or root and enforce HEAD reachability, so that commit changes and blobs can be viewed safely.",
+      "acceptanceCriteria": [
+        "Update FileDiffRequest in packages/git/src/file-read.ts to accept optional commit string, and FileDiffResult to include scope: 'now' | 'commit' and ref: 'live' | string.",
+        "In fileAt, validate any source.kind === 'tree' with a full object name treeIsh against resolveCommitParents before reading the tree; reject unreachable commits with GitCommitRefError.",
+        "In fileDiff, when commit is provided, validate the OID and resolve its parents; for a root commit spawn git diff-tree with --root, and for a non-root commit spawn with parentOid commitOid; use -U3 context lines and acceptExitCodes: [0].",
+        "For commit fileDiff, inspect after-side commit tree and before-side parent tree (or null for root); if either side is image, hex, or >50 MiB, return hunks: [], fileFallback: true, scope: 'commit', ref: commitOid, and binary set based on NUL detection.",
+        "Commit text diffs feed stdout incrementally into HunkPageAccumulator, returning hunks with scope: 'commit' and ref: commitOid.",
+        "Now fileDiff retains scope: 'now' and ref: 'live' using git diff HEAD with acceptExitCodes: [0, 1].",
+        "Pass all tests in packages/git/src/file-read.test.ts, including commit diff, raw blob, binary fallback, pagination identity, special paths, and unreachable commit rejection."
+      ],
+      "technicalNotes": "Plan Task 2 (docs/superpowers/plans/2026-09-07-source-control-commit-viewer.md:774-1144). Modify packages/git/src/file-read.ts and packages/git/src/file-read.test.ts. Locked contracts at lines 146-163, 239-265.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/git/src/file-read.ts, packages/git/src/file-read.test.ts."
+    },
+    {
+      "id": "US-003",
+      "title": "HTTP ref query parameter and commit file source",
+      "description": "As an API consumer, I want the git changes, diff, and file routes to accept a commit ref or object name and reject invalid or unreachable refs with HTTP 400, so that clients can securely query historical commit data.",
+      "acceptanceCriteria": [
+        "Add isValidGitObjectId(raw: string): boolean to packages/server/src/routes/git/path-input.ts matching 40 or 64 character lowercase hex.",
+        "Update changes-route.ts to accept optional query param ref: z.string().optional() and document HTTP 400 Invalid commit ref.",
+        "Update changes-handler.ts: if ref is provided and not isValidGitObjectId, return HTTP 400 { error: 'Invalid commit ref' }; pass { commit: ref } to changedFiles; catch GitCommitRefError and return HTTP 400 { error: 'Invalid commit ref' }; log git.changes_failed with errorType: 'invalid_ref'; keep CAP-6 and missing run handling.",
+        "Update diff-route.ts to accept optional query param ref: z.string().optional() and document HTTP 400 Invalid commit ref.",
+        "Update diff-handler.ts: if ref is provided and not isValidGitObjectId, return HTTP 400 { error: 'Invalid commit ref' }; pass commit: ref to fileDiff; map GitCommitRefError to HTTP 400 { error: 'Invalid commit ref' } with errorType: 'invalid_ref'.",
+        "Update file-handler.ts: accept source query matching 'worktree', 'head', or isValidGitObjectId(source); map full object name to { kind: 'tree', treeIsh: source }; map invalid source to HTTP 400 Invalid file source; map GitCommitRefError to HTTP 400 Invalid commit ref.",
+        "Update route comments in packages/server/src/routes/api.ts to describe changes and diff as Now-or-commit.",
+        "Pass all isolated tests in packages/server/src/routes/api.git-changes.test.ts covering valid commit ref, invalid ref, unreachable commit, commit diff, and commit file reads."
+      ],
+      "technicalNotes": "Plan Task 3 (docs/superpowers/plans/2026-09-07-source-control-commit-viewer.md:1145-1462). Modify packages/server/src/routes/git/path-input.ts, changes-route.ts, changes-handler.ts, diff-route.ts, diff-handler.ts, file-handler.ts, api.ts, and api.git-changes.test.ts.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/server/src/routes/git/path-input.ts, packages/server/src/routes/git/changes-route.ts, packages/server/src/routes/git/changes-handler.ts, packages/server/src/routes/git/diff-route.ts, packages/server/src/routes/git/diff-handler.ts, packages/server/src/routes/git/file-handler.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.git-changes.test.ts."
+    },
+    {
+      "id": "US-004",
+      "title": "Web git clients and generated types",
+      "description": "As a web developer, I want regenerated OpenAPI types and updated git API client functions, so that web components can query commit changes, diffs, and files with full type safety.",
+      "acceptanceCriteria": [
+        "Regenerate packages/web/src/lib/api.generated.d.ts from the running server OpenAPI document; verify ref appears in GET /api/workflows/runs/{runId}/git/changes and /git/diff query parameters.",
+        "In packages/web/src/lib/api.ts, define GitFileSource as 'worktree' | 'head' | string; implement assertCommitRef validating FULL_GIT_OBJECT_ID_RE.",
+        "Update getWorkflowRunGitChanges(runId, options?) to accept { ref?: string; signal?: AbortSignal } and validate ref before request.",
+        "Update getWorkflowRunGitDiff(runId, path, options?) to accept { cursor?: string; ref?: string; signal?: AbortSignal } and validate ref before request.",
+        "Update gitFileUrl to validate source with assertCommitRef when source is not 'worktree' or 'head'.",
+        "Pass client unit tests in packages/web/src/lib/api.git-changes.test.ts covering ref encoding, invalid ref assertion, and signal forwarding."
+      ],
+      "technicalNotes": "Plan Task 4 (docs/superpowers/plans/2026-09-07-source-control-commit-viewer.md:1463-1642). Regenerate packages/web/src/lib/api.generated.d.ts; modify packages/web/src/lib/api.ts and packages/web/src/lib/api.git-changes.test.ts.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/lib/api.generated.d.ts, packages/web/src/lib/api.ts, packages/web/src/lib/api.git-changes.test.ts."
+    },
+    {
+      "id": "US-005",
+      "title": "Inline commit file list in History",
+      "description": "As an operator, I want to expand a commit row in the History graph to view its changed files inline, so that I can see what changed in that commit without losing context.",
+      "acceptanceCriteria": [
+        "Update CommitGraphRow in packages/web/src/components/workflows/source-control/commit-graph-row.tsx to accept expanded: boolean and set aria-expanded on the row button.",
+        "Update CommitHistoryGraph in packages/web/src/components/workflows/source-control/commit-history-graph.tsx to accept expandedOid, commitFiles, commitFilesLoadState, selectedPath, onToggleCommit, and onOpenFile.",
+        "Render ChangedFilesList inline beneath the expanded commit row with max height 240px; render Loading files for loading, Could not refresh files for error, and No file changes when commitFiles is empty.",
+        "Configure virtualizer with measureElement and dynamic estimateSize (COMMIT_ROW_HEIGHT for collapsed, +36 for empty/loading/error, +Math.min(240, count*28+16) for populated); call virtualizer.measure() when expansion state or files change.",
+        "Isolate keyboard events in CommitHistoryGraph: return early when event.currentTarget !== event.target so nested ChangedFilesList navigation does not bubble; Enter/Space on listbox toggles commit expand.",
+        "Update SourceControlPanel in packages/web/src/components/workflows/source-control/source-control-panel.tsx to thread commit state and callbacks to CommitHistoryGraph while keeping Changes pinned.",
+        "Pass tests in packages/web/src/components/workflows/source-control/commit-history-graph.test.tsx and source-control-panel.test.tsx."
+      ],
+      "technicalNotes": "Plan Task 5 (docs/superpowers/plans/2026-09-07-source-control-commit-viewer.md:1643-1942). Modify commit-graph-row.tsx, commit-history-graph.tsx, commit-history-graph.test.tsx, source-control-panel.tsx, and source-control-panel.test.tsx.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/components/workflows/source-control/commit-graph-row.tsx, packages/web/src/components/workflows/source-control/commit-history-graph.tsx, packages/web/src/components/workflows/source-control/commit-history-graph.test.tsx, packages/web/src/components/workflows/source-control/source-control-panel.tsx, packages/web/src/components/workflows/source-control/source-control-panel.test.tsx, packages/web/src/components/workflows/source-control/source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
+    },
+    {
+      "id": "US-006",
+      "title": "Load commit files into the shared viewer",
+      "description": "As an operator, I want to click an expanded commit file and view it in the existing FileViewer, so that I can inspect commit diffs and blobs in the shared viewer.",
+      "acceptanceCriteria": [
+        "In packages/web/src/components/workflows/source-control/source-control-tab.tsx, add ViewerScope type: { kind: 'now' } | { kind: 'commit'; oid: string; parentOid: string | null } defaulting to { kind: 'now' }.",
+        "Manage expanded commit state with a dedicated sourceControlSnapshotReducer instance and TanStack useQuery for ['workflowRunGitChanges', runId, expandedCommit?.oid].",
+        "Implement onToggleCommit to toggle expanded commit without mutating the open viewer.",
+        "Implement onOpenCommitFile to set viewerScope to { kind: 'commit', oid: commit.oid, parentOid: commit.parents[0] ?? null } and open the file in FileViewer.",
+        "For M status commit files, request diff with ref: scope.oid; for A status, fetch raw file with source: scope.oid; for D status, fetch raw file with source: scope.parentOid.",
+        "When commit diff returns fileFallback: true, fall back to raw file with source: scope.oid (after side).",
+        "Preserve open commit viewer when the commit row is collapsed or scrolled out of view.",
+        "Pass mounted integration tests in packages/web/src/component-integration/source-control-tab.test.tsx covering commit M, A, D, and binary fallback file opening."
+      ],
+      "technicalNotes": "Plan Task 6 (docs/superpowers/plans/2026-09-07-source-control-commit-viewer.md:1943-2378). Modify source-control-tab.tsx and source-control-tab.test.tsx. Locked contracts at lines 268-274.",
+      "dependsOn": [
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/components/workflows/source-control/source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
+    },
+    {
+      "id": "US-007",
+      "title": "Scope-safe paging, Reload freeze, and keyboard isolation",
+      "description": "As an operator, I want Load more on commit files to preserve commit scope, Reload to atomically refresh all snapshots behind the freeze banner, and Changes clicks to return to Now, so that viewing history is reliable and predictable.",
+      "acceptanceCriteria": [
+        "In source-control-tab.tsx, onLoadMore reads viewerScopeRef.current; passes ref: scope.oid for commit diffs and source: rawSourceFor(file, scope) for commit text pages; validates matching ref and contentHash before appending.",
+        "Selecting any file in Changes list synchronously resets viewerScope and viewerScopeRef to { kind: 'now' } (Return-to-Now).",
+        "Implement atomic Reload: refetch Now changes, History log, and expanded commit changes (if any) concurrently; update pending snapshots and pendingViewer; do not overwrite displayed content until user clicks 'Changed on disk \u2014 Reload'.",
+        "Implement onAcceptPending: if the open file is no longer present in the accepted snapshot, or if any snapshot is CAP-6, close viewer; otherwise accept all pending snapshots and replace viewer with matching pendingViewer.",
+        "If accepted History list no longer contains the expanded commit, collapse the inline list but keep the open commit viewer readable.",
+        "Ensure keyboard navigation in nested Commit files list (Arrow keys, Enter, Space) is isolated and does not trigger parent row collapse or double activation.",
+        "Pass all remaining mounted integration tests in packages/web/src/component-integration/source-control-tab.test.tsx."
+      ],
+      "technicalNotes": "Plan Task 7 (docs/superpowers/plans/2026-09-07-source-control-commit-viewer.md:2379-2745). Modify source-control-tab.tsx and source-control-tab.test.tsx.",
+      "dependsOn": [
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/components/workflows/source-control/source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
+    },
+    {
+      "id": "US-008",
+      "title": "Acceptance gates and sprint status",
+      "description": "As a maintainer, I want all focused tests, package test suites, repository validation, and acceptance checks to pass before marking the story done in sprint status, so that quality and scope boundaries are guaranteed.",
+      "acceptanceCriteria": [
+        "Run focused tests across git, server, and web packages: git-oid.test.ts, changed-files.test.ts, file-read.test.ts, api.git-changes.test.ts (server and web), commit-history-graph.test.tsx, source-control-panel.test.tsx, and source-control-tab.test.tsx; all exit 0.",
+        "Run package test scripts: bun run test in packages/git, packages/server, and packages/web; all exit 0.",
+        "Run repository checks: bun run format:check, git diff --check, and bun run validate; all exit 0.",
+        "Verify all acceptance matrix criteria from the plan: inline expand, reachability gating, special paths, FileViewer reuse, M diff parent->commit, A/D blobs, binary fallback, Return-to-Now, frozen Reload, keyboard isolation, and zero console/WorkflowExecution contamination.",
+        "Verify no new package-root I/O exports in packages/git/src/index.ts and no new package dependencies in bun.lock.",
+        "Update _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml: set 2-2-open-a-commits-files-in-the-same-viewer: done, epic-2: done, and update last_updated date."
+      ],
+      "technicalNotes": "Plan Task 8 (docs/superpowers/plans/2026-09-07-source-control-commit-viewer.md:2746-2871). Modify _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml only after all gates pass.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml. Unblock: packages/workflows/src/dag-executor.test.ts, packages/workflows/src/loader.test.ts."
+    }
+  ]
+}

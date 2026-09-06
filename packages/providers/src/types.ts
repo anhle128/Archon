@@ -677,6 +677,17 @@ export interface NodeConfig {
 }
 
 /**
+ * Provider-neutral AskHuman resume payload for one pending tool use.
+ * Answers map to `{ payload: answer.answers, declined: false }`.
+ * Decline maps to `{ payload: 'declined', declined: true }`.
+ */
+export interface ResumeInteraction {
+  tool_use_id: string;
+  payload: unknown;
+  declined: boolean;
+}
+
+/**
  * Extended options for sendQuery, adding workflow-specific context.
  * The orchestrator path uses base AgentRequestOptions fields only.
  * The workflow path additionally passes nodeConfig and assistantConfig.
@@ -696,6 +707,8 @@ export interface SendQueryOptions extends AgentRequestOptions {
    * value can never reach a provider that cannot honor it.
    */
   execContext?: ExecutionContext;
+  /** Ordered AskHuman answers or declines for the current node re-entry. */
+  resumeInteractions?: readonly ResumeInteraction[];
 }
 
 /**

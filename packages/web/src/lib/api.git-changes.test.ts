@@ -83,6 +83,30 @@ describe('getWorkflowRunGitChanges', () => {
       signal,
     });
   });
+
+  test('getWorkflowRunGitChanges encodes ref only when it is a full object name', async () => {
+    fetchSpy = mockFetchSuccess();
+    await getWorkflowRunGitChanges('run/one', { ref: '1'.repeat(40) });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/workflows/runs/run%2Fone/git/changes?ref=' + '1'.repeat(40)
+    );
+  });
+
+  test('getWorkflowRunGitChanges omits ref for Now', async () => {
+    fetchSpy = mockFetchSuccess();
+    await getWorkflowRunGitChanges('run/one');
+    expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/changes');
+  });
+
+  test('getWorkflowRunGitChanges rejects every supplied non-full ref before fetch', async () => {
+    fetchSpy = mockFetchSuccess();
+    for (const ref of ['', 'HEAD', '1'.repeat(39), 'A'.repeat(40)]) {
+      await expect(getWorkflowRunGitChanges('run/one', { ref })).rejects.toThrow(
+        'Invalid commit ref'
+      );
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('getWorkflowRunGitDiff', () => {
@@ -118,6 +142,27 @@ describe('getWorkflowRunGitDiff', () => {
       { signal }
     );
   });
+
+  test('getWorkflowRunGitDiff rejects a supplied non-full ref before fetch', async () => {
+    fetchSpy = mockFetchResponse(jsonResponse(READY_DIFF));
+    await expect(getWorkflowRunGitDiff('run/one', 'src/a.ts', { ref: 'HEAD' })).rejects.toThrow(
+      'Invalid commit ref'
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test('getWorkflowRunGitDiff appends ref and opaque cursor', async () => {
+    fetchSpy = mockFetchResponse(jsonResponse(READY_DIFF));
+    await getWorkflowRunGitDiff('run/one', 'src/a.ts', {
+      ref: '1'.repeat(40),
+      cursor: 'opaque+token',
+    });
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      '/api/workflows/runs/run%2Fone/git/diff?path=src%2Fa.ts&ref=' +
+        '1'.repeat(40) +
+        '&cursor=opaque%2Btoken'
+    );
+  });
 });
 
 describe('gitFileUrl', () => {
@@ -150,6 +195,12 @@ describe('gitFileUrl', () => {
     expect(gitFileUrl('run/one', 'src/a.ts', 'worktree', { download: true })).toBe(
       '/api/workflows/runs/run%2Fone/git/file/src/a.ts?source=worktree&download=1'
     );
+  });
+
+  test('gitFileUrl accepts a full object name as source', () => {
+    expect(gitFileUrl('run-1', 'a.ts', '1'.repeat(40))).toContain('source=' + '1'.repeat(40));
+    expect(gitFileUrl('run-1', 'a.ts', 'worktree')).toContain('source=worktree');
+    expect(() => gitFileUrl('run-1', 'a.ts', 'HEAD')).toThrow('Invalid commit ref');
   });
 });
 

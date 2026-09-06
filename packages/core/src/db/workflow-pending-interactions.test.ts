@@ -9,7 +9,10 @@
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { AskHumanNoStarterError } from '@archon/providers/types';
-import type { InsertPendingInteractionInput } from '@archon/workflows/schemas/pending-interaction';
+import type {
+  InsertPendingInteractionInput,
+  ResolvePendingInteractionInput,
+} from '@archon/workflows/schemas/pending-interaction';
 
 const errorLogs: unknown[] = [];
 
@@ -36,8 +39,16 @@ mock.module('./connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
-const { insertPendingInteraction, listPendingInteractions, PendingInteractionCorruptRowError } =
-  await import('./workflow-pending-interactions');
+const {
+  insertPendingInteraction,
+  listPendingInteractions,
+  resolvePendingInteraction,
+  purgePendingInteractionsInTransaction,
+  PendingInteractionCorruptRowError,
+  PendingInteractionAlreadyResolvedError,
+  PendingInteractionRunNotPausedError,
+  PendingInteractionValidationError,
+} = await import('./workflow-pending-interactions');
 
 afterAll(async () => {
   await db.close();
@@ -54,6 +65,10 @@ const baseInput: InsertPendingInteractionInput = {
   envelope: { questions: [] },
   provider_session_id: 'sess-1',
 };
+
+async function pauseRun(runId = 'run-1'): Promise<void> {
+  await db.query("UPDATE remote_agent_workflow_runs SET status = 'paused' WHERE id = $1", [runId]);
+}
 
 async function seedRun(options?: {
   runId?: string;
@@ -170,6 +185,30 @@ describe('insertPendingInteraction', () => {
     );
     expect(Number(pending.rows[0]?.count)).toBe(0);
     expect(Number(events.rows[0]?.count)).toBe(0);
+  });
+
+  test('rejects terminal and pre-start runs and inserts nothing', async () => {
+    for (const status of ['pending', 'completed', 'failed', 'cancelled'] as const) {
+      await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+        status,
+        'run-1',
+      ]);
+
+      await expect(insertPendingInteraction(baseInput)).rejects.toThrow(
+        `Cannot create pending interaction for workflow run run-1 with status '${status}'`
+      );
+
+      const pending = await db.query<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM remote_agent_pending_interactions',
+        []
+      );
+      const events = await db.query<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM remote_agent_workflow_events',
+        []
+      );
+      expect(Number(pending.rows[0]?.count)).toBe(0);
+      expect(Number(events.rows[0]?.count)).toBe(0);
+    }
   });
 
   test('rolls back the pending insert when the node_awaiting event insert aborts', async () => {
@@ -301,5 +340,529 @@ describe('listPendingInteractions', () => {
     expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_QUESTION);
     expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_ANSWER);
     expect(JSON.stringify(errorLogs)).toContain('bad-schema');
+  });
+});
+
+const mixedEnvelope = {
+  questions: [
+    {
+      id: 'q-color',
+      prompt: SENTINEL_QUESTION,
+      selection: 'single' as const,
+      options: ['red', 'blue'],
+      allowOther: false,
+    },
+    {
+      id: 'q-tags',
+      prompt: 'Pick tags',
+      selection: 'multi' as const,
+      options: ['a', 'b', 'c'],
+      allowOther: true,
+    },
+  ],
+};
+
+const validAnswers = {
+  answers: [
+    { questionId: 'q-color', value: 'red' },
+    { questionId: 'q-tags', value: ['a', 'c'] },
+  ],
+};
+
+function resolveInput(
+  overrides: Partial<ResolvePendingInteractionInput> = {}
+): ResolvePendingInteractionInput {
+  return {
+    workflow_run_id: 'run-1',
+    tool_use_id: 'toolu_1',
+    answer: validAnswers,
+    resolved_by: 'user-1',
+    ...overrides,
+  };
+}
+
+async function insertPausedAsk(
+  overrides: Partial<InsertPendingInteractionInput> = {}
+): Promise<void> {
+  await insertPendingInteraction({
+    ...baseInput,
+    envelope: mixedEnvelope,
+    ...overrides,
+  });
+  await pauseRun();
+}
+
+async function runStatus(runId = 'run-1'): Promise<string | undefined> {
+  const result = await db.query<{ status: string }>(
+    'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+    [runId]
+  );
+  return result.rows[0]?.status;
+}
+
+async function resolvedEvents(runId = 'run-1'): Promise<Array<Record<string, unknown>>> {
+  const events = await db.query<{ event_type: string; step_name: string | null; data: string }>(
+    `SELECT event_type, step_name, data FROM remote_agent_workflow_events
+     WHERE workflow_run_id = $1 AND event_type = 'interaction_resolved'`,
+    [runId]
+  );
+  return events.rows.map(row => ({
+    event_type: row.event_type,
+    step_name: row.step_name,
+    data: JSON.parse(String(row.data)) as Record<string, unknown>,
+  }));
+}
+
+describe('resolvePendingInteraction', () => {
+  test('resolves one pending Ask, writes an id-only event, and resumes the last pending row atomically', async () => {
+    await insertPausedAsk();
+
+    const result = await resolvePendingInteraction(resolveInput());
+
+    expect(result.resumed).toBe(true);
+    expect(result.remaining_pending).toBe(0);
+    expect(result.interaction.status).toBe('answered');
+    expect(result.interaction.answer).toEqual(validAnswers);
+    expect(result.interaction.resolved_by).toBe('user-1');
+    expect(result.interaction.resolved_at).not.toBeNull();
+    expect(await runStatus()).toBe('running');
+    expect(await listPendingInteractions('run-1')).toHaveLength(1);
+    expect((await listPendingInteractions('run-1'))[0]?.status).toBe('answered');
+
+    const events = await resolvedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]?.step_name).toBe('review');
+    expect(events[0]?.data).toEqual({
+      node_id: 'review',
+      tool_use_id: 'toolu_1',
+      kind: 'ask',
+      declined: false,
+      resumed: true,
+    });
+    expect(events[0]?.data).not.toHaveProperty('envelope');
+    expect(events[0]?.data).not.toHaveProperty('answer');
+    expect(events[0]?.data).not.toHaveProperty('questions');
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_QUESTION);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_ANSWER);
+  });
+
+  test('keeps the first answer and reports already-resolved on a second write', async () => {
+    await insertPausedAsk();
+    const first = await resolvePendingInteraction(resolveInput());
+    expect(first.interaction.answer).toEqual(validAnswers);
+
+    const err = await resolvePendingInteraction(resolveInput({ answer: { decline: true } })).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(PendingInteractionAlreadyResolvedError);
+
+    const listed = await listPendingInteractions('run-1');
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.answer).toEqual(validAnswers);
+    expect(listed[0]?.status).toBe('answered');
+  });
+
+  test('does not resume while a sibling interaction is pending', async () => {
+    await insertPendingInteraction({ ...baseInput, envelope: mixedEnvelope });
+    await insertPendingInteraction({
+      ...baseInput,
+      tool_use_id: 'toolu_2',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun();
+
+    const result = await resolvePendingInteraction(resolveInput());
+    expect(result.resumed).toBe(false);
+    expect(result.remaining_pending).toBe(1);
+    expect(await runStatus()).toBe('paused');
+
+    const listed = await listPendingInteractions('run-1');
+    expect(listed.map(row => row.status).sort()).toEqual(['answered', 'pending']);
+    const events = await resolvedEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]?.data).toMatchObject({ resumed: false, declined: false });
+  });
+
+  test('rolls back the answer when the interaction-resolved event insert fails', async () => {
+    await insertPausedAsk();
+    await db.query(`
+      CREATE TRIGGER abort_workflow_events BEFORE INSERT ON remote_agent_workflow_events
+      BEGIN
+        SELECT RAISE(ABORT, 'event insert blocked');
+      END
+    `);
+    try {
+      await expect(resolvePendingInteraction(resolveInput())).rejects.toThrow();
+      const listed = await listPendingInteractions('run-1');
+      expect(listed).toHaveLength(1);
+      expect(listed[0]?.status).toBe('pending');
+      expect(listed[0]?.answer).toBeNull();
+      expect(await runStatus()).toBe('paused');
+    } finally {
+      await db.query('DROP TRIGGER IF EXISTS abort_workflow_events');
+    }
+  });
+
+  test('rolls back the answer when the paused-run resume CAS cannot win', async () => {
+    await insertPausedAsk();
+    await db.query(`
+      CREATE TRIGGER skip_paused_ask_resume BEFORE UPDATE ON remote_agent_workflow_runs
+      WHEN NEW.status = 'running' AND OLD.status = 'paused'
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END
+    `);
+    try {
+      const err = await resolvePendingInteraction(resolveInput()).then(
+        () => null,
+        (caught: unknown) => caught
+      );
+      expect(err).toBeInstanceOf(PendingInteractionRunNotPausedError);
+      const listed = await listPendingInteractions('run-1');
+      expect(listed[0]?.status).toBe('pending');
+      expect(listed[0]?.answer).toBeNull();
+      expect(await runStatus()).toBe('paused');
+    } finally {
+      await db.query('DROP TRIGGER IF EXISTS skip_paused_ask_resume');
+    }
+  });
+
+  test('rejects an answer before the run reaches paused', async () => {
+    await insertPendingInteraction({ ...baseInput, envelope: mixedEnvelope });
+    const err = await resolvePendingInteraction(resolveInput()).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(PendingInteractionRunNotPausedError);
+    const listed = await listPendingInteractions('run-1');
+    expect(listed[0]?.status).toBe('pending');
+    expect(await runStatus()).toBe('running');
+  });
+
+  test('rejects a permission row on the Ask endpoint', async () => {
+    await insertPausedAsk({ kind: 'permission', envelope: { questions: [] } });
+    const err = await resolvePendingInteraction(resolveInput()).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(PendingInteractionValidationError);
+    expect((err as PendingInteractionValidationError).code).toBe('kind_not_ask');
+    expect((err as Error).message).not.toContain(SENTINEL_QUESTION);
+    expect((err as Error).message).not.toContain(SENTINEL_ANSWER);
+    const listed = await listPendingInteractions('run-1');
+    expect(listed[0]?.status).toBe('pending');
+  });
+
+  test('rejects missing duplicate and unknown question ids', async () => {
+    await insertPausedAsk();
+
+    const missing = await resolvePendingInteraction(
+      resolveInput({
+        answer: { answers: [{ questionId: 'q-color', value: 'red' }] },
+      })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(missing).toBeInstanceOf(PendingInteractionValidationError);
+    expect((missing as PendingInteractionValidationError).code).toBe('missing_question');
+
+    const unknown = await resolvePendingInteraction(
+      resolveInput({
+        answer: {
+          answers: [
+            { questionId: 'q-color', value: 'red' },
+            { questionId: 'q-tags', value: ['a'] },
+            { questionId: 'nope', value: 'x' },
+          ],
+        },
+      })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(unknown).toBeInstanceOf(PendingInteractionValidationError);
+    expect((unknown as PendingInteractionValidationError).code).toBe('unknown_question');
+
+    const duplicate = await resolvePendingInteraction(
+      resolveInput({
+        answer: {
+          answers: [
+            { questionId: 'q-color', value: 'red' },
+            { questionId: 'q-color', value: 'blue' },
+            { questionId: 'q-tags', value: ['a'] },
+          ],
+        },
+      })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(duplicate).toBeInstanceOf(PendingInteractionValidationError);
+    expect((duplicate as PendingInteractionValidationError).code).toBe('duplicate_question');
+
+    const listed = await listPendingInteractions('run-1');
+    expect(listed[0]?.status).toBe('pending');
+  });
+
+  test('rejects duplicate ids in the stored envelope', async () => {
+    await insertPausedAsk({
+      envelope: {
+        questions: [
+          {
+            id: 'q-dup',
+            prompt: SENTINEL_QUESTION,
+            selection: 'single',
+            options: ['yes', 'no'],
+            allowOther: false,
+          },
+          {
+            id: 'q-dup',
+            prompt: 'Again',
+            selection: 'single',
+            options: ['yes', 'no'],
+            allowOther: false,
+          },
+        ],
+      },
+    });
+    const err = await resolvePendingInteraction(
+      resolveInput({ answer: { answers: [{ questionId: 'q-dup', value: 'yes' }] } })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(PendingInteractionValidationError);
+    expect((err as PendingInteractionValidationError).code).toBe('duplicate_envelope_id');
+    expect((err as Error).message).not.toContain(SENTINEL_QUESTION);
+  });
+
+  test('enforces single and multi value shapes', async () => {
+    await insertPausedAsk();
+    const singleArray = await resolvePendingInteraction(
+      resolveInput({
+        answer: {
+          answers: [
+            { questionId: 'q-color', value: ['red'] },
+            { questionId: 'q-tags', value: ['a'] },
+          ],
+        },
+      })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(singleArray).toBeInstanceOf(PendingInteractionValidationError);
+    expect((singleArray as PendingInteractionValidationError).code).toBe('invalid_single_value');
+
+    const multiString = await resolvePendingInteraction(
+      resolveInput({
+        answer: {
+          answers: [
+            { questionId: 'q-color', value: 'red' },
+            { questionId: 'q-tags', value: 'a' },
+          ],
+        },
+      })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(multiString).toBeInstanceOf(PendingInteractionValidationError);
+    expect((multiString as PendingInteractionValidationError).code).toBe('invalid_multi_value');
+
+    const emptyMulti = await resolvePendingInteraction(
+      resolveInput({
+        answer: {
+          answers: [
+            { questionId: 'q-color', value: 'red' },
+            { questionId: 'q-tags', value: [] },
+          ],
+        },
+      })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(emptyMulti).toBeInstanceOf(PendingInteractionValidationError);
+    expect((emptyMulti as PendingInteractionValidationError).code).toBe('invalid_multi_value');
+  });
+
+  test('accepts an exact option and a nonblank Other value', async () => {
+    await insertPausedAsk({
+      envelope: {
+        questions: [
+          {
+            id: 'q-color',
+            prompt: SENTINEL_QUESTION,
+            selection: 'single',
+            options: ['red', 'blue'],
+            allowOther: true,
+          },
+          {
+            id: 'q-size',
+            prompt: 'Size',
+            selection: 'single',
+            options: ['s', 'm'],
+            allowOther: false,
+          },
+        ],
+      },
+    });
+    const result = await resolvePendingInteraction(
+      resolveInput({
+        answer: {
+          answers: [
+            { questionId: 'q-color', value: 'purple' },
+            { questionId: 'q-size', value: 'm' },
+          ],
+        },
+      })
+    );
+    expect(result.interaction.answer).toEqual({
+      answers: [
+        { questionId: 'q-color', value: 'purple' },
+        { questionId: 'q-size', value: 'm' },
+      ],
+    });
+    expect(result.resumed).toBe(true);
+  });
+
+  test('rejects blank or forbidden Other values', async () => {
+    await insertPausedAsk();
+    const forbidden = await resolvePendingInteraction(
+      resolveInput({
+        answer: {
+          answers: [
+            { questionId: 'q-color', value: SENTINEL_ANSWER },
+            { questionId: 'q-tags', value: ['a'] },
+          ],
+        },
+      })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(forbidden).toBeInstanceOf(PendingInteractionValidationError);
+    expect((forbidden as PendingInteractionValidationError).code).toBe('invalid_option');
+    expect((forbidden as Error).message).not.toContain(SENTINEL_ANSWER);
+
+    const blankOther = await resolvePendingInteraction(
+      resolveInput({
+        answer: {
+          answers: [
+            { questionId: 'q-color', value: 'red' },
+            { questionId: 'q-tags', value: ['   '] },
+          ],
+        },
+      })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(blankOther).toBeInstanceOf(PendingInteractionValidationError);
+    expect((blankOther as PendingInteractionValidationError).code).toBe('blank_other');
+  });
+
+  test('redacts a shape-validation sentinel from errors and logs', async () => {
+    await insertPausedAsk();
+    const err = await resolvePendingInteraction({
+      workflow_run_id: 'run-1',
+      tool_use_id: 'toolu_1',
+      answer: {
+        answers: [{ questionId: 'q-color', value: SENTINEL_ANSWER }],
+        extra: SENTINEL_QUESTION,
+      },
+      resolved_by: 'user-1',
+    } as never).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(PendingInteractionValidationError);
+    expect((err as PendingInteractionValidationError).code).toBe('invalid_body');
+    expect((err as Error).message).not.toContain(SENTINEL_QUESTION);
+    expect((err as Error).message).not.toContain(SENTINEL_ANSWER);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_QUESTION);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_ANSWER);
+  });
+
+  test('reports corrupt stored JSON with the row id only', async () => {
+    await insertPendingInteraction({ ...baseInput, envelope: mixedEnvelope });
+    await pauseRun();
+    await db.query(
+      'UPDATE remote_agent_pending_interactions SET envelope = $1 WHERE tool_use_id = $2',
+      [`{"question":"${SENTINEL_QUESTION}"`, 'toolu_1']
+    );
+    const err = await resolvePendingInteraction(resolveInput()).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(err).toBeInstanceOf(PendingInteractionCorruptRowError);
+    expect((err as Error).message).toMatch(/^Pending interaction row corrupt: /);
+    expect((err as Error).message).not.toContain(SENTINEL_QUESTION);
+    expect((err as Error).message).not.toContain(SENTINEL_ANSWER);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_QUESTION);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_ANSWER);
+    expect(JSON.stringify(errorLogs)).toContain((err as PendingInteractionCorruptRowError).rowId);
+  });
+});
+
+describe('purgePendingInteractionsInTransaction', () => {
+  test('purges only pending rows, leaves answers null, and writes one safe event per row', async () => {
+    await insertPendingInteraction({ ...baseInput, envelope: mixedEnvelope });
+    await insertPendingInteraction({
+      ...baseInput,
+      tool_use_id: 'toolu_2',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun();
+    await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_2' }));
+
+    const result = await db.withTransaction(query =>
+      purgePendingInteractionsInTransaction(query, 'run-1', 'cancelled')
+    );
+    expect(result).toEqual({ purged: 1 });
+
+    const rows = await db.query<{
+      tool_use_id: string;
+      status: string;
+      answer: string | null;
+      resolved_by: string | null;
+      resolved_at: string | null;
+    }>(
+      `SELECT tool_use_id, status, answer, resolved_by, resolved_at
+       FROM remote_agent_pending_interactions
+       WHERE workflow_run_id = $1
+       ORDER BY tool_use_id ASC`,
+      ['run-1']
+    );
+    const purgedRow = rows.rows.find(row => row.tool_use_id === 'toolu_1');
+    const answeredRow = rows.rows.find(row => row.tool_use_id === 'toolu_2');
+    expect(purgedRow?.status).toBe('purged');
+    expect(purgedRow?.answer).toBeNull();
+    expect(purgedRow?.resolved_by).toBeNull();
+    expect(purgedRow?.resolved_at).not.toBeNull();
+    expect(answeredRow?.status).toBe('answered');
+    expect(answeredRow?.answer).toBe(JSON.stringify(validAnswers));
+
+    const events = await resolvedEvents();
+    expect(events).toHaveLength(2);
+    const purgeEvent = events.find(
+      event => (event.data as Record<string, unknown>).purged === true
+    );
+    expect(purgeEvent?.step_name).toBe('review');
+    expect(purgeEvent?.data).toEqual({
+      node_id: 'review',
+      tool_use_id: 'toolu_1',
+      kind: 'ask',
+      purged: true,
+      resumed: false,
+      terminal_status: 'cancelled',
+    });
+    expect(JSON.stringify(events)).not.toContain(SENTINEL_QUESTION);
+    expect(JSON.stringify(events)).not.toContain(SENTINEL_ANSWER);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_QUESTION);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_ANSWER);
   });
 });

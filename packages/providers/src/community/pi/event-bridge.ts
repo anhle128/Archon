@@ -215,7 +215,10 @@ function extractLastAssistantText(messages: readonly unknown[]): string | undefi
  * structured-output completion, and resolvedModel stay last-assistant-only.
  * usageBreakdown emits one observation per assistant message with a real provider.
  */
-export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
+export function buildResultChunk(
+  messages: readonly unknown[],
+  redactErrorDetails = false
+): MessageChunk {
   const assistants = messages.filter(isAssistantMessage);
   const last = assistants.at(-1);
   if (!last) {
@@ -261,7 +264,9 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     // is the signal — callers (bridgeSession, dag-executor) check result.isError to classify
     // failures and still receive full token/stopReason context from the same chunk.
     getLog().error(
-      { stopReason: last.stopReason, errorMessage: last.errorMessage },
+      redactErrorDetails
+        ? { stopReason: last.stopReason }
+        : { stopReason: last.stopReason, errorMessage: last.errorMessage },
       'pi.result_chunk_error'
     );
   }
@@ -288,7 +293,7 @@ export { tryParseStructuredOutput };
  *  - queue_update (single-prompt sessions only)
  *  - auto_retry_end (retry_start communicates the retry sufficiently)
  */
-export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
+export function mapPiEvent(event: AgentSessionEvent, redactErrorDetails = false): MessageChunk[] {
   switch (event.type) {
     case 'message_update': {
       const amEvent = event.assistantMessageEvent;
@@ -330,12 +335,14 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
       return chunks;
     }
     case 'agent_end':
-      return [buildResultChunk(event.messages)];
+      return [buildResultChunk(event.messages, redactErrorDetails)];
     case 'auto_retry_start':
       return [
         {
           type: 'system',
-          content: `⚠️ retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`,
+          content: redactErrorDetails
+            ? `⚠️ retry ${event.attempt}/${event.maxAttempts}: Could not resume the AskHuman session`
+            : `⚠️ retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`,
         },
       ];
     default:
@@ -359,22 +366,31 @@ export interface BridgeNotifier {
 }
 
 /**
+ * How `bridgeSession` starts the agent turn.
+ * `'prompt'` (default) calls `session.prompt(prompt)`.
+ * `'continue'` calls `session.agent.continue()` and never `session.prompt`.
+ */
+export type BridgeStartMode = 'prompt' | 'continue';
+
+/**
  * Bridge a Pi `AgentSession` into Archon's `AsyncGenerator<MessageChunk>` contract.
  *
  * Behavior:
- *  - subscribe before calling prompt, unsubscribe in finally
+ *  - subscribe before starting the turn, unsubscribe in finally
  *  - yield mapped events in order
- *  - complete on successful `session.prompt()` resolution
- *  - throw on `session.prompt()` rejection or listener-raised errors
+ *  - complete on successful `session.prompt()` / `session.agent.continue()` resolution
+ *  - throw on start-promise rejection or listener-raised errors
  *  - forward `abortSignal` to `session.abort()` fire-and-forget
  *  - always `dispose()` the session to avoid listener accumulation
+ *  - `startMode: 'continue'` never calls `session.prompt`
  */
 export async function* bridgeSession(
   session: AgentSession,
   prompt: string,
   abortSignal?: AbortSignal,
   jsonSchema?: Record<string, unknown>,
-  uiBridge?: BridgeNotifier
+  uiBridge?: BridgeNotifier,
+  startMode: BridgeStartMode = 'prompt'
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
 
@@ -429,7 +445,7 @@ export async function* bridgeSession(
       if (event.type === 'agent_end') {
         finalAssembledText = extractLastAssistantText(event.messages);
       }
-      for (const chunk of mapPiEvent(event)) {
+      for (const chunk of mapPiEvent(event, startMode === 'continue')) {
         if (chunk.type === 'assistant') {
           // Coalesce char-level deltas; hold them until a boundary flush so the
           // executor receives one block-level chunk instead of dozens of tiny
@@ -470,14 +486,16 @@ export async function* bridgeSession(
     }
   }
 
-  const promptPromise = session.prompt(prompt).then(
-    () => {
-      queue.push({ kind: 'done' });
-    },
-    (err: unknown) => {
-      queue.push({ kind: 'error', error: err as Error });
-    }
-  );
+  const onStartResolved = (): void => {
+    queue.push({ kind: 'done' });
+  };
+  const onStartRejected = (err: unknown): void => {
+    queue.push({ kind: 'error', error: err as Error });
+  };
+  const startPromise =
+    startMode === 'continue'
+      ? session.agent.continue().then(onStartResolved, onStartRejected)
+      : session.prompt(prompt).then(onStartResolved, onStartRejected);
 
   try {
     for await (const item of queue) {
@@ -575,10 +593,10 @@ export async function* bridgeSession(
       // debug so SDK regressions surface without polluting normal output.
       getLog().debug({ err }, 'pi.event-bridge.dispose_failed');
     }
-    // Don't await promptPromise. The queue is closed above (line 392), and the
-    // .then() handlers attached at construction (line 344) only push to that
-    // queue — closed pushes are no-ops. There's nothing the caller is waiting
-    // for; whether prompt() resolves in 1ms or never, no observable behavior
+    // Don't await startPromise. The queue is closed above, and the .then()
+    // handlers attached at construction only push to that queue — closed
+    // pushes are no-ops. There's nothing the caller is waiting for; whether
+    // prompt()/continue() resolves in 1ms or never, no observable behavior
     // changes. Awaiting it is what caused #1561: Pi's session.prompt() can
     // hang indefinitely after dispose(), keeping generator.return() suspended,
     // draining Bun's event loop, and exiting with code 0 mid-workflow.
@@ -586,7 +604,14 @@ export async function* bridgeSession(
     // Attach .catch() defensively so a stray async rejection (the .then()
     // handlers should preclude this, but belt-and-suspenders) doesn't bubble
     // up as an unhandled-rejection process exit.
-    promptPromise.catch((err: unknown) => {
+    startPromise.catch((err: unknown) => {
+      if (startMode === 'continue') {
+        getLog().debug(
+          { errorClass: err instanceof Error ? err.constructor.name : 'unknown' },
+          'pi.event-bridge.prompt_rejected_after_close'
+        );
+        return;
+      }
       getLog().debug({ err }, 'pi.event-bridge.prompt_rejected_after_close');
     });
   }

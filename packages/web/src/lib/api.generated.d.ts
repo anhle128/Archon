@@ -2278,6 +2278,103 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/runs/{runId}/ask/{requestId}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Answer or decline a pending AskHuman interaction */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                    requestId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["AskAnswerBody"];
+                };
+            };
+            responses: {
+                /** @description AskHuman answer accepted */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowRunActionResponse"];
+                    };
+                };
+                /** @description Invalid AskHuman answer */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Authentication required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflows/runs/{runId}": {
         parameters: {
             query?: never;
@@ -2614,10 +2711,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List a run's uncommitted git changes */
+        /** List a run's live or commit-scoped git changes */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    ref?: string;
+                };
                 header?: never;
                 path: {
                     runId: string;
@@ -2626,13 +2725,22 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Live changes or a CAP-6 empty envelope */
+                /** @description Live changes, commit changes, or a CAP-6 empty envelope */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": components["schemas"]["GitChangesResponse"];
+                    };
+                };
+                /** @description Invalid commit ref */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
                     };
                 };
                 /** @description Workflow run not found */
@@ -2726,12 +2834,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read a run's Now git hunks for a modified file */
+        /** Read a run's Now or commit git hunks for a modified file */
         get: {
             parameters: {
                 query: {
                     path: string;
                     cursor?: string;
+                    ref?: string;
                 };
                 header?: never;
                 path: {
@@ -2741,7 +2850,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description Ready Now hunks or a CAP-6 empty envelope */
+                /** @description Ready Now or commit hunks or a CAP-6 empty envelope */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -2750,7 +2859,7 @@ export interface paths {
                         "application/json": components["schemas"]["GitDiffResponse"];
                     };
                 };
-                /** @description Invalid file path */
+                /** @description Invalid file path or Invalid commit ref */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -4789,6 +4898,15 @@ export interface components {
         };
         RejectWorkflowRunBody: {
             reason?: string;
+        };
+        AskAnswerBody: {
+            answers: {
+                questionId: string;
+                value: string | string[];
+            }[];
+        } | {
+            /** @enum {boolean} */
+            decline: true;
         };
         ResetWorkflowNodeSessionsResponse: {
             success: boolean;

@@ -706,6 +706,33 @@ describe('WorkflowEventEmitter', () => {
     });
   });
 
+  describe('InteractionResolvedEvent', () => {
+    it('delivers interaction_resolved with runId, nodeId, and resumed and no envelope or answer', () => {
+      const emitter = getWorkflowEventEmitter();
+      const received: WorkflowEmitterEvent[] = [];
+      emitter.subscribe(e => received.push(e));
+
+      const event: WorkflowEmitterEvent = {
+        type: 'interaction_resolved',
+        runId: 'r1',
+        nodeId: 'review',
+        resumed: true,
+      };
+      emitter.emit(event);
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toEqual({
+        type: 'interaction_resolved',
+        runId: 'r1',
+        nodeId: 'review',
+        resumed: true,
+      });
+      expect(received[0]).toBe(event);
+      expect(received[0]).not.toHaveProperty('envelope');
+      expect(received[0]).not.toHaveProperty('answer');
+    });
+  });
+
   describe('NodeStartedEvent — optional model fields', () => {
     it('passes through an event with no provider/model/tier/effort (bash/script-like)', () => {
       const emitter = getWorkflowEventEmitter();
