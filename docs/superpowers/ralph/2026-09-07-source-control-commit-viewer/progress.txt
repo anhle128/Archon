@@ -1,5 +1,20 @@
 ## Codebase Patterns
 
+### Isolate nested History keyboard at the listbox boundary
+- **Where**: `packages/web/src/components/workflows/source-control/commit-history-graph.tsx` `onKeyDown`
+- **Pattern**: Return when `event.currentTarget !== event.target` so nested `ChangedFilesList` Arrow/Enter/Space cannot move or collapse the outer History row. Enter/Space on the History listbox itself calls `onToggleCommit`.
+- **Example**: `if (event.currentTarget !== event.target) return;`
+
+### SourceControlPanel expand props are required
+- **Where**: `source-control-panel.tsx`, `source-control-tab.tsx`, `source-control-tab.test.tsx`
+- **Pattern**: `expandedCommit`, `commitSnapshot`, `commitLoadState`, `onToggleCommit`, and `onOpenCommitFile` are required. Direct `createElement(SourceControlPanel, …)` tests must pass idle/null stubs. Derive files with `commitSnapshot != null` because `undefined !== null` is true.
+- **Example**: `props.commitSnapshot != null && props.commitSnapshot.emptyReason === undefined`
+
+### Split Changes vs commit selected paths
+- **Where**: `packages/web/src/components/workflows/source-control/source-control-panel.tsx`
+- **Pattern**: `selectedNowPath` for Changes, `selectedCommitPath` for History files, so the same path cannot appear selected in both lists.
+- **Example**: `selectedPath={props.selectedNowPath}` vs `selectedPath={props.selectedCommitPath}`
+
 ### Regenerate OpenAPI types from a worktree-specific port
 - **Where**: `packages/web/package.json` `generate:types`, `packages/web/src/lib/api.generated.d.ts`
 - **Pattern**: `generate:types` is hardcoded to `http://localhost:3090/api/openapi.json`. When 3090 is already bound, start this worktree's server on a free port and run `bun x openapi-typescript http://localhost:<port>/api/openapi.json -o src/lib/api.generated.d.ts`. Never hand-edit the generated file. Confirm `ref` on `/git/changes` and `/git/diff`.
@@ -139,5 +154,33 @@
 **Learnings**:
 - Port 3090 was already bound; generate types from this worktree's server on 39079 with openapi-typescript, then stop only that server.
 - `'worktree' | 'head' | string` needs the same redundant-constituents disable as `'live' | string`.
+
+---
+
+## 2026-09-07 — US-005: Inline commit file list in History
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/source-control/commit-graph-row.tsx` — `expanded` prop and `aria-expanded` on the row button
+- `packages/web/src/components/workflows/source-control/commit-history-graph.tsx` — inline `ChangedFilesList`, dynamic virtualizer height, nested keyboard isolation
+- `packages/web/src/components/workflows/source-control/commit-history-graph.test.tsx` — expand, loading/error copy, nested virtualization heights
+- `packages/web/src/components/workflows/source-control/source-control-panel.tsx` — thread expand state; keep Changes pinned; split selected paths
+- `packages/web/src/components/workflows/source-control/source-control-panel.test.tsx` — pinned Changes + empty commit copy
+- `packages/web/src/components/workflows/source-control/source-control-tab.tsx` — pass idle expand stubs so the new required panel props type-check
+- `packages/web/src/component-integration/source-control-tab.test.tsx` — same stubs on direct `SourceControlPanel` mounts
+
+**Acceptance criteria verified**:
+- [x] Update CommitGraphRow to accept expanded: boolean and set aria-expanded on the row button.
+- [x] Update CommitHistoryGraph to accept expandedOid, commitFiles, commitFilesLoadState, selectedPath, onToggleCommit, and onOpenFile.
+- [x] Render ChangedFilesList inline beneath the expanded commit row with max height 240px; render Loading files for loading, Could not refresh files for error, and No file changes when commitFiles is empty.
+- [x] Configure virtualizer with measureElement and dynamic estimateSize (COMMIT_ROW_HEIGHT for collapsed, +36 for empty/loading/error, +Math.min(240, count*28+16) for populated); call virtualizer.measure() when expansion state or files change.
+- [x] Isolate keyboard events in CommitHistoryGraph: return early when event.currentTarget !== event.target so nested ChangedFilesList navigation does not bubble; Enter/Space on listbox toggles commit expand.
+- [x] Update SourceControlPanel to thread commit state and callbacks to CommitHistoryGraph while keeping Changes pinned.
+- [x] Pass tests in commit-history-graph.test.tsx and source-control-panel.test.tsx.
+
+**Learnings**:
+- Expanded History total size for 4 commits is 24+36+72=132 (loading) and 24+240+72=336 (populated); nested list 200×28=5600.
+- Direct `createElement(SourceControlPanel)` tests omit new required props unless stubs are added.
+- `commitSnapshot !== null` still reads `.emptyReason` when the prop is undefined; use `!= null`.
 
 ---

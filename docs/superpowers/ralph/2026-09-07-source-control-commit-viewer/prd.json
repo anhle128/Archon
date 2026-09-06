@@ -102,8 +102,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/components/workflows/source-control/commit-graph-row.tsx, packages/web/src/components/workflows/source-control/commit-history-graph.tsx, packages/web/src/components/workflows/source-control/commit-history-graph.test.tsx, packages/web/src/components/workflows/source-control/source-control-panel.tsx, packages/web/src/components/workflows/source-control/source-control-panel.test.tsx, packages/web/src/components/workflows/source-control/source-control-tab.tsx, packages/web/src/component-integration/source-control-tab.test.tsx."
     },
     {
       "id": "US-006",
