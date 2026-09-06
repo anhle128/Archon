@@ -5,20 +5,24 @@
 
 **Goal:** Let an operator select a commit on the legacy Source Control History graph, expand that commit's `M` / `A` / `D` files inline, and open them in the existing shared viewer as `parent → commit`.
 
-**Architecture:** `@archon/git` extends the existing `changedFiles` and `fileDiff` helpers with an optional full commit object name.
-The server reuses `loadRunCheckout` and the CAP-6 gate, and it accepts a server-issued lowercase object name on the existing JSON changes/diff routes plus the raw file wildcard.
-The web keeps Changes pinned at the top, expands at most one commit inline in History with the same `ChangedFilesList` widget, and loads the already-mounted `FileViewer` with `scope: "commit"` and `ref` equal to that object name.
+**Architecture:** `@archon/git` extends the existing `changedFiles`, `fileDiff`, and `fileAt` read paths with a full commit object name that must be a commit reachable from the run checkout's `HEAD`.
+The server reuses `loadRunCheckout` and the CAP-6 gate, and it accepts a lowercase full object name on the existing JSON changes/diff routes plus the raw file wildcard without accepting a checkout path from the client.
+The web keeps Changes pinned at the top, expands one commit inline in History with the same `ChangedFilesList` widget, and loads the already-mounted `FileViewer` with `scope: "commit"` and `ref` equal to that object name.
 
 **Tech Stack:** Bun 1.3, strict TypeScript, Node `execFile` through `@archon/git`, Hono OpenAPI, Zod from `@hono/zod-openapi`, React 19, TanStack Query 5, installed `@tanstack/react-virtual` 3, installed `react-diff-view` 3.3.3, and Bun tests.
 Do not add a dependency.
 
 **Spec:** `_bmad-output/planning-artifacts/epics-source-control/epics.md`, Story 2.2.
 
+**Approved brainstorm record:** `_bmad-output/planning-artifacts/ux-designs/ux-Archon-2026-08-31/.memlog.md`, especially the locked inline-expand, shared-viewer, Changes-pinned, and no-Back decisions.
+
 **Canonical design:** `_bmad-output/specs/spec-archon-source-control/SPEC.md` CAP-2, CAP-3, CAP-4, CAP-5, CAP-6; `_bmad-output/specs/spec-archon-source-control/viewer-rules.md`; `_bmad-output/planning-artifacts/architecture/architecture-Archon-source-control-2026-09-05/ARCHITECTURE-SPINE.md` AD-1 through AD-7 and AD-9; `_bmad-output/planning-artifacts/prds/prd-source-control/addendum.md`; `_bmad-output/planning-artifacts/ux-designs/ux-Archon-2026-08-31/DESIGN.md` `commit-graph-row.expand`; `_bmad-output/planning-artifacts/ux-designs/ux-Archon-2026-08-31/EXPERIENCE.md` Inspect a commit / Return to Now.
 
 **Issue:** [#79](https://github.com/anhle128/Archon/issues/79), tracker key `2-2-open-a-commits-files-in-the-same-viewer`.
 
 **Depends on:** Stories 1.1–1.3 and 2.1 are `done` in `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml`.
+
+---
 
 ## Global Constraints
 
@@ -28,6 +32,7 @@ Do not add a dependency.
 - No file under `packages/web/src/experiments/console/` may be imported or modified.
 - Do not modify `packages/web/src/components/workflows/WorkflowExecution.tsx`.
 - The client sends only `runId`, server-issued git-relative paths, and server-issued full commit object names from `/git/log`.
+- The server must independently reject a full object name that is malformed, is not a commit, or is not reachable from the run checkout's current `HEAD`; existence in the shared object store is insufficient.
 - Never send `working_path`, an absolute path, `HEAD`, `live`, a short SHA, a branch name, or `oid:path`.
 - The server loads existing `workflow_runs.working_path`.
 - Do not add a database column and do not reconstruct the checkout from isolation metadata.
@@ -62,10 +67,10 @@ Do not add a dependency.
 - Clicking a commit expands or collapses that commit's file list inline beneath the graph row.
 - At most one commit is expanded.
 - There is no Back control.
-- Return-to-Now is clicking a Changes row or collapsing History; Changes never disappears.
+- Return-to-Now is opening a Changes row; collapsing a commit only hides that commit's inline files and does not mutate the open viewer.
 - Expanding a commit must not open the viewer.
 - Opening a file from either list uses the same `FileViewer`.
-- Reload still refetches Changes and History together, and also refetches the expanded commit list when one is expanded.
+- Reload still refetches Changes and History together, and it also refetches the expanded commit list when one is expanded.
 - The open view is never mutated until the operator accepts `Changed on disk — Reload`.
 - No stage, unstage, edit, discard, or commit chrome.
 - Pino events stay `domain.action_state`, pair started with completed or failed, and never log checkout paths, remotes, file contents, file paths, object names, subjects, or path-bearing error messages.
@@ -85,26 +90,27 @@ Do not add a dependency.
 
 ## File Structure
 
-- Create `packages/git/src/git-oid.ts` for full-object-name parsing and first-parent resolution.
-- Create `packages/git/src/git-oid.test.ts` for format and reachable-commit behavior.
+- Create `packages/git/src/git-oid.ts` for full-object-name parsing, `HEAD` reachability validation, and ordered parent resolution.
+- Create `packages/git/src/git-oid.test.ts` for format, reachable-commit, unreachable-existing-commit, root, and ordered-parent behavior.
 - Modify `packages/git/src/changed-files.ts` to parse `diff-tree` name-status and accept `{ commit }`.
 - Modify `packages/git/src/changed-files.test.ts` for parser cases plus a nested real-repository describe that does not mutate the existing Now fixture.
 - Modify `packages/git/src/index.ts` to export `parseNameStatusZ` beside `parsePorcelainV1Z`.
 - Do not export `parseGitObjectId`, `resolveCommitParents`, `FULL_GIT_OBJECT_ID_RE`, or `GitCommitRefError` from the package root.
 - Do not modify `packages/git/src/git-log.ts`; leave its local `FULL_OID_RE` in place.
-- Modify `packages/git/src/file-read.ts` so `FileDiffRequest` / `FileDiffResult` accept commit scope.
-- Modify `packages/git/src/file-read.test.ts` with a nested commit-diff describe that uses its own temp repo.
+- Modify `packages/git/src/file-read.ts` so `FileDiffRequest` / `FileDiffResult` accept commit scope and a full-OID `fileAt` source is reachability-checked before the tree read.
+- Modify `packages/git/src/file-read.test.ts` with a nested commit-read describe that uses its own temp repo and covers diff, raw blob, binary fallback, pagination identity, special paths, and rejection of an existing but unreachable commit.
 - Modify `packages/server/src/routes/git/path-input.ts` to add `isValidGitObjectId`.
 - Do not modify `packages/server/src/routes/schemas/git.schemas.ts`; the optional `ref` query lives on the route objects.
 - Modify `packages/server/src/routes/git/changes-route.ts` and `changes-handler.ts` for optional `ref`.
 - Modify `packages/server/src/routes/git/diff-route.ts` and `diff-handler.ts` for optional `ref`.
 - Modify `packages/server/src/routes/git/file-handler.ts` so `source` may be `worktree`, `head`, or a full object name.
+- Modify the Source Control route comments in `packages/server/src/routes/api.ts` so they no longer describe changes/diff as Now-only.
 - Modify `packages/server/src/routes/api.git-changes.test.ts` under the existing isolated mock graph.
 - Widen `handleGitChanges` `apiError` status to include `400`.
 - Regenerate `packages/web/src/lib/api.generated.d.ts` from `http://localhost:3090/api/openapi.json`.
 - Modify `packages/web/src/lib/api.ts` and `packages/web/src/lib/api.git-changes.test.ts`.
 - Modify `packages/web/src/components/workflows/source-control/commit-graph-row.tsx` for `aria-expanded`.
-- Modify `packages/web/src/components/workflows/source-control/commit-history-graph.tsx` and `commit-history-graph.test.tsx`.
+- Modify `packages/web/src/components/workflows/source-control/commit-history-graph.tsx` and `commit-history-graph.test.tsx` for inline variable-height virtual rows and descendant-key isolation.
 - Modify `packages/web/src/components/workflows/source-control/source-control-panel.tsx` and `source-control-panel.test.tsx`.
 - Modify `packages/web/src/components/workflows/source-control/source-control-tab.tsx`.
 - Modify `packages/web/src/component-integration/source-control-tab.test.tsx`.
@@ -160,6 +166,10 @@ export interface FileDiffResult {
 
 For a commit list, `revision` is `sha256(oid + '\0' + name-status stdout)`.
 
+`resolveCommitParents` first proves commit type with `rev-parse --verify --quiet OID^{commit}`, then proves reachability with `merge-base --is-ancestor OID HEAD`, and finally returns the exact parent list from `rev-list --parents -n 1`.
+
+An existing commit object that is not an ancestor of `HEAD` is rejected with `GitCommitRefError`; this prevents a caller from browsing unrelated objects in the shared object store.
+
 `parents` from `rev-list --parents -n 1 OID` is ordered first parent first.
 
 A missing `commit` option keeps today's porcelain Now path byte-for-byte, including a one-argument `changedFiles(workingPath)` call.
@@ -184,7 +194,7 @@ CAP-6 remains HTTP 200 with the existing empty envelopes.
 
 Missing run remains HTTP 404 `{ error: "Workflow run not found" }`.
 
-Post-gate git failures remain opaque HTTP 500 `Could not read git changes` / `Could not read git diff` / `Could not read git file`.
+Unexpected post-gate git failures remain opaque HTTP 500 `Could not read git changes` / `Could not read git diff` / `Could not read git file`.
 
 Commit listing argv when the commit has a first parent is exactly:
 
@@ -195,6 +205,7 @@ Commit listing argv when the commit has a first parent is exactly:
   '--literal-pathspecs',
   '--no-optional-locks',
   'diff-tree',
+  '--no-commit-id',
   '-r',
   '--name-status',
   '-z',
@@ -214,6 +225,7 @@ Commit listing argv when the commit is a root is exactly:
   '--literal-pathspecs',
   '--no-optional-locks',
   'diff-tree',
+  '--no-commit-id',
   '--root',
   '-r',
   '--name-status',
@@ -231,6 +243,7 @@ Commit `M` diff argv when the commit has a first parent is exactly:
   '--no-optional-locks',
   '--literal-pathspecs',
   'diff-tree',
+  '--no-commit-id',
   '-p',
   '--no-color',
   '--no-ext-diff',
@@ -244,13 +257,13 @@ Commit `M` diff argv when the commit has a first parent is exactly:
 ]
 ```
 
-Commit `M` diff argv for a root commit uses the same array except it inserts `'--root'` immediately after `'diff-tree'` and omits `parentOid`.
+Commit `M` diff argv for a root commit uses the same array except it inserts `'--root'` immediately after `'--no-commit-id'` and omits `parentOid`.
 
 Those commit diff streams use `acceptExitCodes: [0]`.
 
 Now `fileDiff` keeps today's `git diff HEAD -- path` with `acceptExitCodes: [0, 1]`.
 
-Web `GitFileSource` becomes `'worktree' | 'head' | string` where the string must match `FULL_GIT_OBJECT_ID_RE` before fetch.
+Web `GitFileSource` becomes `'worktree' | 'head' | string`, with every value other than the two sentinels required to match `FULL_GIT_OBJECT_ID_RE` before fetch.
 
 Web viewer scope:
 
@@ -270,33 +283,29 @@ Update sprint status only after every Task 8 gate passes.
 
 ## Open Questions
 
-### OQ-1 — Where the commit file list renders
+### OQ-1 — How many commits may be expanded
 
-The UX spines lock inline expand beneath the commit row, with Changes pinned and no Back control.
-**Provisional default:** accordion expand/collapse in History; at most one commit expanded; Changes always shows Now files.
+The approved UX locks inline expand/collapse but does not state whether several commits may remain open.
+**Safe provisional default:** use a single expanded commit so only one bounded nested file list participates in the virtualized History layout at a time.
 
 ### OQ-2 — Merge parent
 
 Story 2.2 says `parent → commit` and does not name octopus parents.
-**Provisional default:** first parent only, matching `git show`.
+**Safe provisional default:** compare the first parent to the merge commit, and use the first-parent blob for `D` files.
 
 ### OQ-3 — Empty commit copy
 
 Sources distinguish region empties from CAP-6 and do not give commit-empty wording.
-**Provisional default:** `No file changes` under the expanded row.
-
-### OQ-4 — Nested list height
-
-An expanded commit can contain many files inside a virtualized History list.
-**Provisional default:** the inline `ChangedFilesList` uses `max-h-60 overflow-auto`, `idPrefix={`sc-commit-${oid}-file`}`, and `ariaLabel="Commit files"`.
-The History virtualizer estimates expanded height as `COMMIT_ROW_HEIGHT + 36` while loading or empty, otherwise `COMMIT_ROW_HEIGHT + Math.min(fileCount, 8) * 28 + 8`, then calls `measure()` when files arrive.
-
-### OQ-5 — Commit list URL
-
-AD-3 seeds `/git/{changes,log,diff}` plus `/git/file/*`.
-**Provisional default:** reuse `/git/changes?ref=FULL_OID` rather than adding a fourth JSON path.
+**Safe provisional default:** render `No file changes` under the expanded row.
 
 These provisional defaults are implementation directives and do not require the implementer to pause.
+
+## Resolved Implementation Choices
+
+- Reuse `GET /git/changes?ref=FULL_OID` for a commit list instead of adding another route.
+- Keep the nested file list at a maximum of eight visible 28px rows plus its existing 8px top and bottom padding, and let that `ChangedFilesList` own its scroll.
+- Attach `virtualizer.measureElement` to each History virtual row so expanded height is measured from the DOM rather than guessed after data arrives.
+- Preserve a commit-scoped open viewer when its row is collapsed or falls out of the bounded History window; only opening a Changes file changes the viewer back to Now.
 
 ---
 
@@ -320,7 +329,7 @@ These provisional defaults are implementation directives and do not require the 
 Create `packages/git/src/git-oid.test.ts`:
 
 ```ts
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -347,41 +356,58 @@ describe('parseGitObjectId', () => {
 describe('resolveCommitParents', () => {
   let root = '';
   let repoPath = '';
+  let rootOid = '';
+  let childOid = '';
+  let blobOid = '';
+  let unreachableOid = '';
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'archon-git-oid-'));
     repoPath = join(root, 'repo');
     await mkdir(repoPath);
     await execFileAsync('git', ['init', '-b', 'main', repoPath]);
     await execFileAsync('git', ['-C', repoPath, 'config', 'user.email', 'dev@example.com']);
     await execFileAsync('git', ['-C', repoPath, 'config', 'user.name', 'Dev']);
+    await execFileAsync('git', ['-C', repoPath, 'commit', '--allow-empty', '-m', 'root']);
+    rootOid = (await execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
+    await writeFile(join(repoPath, 'loose-blob.txt'), 'not a commit\n');
+    blobOid = (
+      await execFileAsync('git', ['-C', repoPath, 'hash-object', '-w', 'loose-blob.txt'])
+    ).stdout.trim();
+    await execFileAsync('git', ['-C', repoPath, 'commit', '--allow-empty', '-m', 'child']);
+    childOid = (await execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
+    unreachableOid = (
+      await execFileAsync('git', [
+        '-C',
+        repoPath,
+        'commit-tree',
+        `${childOid}^{tree}`,
+        '-p',
+        rootOid,
+        '-m',
+        'unreachable sibling',
+      ])
+    ).stdout.trim();
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test('returns no parents for a root and the first parent for a merge', async () => {
-    await execFileAsync('git', ['-C', repoPath, 'commit', '--allow-empty', '-m', 'base']);
-    const base = (await execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
-    await execFileAsync('git', ['-C', repoPath, 'checkout', '-b', 'feature']);
-    await execFileAsync('git', ['-C', repoPath, 'commit', '--allow-empty', '-m', 'feature']);
-    const feature = (await execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
-    await execFileAsync('git', ['-C', repoPath, 'checkout', 'main']);
-    await execFileAsync('git', ['-C', repoPath, 'commit', '--allow-empty', '-m', 'mainline']);
-    await execFileAsync('git', ['-C', repoPath, 'merge', '--no-ff', 'feature', '-m', 'merge']);
-    const merge = (await execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
-
-    expect(await resolveCommitParents(toWorktreePath(repoPath), base)).toEqual([]);
-    const mergeParents = await resolveCommitParents(toWorktreePath(repoPath), merge);
-    expect(mergeParents[0]?.length).toBe(base.length);
-    expect(mergeParents).toHaveLength(2);
-    expect(mergeParents[1]).toBe(feature);
+  test('returns no parents for a reachable root and the exact parent for a reachable child', async () => {
+    expect(await resolveCommitParents(toWorktreePath(repoPath), rootOid)).toEqual([]);
+    expect(await resolveCommitParents(toWorktreePath(repoPath), childOid)).toEqual([rootOid]);
   });
 
-  test('rejects an unreachable full object name', async () => {
+  test('rejects a missing object, a non-commit object, and an unreachable commit', async () => {
     await expect(
       resolveCommitParents(toWorktreePath(repoPath), 'a'.repeat(40))
+    ).rejects.toBeInstanceOf(GitCommitRefError);
+    await expect(
+      resolveCommitParents(toWorktreePath(repoPath), blobOid)
+    ).rejects.toBeInstanceOf(GitCommitRefError);
+    await expect(
+      resolveCommitParents(toWorktreePath(repoPath), unreachableOid)
     ).rejects.toBeInstanceOf(GitCommitRefError);
   });
 });
@@ -434,7 +460,7 @@ describe('commit changedFiles', () => {
   let root = '';
   let repoPath = '';
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'archon-commit-changed-files-'));
     repoPath = join(root, 'repo');
     await mkdir(repoPath);
@@ -443,7 +469,7 @@ describe('commit changedFiles', () => {
     await execFileAsync('git', ['-C', repoPath, 'config', 'user.name', 'Dev']);
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
@@ -452,6 +478,11 @@ describe('commit changedFiles', () => {
     await writeFile(join(repoPath, 'tracked.ts'), 'old\n');
     await writeFile(join(repoPath, '-dash.ts'), 'dash\n');
     await writeFile(join(repoPath, 'path with space.ts'), 'space\n');
+    if (process.platform !== 'win32') {
+      await writeFile(join(repoPath, ':colon.ts'), 'colon\n');
+      await writeFile(join(repoPath, 'glob*.ts'), 'glob\n');
+      await writeFile(join(repoPath, 'line\nbreak.ts'), 'newline\n');
+    }
     await execFileAsync('git', ['-C', repoPath, 'add', '-A']);
     await execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'root']);
     const rootOid = (await execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
@@ -462,12 +493,22 @@ describe('commit changedFiles', () => {
         { path: '-dash.ts', status: 'A' },
         { path: 'path with space.ts', status: 'A' },
         { path: 'tracked.ts', status: 'A' },
+        ...(process.platform === 'win32'
+          ? []
+          : [
+              { path: ':colon.ts', status: 'A' as const },
+              { path: 'glob*.ts', status: 'A' as const },
+              { path: 'line\nbreak.ts', status: 'A' as const },
+            ]),
       ])
     );
     expect(rootFiles.revision).toMatch(/^[a-f0-9]{64}$/);
 
     await writeFile(join(repoPath, 'tracked.ts'), 'changed\n');
     await writeFile(join(repoPath, 'added-in-commit.ts'), 'new\n');
+    if (process.platform !== 'win32') {
+      await writeFile(join(repoPath, ':colon.ts'), 'changed colon\n');
+    }
     await execFileAsync('git', ['-C', repoPath, 'rm', '-f', '--', '-dash.ts']);
     await execFileAsync('git', ['-C', repoPath, 'mv', 'path with space.ts', 'renamed space.ts']);
     await execFileAsync('git', ['-C', repoPath, 'add', '-A']);
@@ -482,6 +523,9 @@ describe('commit changedFiles', () => {
         { path: '-dash.ts', status: 'D' },
         { path: 'path with space.ts', status: 'D' },
         { path: 'renamed space.ts', status: 'A' },
+        ...(process.platform === 'win32'
+          ? []
+          : [{ path: ':colon.ts', status: 'M' as const }]),
       ])
     );
 
@@ -552,31 +596,62 @@ export function parseGitObjectId(raw: string): string {
   return raw;
 }
 
+function hasExitCode(error: unknown, code: number): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  return (error as { code?: unknown }).code === code;
+}
+
 export async function resolveCommitParents(
   workingPath: RepoPath | WorktreePath,
   oid: string
 ): Promise<string[]> {
   const parsed = parseGitObjectId(oid);
-  let stdout = '';
   try {
-    const result = await execFileAsync('git', [
+    const verified = await execFileAsync('git', [
       '-C',
       workingPath,
-      'rev-list',
-      '--parents',
-      '-n',
-      '1',
-      parsed,
+      '--no-optional-locks',
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `${parsed}^{commit}`,
     ]);
-    stdout = result.stdout.trim();
-  } catch {
-    throw new GitCommitRefError();
+    if (verified.stdout.trim() !== parsed) throw new Error('Malformed git commit metadata');
+  } catch (error) {
+    if (hasExitCode(error, 1)) throw new GitCommitRefError();
+    throw error;
   }
+  try {
+    await execFileAsync('git', [
+      '-C',
+      workingPath,
+      '--no-optional-locks',
+      'merge-base',
+      '--is-ancestor',
+      parsed,
+      'HEAD',
+    ]);
+  } catch (error) {
+    if (hasExitCode(error, 1)) throw new GitCommitRefError();
+    throw error;
+  }
+
+  const result = await execFileAsync('git', [
+    '-C',
+    workingPath,
+    '--no-optional-locks',
+    'rev-list',
+    '--parents',
+    '-n',
+    '1',
+    parsed,
+  ]);
+  const stdout = result.stdout.trim();
   const parts = stdout.split(' ').filter(Boolean);
-  if (parts[0] !== parsed) throw new GitCommitRefError();
+  if (parts[0] !== parsed) throw new Error('Malformed git commit metadata');
   const parents = parts.slice(1);
   if (parents.some(parent => !FULL_GIT_OBJECT_ID_RE.test(parent) || parent.length !== parsed.length)) {
-    throw new GitCommitRefError();
+    throw new Error('Malformed git commit metadata');
   }
   return parents;
 }
@@ -631,6 +706,7 @@ export async function changedFiles(
             '--literal-pathspecs',
             '--no-optional-locks',
             'diff-tree',
+            '--no-commit-id',
             '--root',
             '-r',
             '--name-status',
@@ -645,6 +721,7 @@ export async function changedFiles(
             '--literal-pathspecs',
             '--no-optional-locks',
             'diff-tree',
+            '--no-commit-id',
             '-r',
             '--name-status',
             '-z',
@@ -665,7 +742,7 @@ export async function changedFiles(
 ```
 
 Do not call `resolveCommitParents` in the Now branch.
-Export `parseNameStatusZ` from `packages/git/src/index.ts` next to `parsePorcelainV1Z`.
+Export `parseNameStatusZ` from `packages/git/src/index.ts` next to `parsePorcelainV1Z`, and export the `ChangedFilesRequest` type beside the existing changed-file types.
 Do not export git-oid symbols from the package root.
 
 - [ ] **Step 4: Verify GREEN**
@@ -678,7 +755,10 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 5: Refactor if needed, then commit**
+- [ ] **Step 5: Confirm the Now branch stayed isolated and commit**
+
+Keep the two explicit root/non-root argv arrays in `changed-files.ts`; a one-use builder would not satisfy the Rule of Three.
+Confirm the Now branch still calls the original status and `rev-parse HEAD` sequence without calling `parseGitObjectId` or `resolveCommitParents`.
 
 ```bash
 git add packages/git/src/git-oid.ts packages/git/src/git-oid.test.ts packages/git/src/changed-files.ts packages/git/src/changed-files.test.ts packages/git/src/index.ts
@@ -706,6 +786,7 @@ EOF
 - [ ] **Step 1: Write the failing commit diff tests**
 
 Append a nested describe at the end of `packages/git/src/file-read.test.ts`.
+Import `VIEWER_DIFF_CONTEXT_LINES` from `./viewer-limits` for the exact argv assertion.
 Do not commit inside the existing `fileAt and fileDiff` beforeAll repo.
 
 ```ts
@@ -713,7 +794,7 @@ describe('commit fileDiff', () => {
   let root = '';
   let repoPath = '';
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'archon-commit-file-diff-'));
     repoPath = join(root, 'repo');
     await mkdir(repoPath);
@@ -722,18 +803,44 @@ describe('commit fileDiff', () => {
     await exec.execFileAsync('git', ['-C', repoPath, 'config', 'user.name', 'Test User']);
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
   test('commit fileDiff compares first parent to the commit and never uses live or oid:path', async () => {
     const workingPath = toWorktreePath(repoPath);
     await writeFile(join(repoPath, 'tracked.ts'), 'before line\n');
+    if (process.platform !== 'win32') {
+      await writeFile(join(repoPath, ':colon.ts'), 'before colon\n');
+    }
     await exec.execFileAsync('git', ['-C', repoPath, 'add', 'tracked.ts']);
+    if (process.platform !== 'win32') {
+      await exec.execFileAsync('git', [
+        '-C',
+        repoPath,
+        '--literal-pathspecs',
+        'add',
+        '--',
+        ':colon.ts',
+      ]);
+    }
     await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'parent']);
     const parent = (await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
     await writeFile(join(repoPath, 'tracked.ts'), 'after line\n');
+    if (process.platform !== 'win32') {
+      await writeFile(join(repoPath, ':colon.ts'), 'after colon\n');
+    }
     await exec.execFileAsync('git', ['-C', repoPath, 'add', 'tracked.ts']);
+    if (process.platform !== 'win32') {
+      await exec.execFileAsync('git', [
+        '-C',
+        repoPath,
+        '--literal-pathspecs',
+        'add',
+        '--',
+        ':colon.ts',
+      ]);
+    }
     await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'child']);
     const child = (await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
 
@@ -745,6 +852,10 @@ describe('commit fileDiff', () => {
     expect(result.hunks.some(hunk => hunk.changes.some(change => change.content.includes('after line')))).toBe(
       true
     );
+    if (process.platform !== 'win32') {
+      const colon = await fileDiff(workingPath, ':colon.ts', { commit: child });
+      expect(colon.hunks.some(hunk => hunk.changes.some(change => change.content === 'after colon'))).toBe(true);
+    }
 
     const now = await fileDiff(workingPath, 'tracked.ts');
     expect(now.scope).toBe('now');
@@ -754,8 +865,29 @@ describe('commit fileDiff', () => {
     const spawnSpy = spyOn(childProcess, 'spawn');
     try {
       await fileDiff(workingPath, 'tracked.ts', { commit: child });
-      const flat = spawnSpy.mock.calls.flatMap(call => (call[1] as string[] | undefined) ?? []);
-      expect(flat.some(arg => arg.includes(':'))).toBe(false);
+      const spawnedArgv = spawnSpy.mock.calls.map(
+        call => (call[1] as string[] | undefined) ?? []
+      );
+      const flat = spawnedArgv.flat();
+      expect(spawnedArgv.find(args => args.includes('diff-tree'))).toEqual([
+        '-C',
+        workingPath,
+        '--no-optional-locks',
+        '--literal-pathspecs',
+        'diff-tree',
+        '--no-commit-id',
+        '-p',
+        '--no-color',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--text',
+        `-U${String(VIEWER_DIFF_CONTEXT_LINES)}`,
+        parent,
+        child,
+        '--',
+        'tracked.ts',
+      ]);
+      expect(spawnedArgv.some(args => args.includes(`${child}:tracked.ts`))).toBe(false);
       expect(flat).toContain(parent);
       expect(flat).toContain(child);
       expect(flat).not.toContain('HEAD');
@@ -786,6 +918,58 @@ describe('commit fileDiff', () => {
       binary: true,
       fileFallback: true,
     });
+    const raw = await fileAt(workingPath, 'blob.bin', { kind: 'tree', treeIsh: child });
+    expect(Buffer.from(raw.bytes)).toEqual(Buffer.from([0, 9, 9]));
+  });
+
+  test('rejects a full commit object that exists but is not reachable from HEAD', async () => {
+    const workingPath = toWorktreePath(repoPath);
+    const head = (await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
+    const parent = (await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD^'])).stdout.trim();
+    const unreachable = (
+      await exec.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'commit-tree',
+        `${head}^{tree}`,
+        '-p',
+        parent,
+        '-m',
+        'unreachable raw source',
+      ])
+    ).stdout.trim();
+    await expect(
+      fileAt(workingPath, 'blob.bin', { kind: 'tree', treeIsh: unreachable })
+    ).rejects.toMatchObject({ name: 'GitCommitRefError', code: 'invalid_ref' });
+  });
+
+  test('pages a commit diff with a cursor tied to the parent and commit blobs', async () => {
+    const workingPath = toWorktreePath(repoPath);
+    const original = Array.from({ length: 25_000 }, (_unused, index) => `keep-${String(index)}`);
+    await writeFile(join(repoPath, 'commit-paged.ts'), original.join('\n') + '\n');
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'commit-paged.ts']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'paged parent']);
+    const changed = [...original];
+    for (let index = 0; index < changed.length; index += 10) {
+      changed[index] = `changed-${String(index)}`;
+    }
+    await writeFile(join(repoPath, 'commit-paged.ts'), changed.join('\n') + '\n');
+    await exec.execFileAsync('git', ['-C', repoPath, 'add', 'commit-paged.ts']);
+    await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'paged child']);
+    const child = (await exec.execFileAsync('git', ['-C', repoPath, 'rev-parse', 'HEAD'])).stdout.trim();
+
+    const first = await fileDiff(workingPath, 'commit-paged.ts', { commit: child });
+    expect(first.scope).toBe('commit');
+    expect(first.ref).toBe(child);
+    expect(first.truncated).toBe(true);
+    expect(first.cursor.length).toBeGreaterThan(0);
+    const second = await fileDiff(workingPath, 'commit-paged.ts', {
+      commit: child,
+      cursor: first.cursor,
+    });
+    expect(second.scope).toBe('commit');
+    expect(second.ref).toBe(child);
+    expect(second.hunks[0]?.header).not.toBe(first.hunks[0]?.header);
   });
 });
 ```
@@ -802,10 +986,14 @@ Expected: FAIL because `FileDiffRequest` has no `commit` field or because commit
 
 - [ ] **Step 3: Implement commit `fileDiff`**
 
-In `packages/git/src/file-read.ts`, change the types:
+In `packages/git/src/file-read.ts`, import the commit helpers and change the types:
 
 ```ts
-import { parseGitObjectId, resolveCommitParents } from './git-oid';
+import {
+  FULL_GIT_OBJECT_ID_RE,
+  parseGitObjectId,
+  resolveCommitParents,
+} from './git-oid';
 
 export interface FileDiffRequest {
   cursor?: string;
@@ -824,6 +1012,18 @@ export interface FileDiffResult {
   binary: boolean;
   fileFallback: boolean;
 }
+```
+
+At the start of the public `fileAt` implementation, after `parseGitFilePath` and before `inspectFile`, validate every full object-name tree source against the run checkout's `HEAD`.
+Keep the existing `HEAD` path unchanged for Now deletions.
+
+```ts
+const path = parseGitFilePath(relativePath);
+if (source.kind === 'tree' && FULL_GIT_OBJECT_ID_RE.test(source.treeIsh)) {
+  await resolveCommitParents(workingPath, source.treeIsh);
+}
+const signal = request?.signal;
+const inspected = await inspectFile(workingPath, path, source);
 ```
 
 Replace `rawFallbackResult` with a scope-aware helper:
@@ -881,6 +1081,7 @@ if (request?.commit !== undefined) {
           '--no-optional-locks',
           '--literal-pathspecs',
           'diff-tree',
+          '--no-commit-id',
           '--root',
           '-p',
           '--no-color',
@@ -896,6 +1097,7 @@ if (request?.commit !== undefined) {
           '--no-optional-locks',
           '--literal-pathspecs',
           'diff-tree',
+          '--no-commit-id',
           '-p',
           '--no-color',
           '--no-ext-diff',
@@ -912,7 +1114,7 @@ if (request?.commit !== undefined) {
 }
 ```
 
-Map `GitCommitRefError` through unchanged.
+Let `GitCommitRefError` propagate unchanged so the server can map it without importing the internal class.
 Do not use `git diff HEAD` in the commit branch.
 Do not use `HEAD:path`.
 Do not change `inspectTree`; it already uses `ls-tree -z` then `cat-file blob`.
@@ -950,6 +1152,7 @@ EOF
 - Modify: `packages/server/src/routes/git/diff-route.ts`
 - Modify: `packages/server/src/routes/git/diff-handler.ts`
 - Modify: `packages/server/src/routes/git/file-handler.ts`
+- Modify: `packages/server/src/routes/api.ts`
 - Modify: `packages/server/src/routes/api.git-changes.test.ts`
 
 **Interfaces:**
@@ -959,7 +1162,8 @@ EOF
 
 - [ ] **Step 1: Write the failing HTTP tests**
 
-In `packages/server/src/routes/api.git-changes.test.ts`, add these tests after the existing log tests.
+In `packages/server/src/routes/api.git-changes.test.ts`, import the `ChangedFilesRequest` type from `@archon/git` and add `_request?: ChangedFilesRequest` to the `mockChangedFiles` function signature before adding the tests below.
+Add these tests after the existing log tests.
 Keep every existing Now/CAP-6/path test.
 
 ```ts
@@ -993,6 +1197,18 @@ test('rejects a non-object-name changes ref before git', async () => {
   expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
   expect(mockChangedFiles).not.toHaveBeenCalled();
   expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+  expect(mockLogger.info.mock.calls).toEqual([
+    [{ runId: 'run-1' }, 'git.changes_started'],
+    [{ runId: 'run-1', errorType: 'invalid_ref' }, 'git.changes_failed'],
+  ]);
+});
+
+test('rejects an explicitly empty changes ref instead of treating it as Now', async () => {
+  const response = await makeApp().request('/api/workflows/runs/run-1/git/changes?ref=');
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(mockChangedFiles).not.toHaveBeenCalled();
+  expect(mockGetWorkflowRun).not.toHaveBeenCalled();
 });
 
 test('commit CAP-6 still short-circuits changes before git', async () => {
@@ -1015,6 +1231,10 @@ test('maps GitCommitRefError from changedFiles to Invalid commit ref', async () 
   expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
   expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain(COMMIT);
   expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(COMMIT);
+  expect(mockLogger.info.mock.calls.at(-1)).toEqual([
+    { runId: 'run-1', errorType: 'invalid_ref' },
+    'git.changes_failed',
+  ]);
 });
 
 test('commit diff passes commit into fileDiff and serializes scope commit', async () => {
@@ -1049,6 +1269,37 @@ test('Now diff omits commit from fileDiff', async () => {
   expect(request?.commit).toBeUndefined();
 });
 
+test('rejects a malformed diff ref before checkout lookup', async () => {
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&ref=HEAD'
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(mockFileDiff).not.toHaveBeenCalled();
+  expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+  expect(expectDiffLogPair('git.diff_failed').errorType).toBe('invalid_ref');
+});
+
+test('rejects an explicitly empty diff ref instead of treating it as Now', async () => {
+  const response = await makeApp().request(
+    '/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&ref='
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(mockFileDiff).not.toHaveBeenCalled();
+  expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+});
+
+test('commit CAP-6 short-circuits diff before fileDiff', async () => {
+  mockGetWorkflowRun.mockResolvedValue({ ...runRow(), working_path: null });
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&ref=${COMMIT}`
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ emptyReason: 'no_checkout' });
+  expect(mockFileDiff).not.toHaveBeenCalled();
+});
+
 test('maps GitCommitRefError from fileDiff to Invalid commit ref', async () => {
   mockGetWorkflowRun.mockResolvedValue(runRow());
   mockFileDiff.mockRejectedValueOnce(namedError('GitCommitRefError', 'invalid_ref'));
@@ -1073,6 +1324,16 @@ test('maps source=full-oid to a tree fileAt read', async () => {
   );
 });
 
+test('commit CAP-6 short-circuits raw file reads before fileAt', async () => {
+  mockGetWorkflowRun.mockResolvedValue({ ...runRow(), working_path: null });
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=${COMMIT}`
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ emptyReason: 'no_checkout' });
+  expect(mockFileAt).not.toHaveBeenCalled();
+});
+
 test('still rejects source=HEAD as an invalid file source', async () => {
   const response = await makeApp().request('/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=HEAD');
   expect(response.status).toBe(400);
@@ -1088,6 +1349,19 @@ test('maps GitFileError invalid_ref on a commit source to Invalid commit ref', a
   );
   expect(response.status).toBe(400);
   expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+});
+
+test('maps GitCommitRefError on an unreachable commit source to Invalid commit ref', async () => {
+  mockGetWorkflowRun.mockResolvedValue(runRow());
+  mockFileAt.mockRejectedValueOnce(namedError('GitCommitRefError', 'invalid_ref'));
+  const response = await makeApp().request(
+    `/api/workflows/runs/run-1/git/file/src%2Fa.ts?source=${COMMIT}`
+  );
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: 'Invalid commit ref' });
+  expect(expectFileLogPair('git.file_failed').errorType).toBe('invalid_ref');
+  expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain(COMMIT);
+  expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(COMMIT);
 });
 ```
 
@@ -1126,18 +1400,20 @@ Add `400` with `errorSchema` and description `Invalid commit ref`.
 
 Widen `handleGitChanges` to `apiError(c, status: 400 | 404 | 500, message: string)`.
 Read `const ref = c.req.query('ref')`.
-If `ref !== undefined && ref !== ''` and `!isValidGitObjectId(ref)`, log `git.changes_failed` with `errorType: "invalid_ref"` and return 400 `Invalid commit ref` before `loadRunCheckout`.
-Treat empty `ref` the same as missing `ref`.
+If `ref !== undefined` and `!isValidGitObjectId(ref)`, log `git.changes_failed` with `errorType: "invalid_ref"` and return 400 `Invalid commit ref` before `loadRunCheckout`.
+An explicitly empty `ref=` is invalid; only an absent query parameter selects Now.
 After a live gate, call Now as `changedFiles(toWorktreePath(gate.workingPath))` with one argument.
-When `ref` is a valid object name, call `changedFiles(toWorktreePath(gate.workingPath), { commit: ref })`.
+When `ref` is defined and valid, call `changedFiles(toWorktreePath(gate.workingPath), { commit: ref })`.
 In the inner catch, if `error` has `name === 'GitCommitRefError'`, return 400 `Invalid commit ref` and do not log the ref.
+Log that branch as `git.changes_failed` with exactly `{ runId, errorType: 'invalid_ref' }` so the started event still has one terminal pair.
+Leave unexpected commit-helper failures on the opaque 500 path.
 
 Update `diff-route.ts` query to `{ path: z.string(), cursor: z.string().optional(), ref: z.string().optional() }` and summary to mention Now or commit hunks.
 Add the same 400 invalid-ref path.
 
-In `handleGitDiff`, after path validation, if `ref` is present, non-empty, and invalid, 400 `Invalid commit ref`.
-Pass `commit: ref && ref !== '' ? ref : undefined` into `fileDiff`.
-Classify `GitCommitRefError` and `GitFileError` `invalid_ref` as 400 `Invalid commit ref`.
+In `handleGitDiff`, after path validation, if `ref !== undefined` and invalid, return 400 `Invalid commit ref`.
+Pass `commit: ref` into `fileDiff`; an absent ref remains `undefined` and an explicitly empty ref has already returned 400.
+Add `invalid_ref` to `ClassifiedGitReadError`, classify `GitCommitRefError` and `GitFileError` with `code === 'invalid_ref'` to it, and map it to HTTP 400 `Invalid commit ref` with the stable `invalid_ref` log payload.
 
 In `handleGitFile`, replace the source check with:
 
@@ -1156,8 +1432,10 @@ if (sourceQuery === 'worktree') {
 }
 ```
 
-Classify `GitCommitRefError` / `GitFileError` `invalid_ref` as 400 `Invalid commit ref`.
+Add the same `invalid_ref` branch to `file-handler.ts` and map `GitCommitRefError` or `GitFileError` with `code === 'invalid_ref'` to HTTP 400 `Invalid commit ref`.
 Do not log `sourceQuery`.
+
+In `packages/server/src/routes/api.ts`, update only the adjacent comments to describe `/git/changes` as Now-or-commit files and `/git/diff` as Now-or-commit hunks.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -1172,7 +1450,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/server/src/routes/git/path-input.ts packages/server/src/routes/git/changes-route.ts packages/server/src/routes/git/changes-handler.ts packages/server/src/routes/git/diff-route.ts packages/server/src/routes/git/diff-handler.ts packages/server/src/routes/git/file-handler.ts packages/server/src/routes/api.git-changes.test.ts
+git add packages/server/src/routes/api.ts packages/server/src/routes/git/path-input.ts packages/server/src/routes/git/changes-route.ts packages/server/src/routes/git/changes-handler.ts packages/server/src/routes/git/diff-route.ts packages/server/src/routes/git/diff-handler.ts packages/server/src/routes/git/file-handler.ts packages/server/src/routes/api.git-changes.test.ts
 git commit -m "$(cat <<'EOF'
 feat(server): accept commit refs on git changes, diff, and file
 
@@ -1214,9 +1492,21 @@ test('getWorkflowRunGitChanges omits ref for Now', async () => {
   expect(fetchSpy).toHaveBeenCalledWith('/api/workflows/runs/run%2Fone/git/changes');
 });
 
-test('getWorkflowRunGitChanges rejects HEAD before fetch', async () => {
+test('getWorkflowRunGitChanges rejects every supplied non-full ref before fetch', async () => {
   fetchSpy = mockFetchSuccess();
-  await expect(getWorkflowRunGitChanges('run/one', { ref: 'HEAD' })).rejects.toThrow('Invalid commit ref');
+  for (const ref of ['', 'HEAD', '1'.repeat(39), 'A'.repeat(40)]) {
+    await expect(getWorkflowRunGitChanges('run/one', { ref })).rejects.toThrow(
+      'Invalid commit ref'
+    );
+  }
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
+test('getWorkflowRunGitDiff rejects a supplied non-full ref before fetch', async () => {
+  fetchSpy = mockFetchResponse(jsonResponse(READY_DIFF));
+  await expect(getWorkflowRunGitDiff('run/one', 'src/a.ts', { ref: 'HEAD' })).rejects.toThrow(
+    'Invalid commit ref'
+  );
   expect(fetchSpy).not.toHaveBeenCalled();
 });
 
@@ -1253,18 +1543,30 @@ Expected: FAIL because the clients do not send `ref`.
 - [ ] **Step 3: Regenerate OpenAPI types**
 
 `packages/web/package.json` `generate:types` is hardcoded to `http://localhost:3090/api/openapi.json`.
-Start a server on 3090 after Task 3 is committed.
+Use exactly one of the following two generation flows after Task 3 is committed.
+When port 3090 is free, start this worktree's server in one terminal:
 
 ```bash
 PORT=3090 bun run dev:server
 ```
 
-Wait until `GET http://localhost:3090/api/health` succeeds.
-If 3090 is already bound to this worktree's Task 3 server, reuse it.
-If 3090 is bound to another checkout, do not kill by process name; bind this typegen server only after that other process is stopped by the operator of that checkout.
+Wait until `GET http://localhost:3090/api/health` succeeds, then run this command in a second terminal:
 
 ```bash
 bun --filter @archon/web generate:types
+```
+
+When port 3090 is already bound to another checkout, do not stop that process.
+Start this worktree's server on a free task-specific port such as 39079 in one terminal:
+
+```bash
+PORT=39079 bun run dev:server
+```
+
+After `GET http://localhost:39079/api/health` succeeds, run the underlying generator in a second terminal:
+
+```bash
+( cd packages/web && bun x openapi-typescript http://localhost:39079/api/openapi.json -o src/lib/api.generated.d.ts )
 ```
 
 Stop only the server process started for this task.
@@ -1290,7 +1592,7 @@ export async function getWorkflowRunGitChanges(
   options?: { ref?: string; signal?: AbortSignal }
 ): Promise<GitChangesResponse> {
   const params = new URLSearchParams();
-  if (options?.ref) params.set('ref', assertCommitRef(options.ref));
+  if (options?.ref !== undefined) params.set('ref', assertCommitRef(options.ref));
   const query = params.toString();
   return fetchJSON(
     `/api/workflows/runs/${encodeURIComponent(runId)}/git/changes${query ? `?${query}` : ''}`,
@@ -1304,7 +1606,7 @@ export async function getWorkflowRunGitDiff(
   options?: { cursor?: string; ref?: string; signal?: AbortSignal }
 ): Promise<GitDiffResponse> {
   const params = new URLSearchParams({ path });
-  if (options?.ref) params.set('ref', assertCommitRef(options.ref));
+  if (options?.ref !== undefined) params.set('ref', assertCommitRef(options.ref));
   if (options?.cursor) params.set('cursor', options.cursor);
   return fetchJSON(
     '/api/workflows/runs/' + encodeURIComponent(runId) + '/git/diff?' + params.toString(),
@@ -1350,8 +1652,8 @@ EOF
 
 **Interfaces:**
 
-- Consumes: `ChangedFilesList`, `GitChangedFile`, `GitLogCommit`, `COMMIT_ROW_HEIGHT`
-- Produces: `expandedOid`, `commitFiles`, `commitFilesLoadState`, `onToggleCommit`, `onOpenCommitFile`
+- Consumes: `ChangedFilesList`, `GitChangedFile`, `GitLogCommit`, `SourceControlSnapshot`, `COMMIT_ROW_HEIGHT`
+- Produces: `expandedCommit`, `commitSnapshot`, `commitLoadState`, `onToggleCommit`, `onOpenCommitFile`
 
 - [ ] **Step 1: Write the failing graph and panel tests**
 
@@ -1376,10 +1678,64 @@ test('renders expanded commit files inline with a distinct list prefix and no Ba
   expect(html).toContain('>M<');
   expect(html).not.toContain('Back');
 });
+
+test('renders bounded loading and refresh-error copy inside the expanded row', () => {
+  const loading = renderToStaticMarkup(
+    <CommitHistoryGraph
+      commits={COMMITS}
+      nowMs={NOW}
+      expandedOid={D}
+      commitFiles={[]}
+      commitFilesLoadState="loading"
+    />
+  );
+  expect(loading).toContain('Loading files');
+  expect(loading).toContain('height:132px');
+  const failed = renderToStaticMarkup(
+    <CommitHistoryGraph
+      commits={COMMITS}
+      nowMs={NOW}
+      expandedOid={D}
+      commitFiles={[]}
+      commitFilesLoadState="error"
+    />
+  );
+  expect(failed).toContain('Could not refresh files.');
+  expect(failed).not.toContain('No file changes');
+});
 ```
+
+In the same graph test, add this variable-height regression case:
+
+```ts
+test('reserves expanded-row height while the nested file list remains virtualized', () => {
+  const files = Array.from({ length: 200 }, (_unused, index) => ({
+    path: `commit-file-${String(index)}.ts`,
+    status: 'M' as const,
+  }));
+  const html = renderToStaticMarkup(
+    <CommitHistoryGraph
+      commits={COMMITS}
+      nowMs={NOW}
+      expandedOid={D}
+      commitFiles={files}
+      commitFilesLoadState="idle"
+      onToggleCommit={(): void => undefined}
+    />
+  );
+  expect(html).toContain('height:336px');
+  expect(html).toContain('height:5600px');
+  expect(html).not.toContain('commit-file-199.ts');
+});
+```
+
+This proves that the outer virtualizer reserves the expanded height and the nested `ChangedFilesList` still mounts only its own window.
 
 The graph test does not assert Changes copy.
 That assertion lives in the panel test.
+
+Update the `renderPanel` helper with `expandedCommit={null}`, `commitSnapshot={null}`, `commitLoadState="idle"`, `onToggleCommit={(): void => undefined}`, and `onOpenCommitFile={(): void => undefined}` defaults.
+Rename the existing selected-row test override from `selectedPath` to `selectedNowPath`.
 
 ```ts
 test('keeps Changes pinned while History shows an expanded commit file list', () => {
@@ -1398,9 +1754,18 @@ test('keeps Changes pinned while History shows an expanded commit file list', ()
       revision: 'a'.repeat(64),
       truncated: false,
     },
-    expandedOid: '1'.repeat(40),
-    commitFiles: [{ path: 'then.ts', status: 'M' }],
-    commitFilesLoadState: 'idle',
+    expandedCommit: {
+      oid: '1'.repeat(40),
+      parents: [],
+      authorName: 'Ada',
+      authorDate: '2026-09-06T18:09:18Z',
+      subject: 'work',
+    },
+    commitSnapshot: {
+      files: [{ path: 'then.ts', status: 'M' }],
+      revision: 'b'.repeat(64),
+    },
+    commitLoadState: 'idle',
     onToggleCommit: (): void => undefined,
   });
   expect(html).toContain('Changes');
@@ -1427,9 +1792,15 @@ test('shows No file changes for an expanded empty commit', () => {
       revision: 'a'.repeat(64),
       truncated: false,
     },
-    expandedOid: '1'.repeat(40),
-    commitFiles: [],
-    commitFilesLoadState: 'idle',
+    expandedCommit: {
+      oid: '1'.repeat(40),
+      parents: [],
+      authorName: 'Ada',
+      authorDate: '2026-09-06T18:09:18Z',
+      subject: 'empty',
+    },
+    commitSnapshot: { files: [], revision: 'b'.repeat(64) },
+    commitLoadState: 'idle',
     onToggleCommit: (): void => undefined,
   });
   expect(html).toContain('No file changes');
@@ -1442,7 +1813,7 @@ test('shows No file changes for an expanded empty commit', () => {
 Run:
 
 ```bash
-NODE_ENV=development bun test packages/web/src/components/workflows/source-control/commit-history-graph.test.tsx packages/web/src/components/workflows/source-control/source-control-panel.test.tsx
+( cd packages/web && NODE_ENV=development bun test src/components/workflows/source-control/commit-history-graph.test.tsx src/components/workflows/source-control/source-control-panel.test.tsx )
 ```
 
 Expected: FAIL because the new props do not exist.
@@ -1472,31 +1843,61 @@ export interface CommitHistoryGraphProps {
 
 Do not import `SourceControlLoadState` from `source-control-panel.tsx`.
 Import `ChangedFilesList`.
-Clicking a row or pressing Enter/Space on the History listbox calls `onToggleCommit` with the active commit and still does not call `onOpenFile`.
+At the start of the History `onKeyDown`, return when `event.currentTarget !== event.target` so Arrow/Enter/Space from the nested `ChangedFilesList` cannot also move or collapse the outer History row.
+Clicking a row or pressing Enter/Space while the History listbox itself has focus calls `onToggleCommit` with the active commit and still does not call `onOpenFile`.
 Arrow/Home/End still only move `activeIndex`.
+The row `onSelect` handler must focus the History listbox, activate that row index, and call `props.onToggleCommit?.(commit)` exactly once.
+
+```ts
+const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+  if (event.currentTarget !== event.target) return;
+  if (
+    event.key === 'ArrowDown' ||
+    event.key === 'ArrowUp' ||
+    event.key === 'Home' ||
+    event.key === 'End'
+  ) {
+    event.preventDefault();
+    const nextIndex = nextCommitIndex(event.key, clampedActiveIndex, props.commits.length);
+    virtualizer.scrollToIndex(nextIndex, { align: 'auto' });
+    activate(nextIndex);
+    return;
+  }
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    const commit = props.commits[clampedActiveIndex];
+    if (commit) props.onToggleCommit?.(commit);
+  }
+};
+```
 
 Render the inline list as a sibling of `CommitGraphRow` only for the expanded index.
 Give the nested list its own `activeIndex` state so keyboard inside `Commit files` works.
 
 ```tsx
 {props.expandedOid === commit.oid ? (
-  <div className="max-h-60 overflow-auto pl-2">
-    {props.commitFilesLoadState === 'loading' ? (
-      <p role="status" className="px-2 py-2 text-xs text-text-secondary">
-        Loading files
-      </p>
-    ) : null}
-    {props.commitFilesLoadState === 'error' ? (
-      <p role="status" className="px-2 py-2 text-xs text-text-secondary">
-        Could not refresh files.
-      </p>
-    ) : null}
-    {props.commitFilesLoadState === 'idle' && (props.commitFiles?.length ?? 0) === 0 ? (
-      <p role="status" className="px-2 py-2 text-xs text-text-secondary">
-        No file changes
-      </p>
-    ) : null}
-    {(props.commitFiles?.length ?? 0) > 0 ? (
+  props.commitFilesLoadState === 'loading' ? (
+    <p role="status" className="h-9 px-4 py-2 text-xs text-text-secondary">
+      Loading files
+    </p>
+  ) : props.commitFilesLoadState === 'error' && (props.commitFiles?.length ?? 0) === 0 ? (
+    <p role="status" className="h-9 px-4 py-2 text-xs text-text-secondary">
+      Could not refresh files.
+    </p>
+  ) : (props.commitFiles?.length ?? 0) === 0 ? (
+    <p role="status" className="h-9 px-4 py-2 text-xs text-text-secondary">
+      No file changes
+    </p>
+  ) : (
+    <div
+      className="flex min-h-0 flex-col pl-2"
+      style={{ height: Math.min(240, (props.commitFiles?.length ?? 0) * 28 + 16) }}
+    >
+      {props.commitFilesLoadState === 'error' ? (
+        <p role="status" className="px-2 pb-1 text-xs text-text-secondary">
+          Could not refresh files.
+        </p>
+      ) : null}
       <ChangedFilesList
         files={props.commitFiles ?? []}
         activeIndex={commitFileActiveIndex}
@@ -1506,14 +1907,18 @@ Give the nested list its own `activeIndex` state so keyboard inside `Commit file
         ariaLabel="Commit files"
         idPrefix={`sc-commit-${commit.oid}-file`}
       />
-    ) : null}
-  </div>
+    </div>
+  )
 ) : null}
 ```
 
-Update `estimateSize` as locked in OQ-4 and call `virtualizer.measure()` in an effect when `expandedOid` or `commitFiles` changes.
+Make `estimateSize(index)` return `COMMIT_ROW_HEIGHT` for collapsed rows, `COMMIT_ROW_HEIGHT + 36` for an expanded loading/error/empty row, and `COMMIT_ROW_HEIGHT + Math.min(240, fileCount * 28 + 16)` for an expanded populated row.
+Add `data-index={virtualItem.index}` and `ref={virtualizer.measureElement}` to each absolute virtual row wrapper.
+Call `virtualizer.measure()` in a `useLayoutEffect` keyed by `expandedOid`, `commitFilesLoadState`, and `commitFiles?.length` so a populated or failed fetch cannot overlap the following commit.
+Reset or clamp the nested active index when `expandedOid` or the commit file count changes.
 
-Pass the new props through `SourceControlPanel`.
+Extend `SourceControlPanelProps` with `expandedCommit: GitLogCommit | null`, `commitSnapshot: SourceControlSnapshot | null`, `commitLoadState: SourceControlLoadState`, `onToggleCommit`, and `onOpenCommitFile`.
+Derive the files for `CommitHistoryGraph` from `commitSnapshot` only when it is a ready snapshot, include `commitSnapshot?.emptyReason` in `displayedEmptyReason`, and pass separate `selectedNowPath` and `selectedCommitPath` props so the same path cannot appear selected in both lists.
 Do not hide the Changes list when a commit is expanded.
 
 - [ ] **Step 4: Verify GREEN**
@@ -1559,24 +1964,37 @@ onCommitChanges?: (
 ) => GitChangesResponse | Response | Promise<GitChangesResponse | Response>;
 ```
 
-Inside the fetch mock, if `url.includes('/git/changes')`, parse with `new URL(url, 'http://archon.local')`.
-If `searchParams.get('ref')` is non-null, call `onCommitChanges`.
-If `onCommitChanges` is missing, throw `Unexpected commit changes fetch: ${url}`.
-Otherwise call `onChanges`.
+Add `let commitChangesCall = 0` beside the existing route counters and replace the changes branch with:
+
+```ts
+if (url.includes('/git/changes')) {
+  const parsed = new URL(url, 'http://archon.local');
+  const ref = parsed.searchParams.get('ref');
+  if (ref !== null) {
+    commitChangesCall += 1;
+    if (!options.onCommitChanges) throw new Error(`Unexpected commit changes fetch: ${url}`);
+    const result = await options.onCommitChanges(ref, commitChangesCall, init);
+    return result instanceof Response ? result : jsonResponse(result);
+  }
+  changesCall += 1;
+  const result = await options.onChanges(changesCall, init);
+  return result instanceof Response ? result : jsonResponse(result);
+}
+```
 
 Add this fixture next to `HISTORY_COMMIT`:
 
 ```ts
 const CHILD_COMMIT: GitLogCommit = {
   oid: 'c'.repeat(40),
-  parents: ['p'.repeat(40)],
+  parents: ['b'.repeat(40)],
   authorName: 'Ada',
   authorDate: '2026-09-06T18:09:18Z',
   subject: 'child subject',
 };
 ```
 
-Add these three tests inside `describe('SourceControlTab')`:
+Add these five tests inside `describe('SourceControlTab')`:
 
 ```ts
 test('expanding a commit fetches that commit list and does not open the viewer', async () => {
@@ -1598,6 +2016,11 @@ test('expanding a commit fetches that commit list and does not open the viewer',
   await waitFor(() => host.textContent?.includes('then.ts') === true, 'commit files');
   expect(host.textContent).toContain('now.ts');
   expect(host.querySelector('[aria-label="Before"]')).toBeNull();
+  expect(
+    calledUrls(fetchSpy).filter(
+      url => url.includes('/git/changes') && url.includes('ref=' + CHILD_COMMIT.oid)
+    )
+  ).toHaveLength(1);
   expect(calledUrls(fetchSpy).some(url => url.includes('/git/diff'))).toBe(false);
   expect(calledUrls(fetchSpy).some(url => url.includes('/git/file/'))).toBe(false);
   expect(calledUrls(fetchSpy).some(url => url.includes('working_path'))).toBe(false);
@@ -1652,6 +2075,40 @@ test('opening a commit M file uses parent-to-commit diff in the same viewer', as
   expect(host.querySelector('[aria-label="After"]')).not.toBeNull();
 });
 
+test('collapsing History hides only the inline files and preserves the commit viewer', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({ files: [], revision: REVISION_A }),
+    onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+    onCommitChanges: () => ({
+      files: [{ path: 'then.ts', status: 'M' }],
+      revision: REVISION_B,
+    }),
+    onDiff: () =>
+      jsonResponse({
+        ...readyDiff('then.ts', 'before', 'after'),
+        scope: 'commit',
+        ref: CHILD_COMMIT.oid,
+      }),
+  });
+  await renderTab('run/one');
+  await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject) === true, 'commit row');
+  const row = host.querySelector('#sc-history-commit-0');
+  if (!(row instanceof HTMLElement)) throw new Error('missing commit row');
+  await act(async () => {
+    row.click();
+  });
+  await waitFor(() => host.querySelector('[aria-label="Commit files"]') !== null, 'commit files');
+  await clickOption('then.ts');
+  await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'commit diff');
+  await act(async () => {
+    row.click();
+  });
+  expect(row.getAttribute('aria-expanded')).toBe('false');
+  expect(host.querySelector('[aria-label="Commit files"]')).toBeNull();
+  expect(host.querySelector('[aria-label="Before"]')).not.toBeNull();
+  expect(host.querySelector('[aria-label="After"]')).not.toBeNull();
+});
+
 test('opening a commit A file reads the commit oid and a D file reads the parent oid', async () => {
   fetchSpy = mockGitRoutes({
     onChanges: () => ({ files: [], revision: REVISION_A }),
@@ -1688,6 +2145,50 @@ test('opening a commit A file reads the commit oid and a D file reads the parent
     'commit D parent source'
   );
 });
+
+test('a commit M raw fallback reads and downloads the after side from the commit oid', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({ files: [], revision: REVISION_A }),
+    onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+    onCommitChanges: () => ({
+      files: [{ path: 'blob.bin', status: 'M' }],
+      revision: REVISION_B,
+    }),
+    onDiff: () =>
+      jsonResponse({
+        path: 'blob.bin',
+        status: 'M',
+        scope: 'commit',
+        ref: CHILD_COMMIT.oid,
+        hunks: [],
+        cursor: '',
+        truncated: false,
+        binary: true,
+        fileFallback: true,
+      }),
+    onFile: () =>
+      presentedFileResponse(Uint8Array.from([0, 0x41]), HASH_A, {
+        'Content-Type': 'application/octet-stream',
+        'X-Archon-Git-Presentation': 'hex',
+        'X-Archon-Git-Byte-Length': '2',
+      }),
+  });
+  await renderTab('run/one');
+  await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject) === true, 'commit row');
+  await act(async () => {
+    host.querySelector('#sc-history-commit-0')?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true })
+    );
+  });
+  await waitFor(() => host.textContent?.includes('blob.bin') === true, 'commit files');
+  await clickOption('blob.bin');
+  await waitFor(() => host.textContent?.includes('00000000') === true, 'hex fallback');
+  const fileUrls = calledUrls(fetchSpy).filter(url => url.includes('/git/file/blob.bin'));
+  expect(fileUrls).toHaveLength(1);
+  expect(fileUrls[0]).toContain('source=' + CHILD_COMMIT.oid);
+  expect(host.querySelector('a')?.getAttribute('href')).toContain('source=' + CHILD_COMMIT.oid);
+  expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
+});
 ```
 
 - [ ] **Step 2: Verify RED**
@@ -1695,23 +2196,83 @@ test('opening a commit A file reads the commit oid and a D file reads the parent
 Run:
 
 ```bash
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
 ```
 
 Expected: FAIL because expanding a commit does not fetch `?ref=` and opening a commit file still hits Now `worktree` / `live`.
 
 - [ ] **Step 3: Implement viewer scope in the tab**
 
-Add:
+Import `GitLogCommit`, `INITIAL_SOURCE_CONTROL_STATE`, and `SourceControlSnapshotState` from their existing modules.
+Add a third `sourceControlSnapshotReducer` instance for the expanded commit so its displayed and pending lists follow the same freeze contract as Changes.
+Use the expanded commit oid in the TanStack Query key; never put a viewer request into that query.
+
+```ts
+const [commitSnapshotState, dispatchCommit] = useReducer(
+  sourceControlSnapshotReducer,
+  INITIAL_SOURCE_CONTROL_STATE
+);
+const [expandedCommit, setExpandedCommit] = useState<GitLogCommit | null>(null);
+
+const {
+  data: commitData,
+  isError: commitIsError,
+  isFetching: commitIsFetching,
+  refetch: refetchCommit,
+} = useQuery({
+  queryKey: ['workflowRunGitChanges', runId, expandedCommit?.oid ?? null],
+  enabled: expandedCommit !== null,
+  queryFn: ({ signal }) => {
+    if (expandedCommit === null) throw new Error('Missing expanded commit');
+    return getWorkflowRunGitChanges(runId, { ref: expandedCommit.oid, signal });
+  },
+  retry: false,
+  refetchInterval: false,
+  refetchOnReconnect: false,
+  refetchOnWindowFocus: false,
+  staleTime: Infinity,
+});
+```
+
+When `commitData` arrives and `commitSnapshotState.displayed` is null, dispatch `received` with `toSourceControlSnapshot(commitData)`.
+`onToggleCommit` must collapse the same oid or set the new commit, dispatch `reset` to `dispatchCommit`, and let the enabled query perform exactly one list fetch.
+Collapsing or switching the expanded row must not close or reload the viewer.
+
+Add the scope and identity helpers next to the existing viewer helpers:
 
 ```ts
 type ViewerScope =
   | { kind: 'now' }
   | { kind: 'commit'; oid: string; parentOid: string | null };
+
+interface PendingViewer {
+  file: GitChangedFile;
+  scope: ViewerScope;
+  state: LoadedViewerState;
+}
+
+function sameViewerScope(left: ViewerScope, right: ViewerScope): boolean {
+  return (
+    left.kind === right.kind &&
+    (left.kind === 'now' ||
+      (right.kind === 'commit' &&
+        left.oid === right.oid &&
+        left.parentOid === right.parentOid))
+  );
+}
+
+function rawSourceFor(file: GitChangedFile, scope: ViewerScope): GitFileSource | null {
+  if (scope.kind === 'now') return file.status === 'D' ? 'head' : 'worktree';
+  if (file.status !== 'D') return scope.oid;
+  return scope.parentOid;
+}
 ```
 
+Change `pendingViewerMatchesFile` to accept a `scope` and require path, status, and `sameViewerScope(pending.scope, scope)` to match.
+Update its callback use to pass `viewerScopeRef.current` and its render-time use to pass `viewerScope`, with Task 7 replacing the surrounding Now-only acceptance logic.
 Keep `selectedFile` plus `viewerScope: ViewerScope` defaulting to `{ kind: 'now' }`.
-Keep a `viewerScopeRef` in sync with state for `onLoadMore`.
+Keep `viewerScopeRef`, `expandedCommitRef`, and `commitSnapshotRef` synchronized during render because paging and acceptance callbacks must read the exact current scope.
+Set both `viewerScopeRef.current` and React state synchronously in an opener before starting a request; this prevents a fast Load-more click from observing the previous scope.
 
 Replace `loadViewerFile` with a scope-aware helper:
 
@@ -1738,7 +2299,8 @@ async function loadViewerFile(
         reloadFingerprint: diffReloadFingerprint(response),
       };
     }
-    const source: GitFileSource = scope.kind === 'commit' ? scope.oid : 'worktree';
+    const source = rawSourceFor(file, scope);
+    if (source === null) throw new Error('Commit deletion has no parent');
     const raw = await getWorkflowRunGitFile(runId, file.path, source, { signal });
     if (raw.kind === 'empty') {
       return { kind: 'unavailable', file, emptyReason: raw.emptyReason };
@@ -1755,17 +2317,8 @@ async function loadViewerFile(
     }
     return fromRawFile(runId, file, source, raw);
   }
-  const source: GitFileSource =
-    scope.kind === 'commit'
-      ? file.status === 'A'
-        ? scope.oid
-        : (scope.parentOid ?? '')
-      : file.status === 'A'
-        ? 'worktree'
-        : 'head';
-  if (source === '') {
-    return { kind: 'error', file };
-  }
+  const source = rawSourceFor(file, scope);
+  if (source === null) throw new Error('Commit deletion has no parent');
   const response = await getWorkflowRunGitFile(runId, file.path, source, { signal });
   if (response.kind === 'empty') {
     return { kind: 'unavailable', file, emptyReason: response.emptyReason };
@@ -1784,41 +2337,31 @@ async function loadViewerFile(
 }
 ```
 
-`onOpenFile` from Changes sets `viewerScope` to `{ kind: 'now' }` then loads.
-`onOpenCommitFile` sets `viewerScope` to `{ kind: 'commit', oid, parentOid: commit.parents[0] ?? null }` then loads.
+Extract `onOpenScopedFile(file, scope)` from the existing `onOpenFile` body.
+For a Now scope, find the pending counterpart only in `snapshotRef.current.pending`.
+For a commit scope, find it only in `commitSnapshotRef.current.pending` and only when `expandedCommitRef.current?.oid === scope.oid`.
+Every `setPendingViewer` call must store `{ file, scope, state }`.
+Update every `loadViewerFile` call site to pass a scope so strict TypeScript remains green; use `viewerScopeRef.current` in the pre-Task-7 Reload, viewer-retry, and error paths.
+The Changes wrapper calls `onOpenScopedFile(file, { kind: 'now' })`.
+The commit wrapper reads `expandedCommitRef.current`, returns if it is null, and calls `onOpenScopedFile(file, { kind: 'commit', oid: commit.oid, parentOid: commit.parents[0] ?? null })`.
+Do not call `loadViewerFile` from `onToggleCommit`.
 
-Hold `expandedCommit: GitLogCommit | null` and `commitFiles` / `commitFilesLoadState` / `pendingCommitFiles`.
-`onToggleCommit` collapses when the same oid is expanded; otherwise expands that oid, clears commit files, and fetches `getWorkflowRunGitChanges(runId, { ref: commit.oid, signal })`.
-Do not call `loadViewerFile` from toggle.
-If the fetch returns CAP-6, dispatch the existing snapshot empty path as today's CAP-6 handling does for Now/log.
-If it returns files, store them in `commitFiles` state.
-Do not write those files into the Now snapshot reducer.
-
-`onLoadMore` must pass `ref` / commit source from `viewerScopeRef`.
-For paging text, commit `A` uses `scope.oid` and commit `D` uses `scope.parentOid`.
-For paging diffs, pass `{ cursor, ref: scope.kind === 'commit' ? scope.oid : undefined }`.
-
-`onReload` continues to refetch Now changes and log, and if `expandedCommit` is set it also refetches that commit's files.
-If the commit-file revision differs, keep displayed `commitFiles` and store the new list as `pendingCommitFiles`.
-If `viewerScope.kind === 'commit'` and a file is open, call `loadViewerFile` with commit scope into `pendingViewer` instead of replacing `viewerState`.
-If `viewerScope.kind === 'now'`, keep today's Now pending-viewer path.
-Pending Now/log/commit-files still freeze the open viewer.
-Accepting pending must not swap a Now file into a commit viewer or the reverse.
-If the accepted log no longer contains `expandedCommit.oid`, collapse History files and return the viewer to idle only when the open file belonged to that missing commit.
-
-Pass expand/file props into `SourceControlPanel`.
-Changes `onOpenFile` stays the Now opener.
-Selected path highlighting: Changes list uses `viewerScope.kind === 'now' ? selectedFile?.path : null`; commit list uses the inverse.
+Derive `commitLoadState` from `commitIsError` and `commitIsFetching` exactly as the existing two load states are derived.
+Pass `expandedCommit`, `commitSnapshotState.displayed`, `commitLoadState`, `onToggleCommit`, and `onOpenCommitFile` into `SourceControlPanel`.
+Pass `viewerScope.kind === 'now' ? selectedFile?.path ?? null : null` as `selectedNowPath`.
+Pass `viewerScope.kind === 'commit' && viewerScope.oid === expandedCommit?.oid ? selectedFile?.path ?? null : null` as `selectedCommitPath`.
+`closeViewer` and the `runId` reset effect must set both the scope ref and scope state back to Now; the same reset effect also clears `expandedCommit` and dispatches `reset` to `dispatchCommit`.
+Leave scoped paging and the three-snapshot Reload transaction to Task 7 so its tests begin RED.
 
 - [ ] **Step 4: Verify GREEN**
 
 Run:
 
 ```bash
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
 ```
 
-Expected: the three new tests PASS and the existing Story 2.1 tests still PASS.
+Expected: the five new tests PASS and the existing Story 2.1 tests still PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -1833,20 +2376,21 @@ EOF
 
 ---
 
-### Task 7: Mounted return-to-Now, freeze, and keyboard
+### Task 7: Scope-safe paging, Reload freeze, and keyboard isolation
 
 **Files:**
 
 - Modify: `packages/web/src/component-integration/source-control-tab.test.tsx`
-- Modify: `packages/web/src/components/workflows/source-control/source-control-tab.tsx` only if a Task 7 assertion proves a missing freeze or return-to-Now path
+- Modify: `packages/web/src/components/workflows/source-control/source-control-tab.tsx`
 
 **Interfaces:**
 
-- Consumes: `mockGitRoutes`, `CHILD_COMMIT`, `FileViewer`
-- Produces: coverage for return-to-Now, stale freeze, and Enter-expands-without-opening
+- Consumes: `mockGitRoutes`, `CHILD_COMMIT`, `FileViewer`, the three snapshot reducers
+- Produces: scope-preserving pagination, atomic Reload acceptance, return-to-Now, and nested keyboard isolation
 
 - [ ] **Step 1: Write the failing remaining tests**
 
+Add `const REVISION_C = 'e'.repeat(64)` beside the two existing revision fixtures.
 Add:
 
 ```ts
@@ -1909,6 +2453,85 @@ test('selecting a Changes file returns the viewer to now/live', async () => {
   ).toBe(true);
 });
 
+test('Load more keeps the commit oid and opaque cursor for commit text', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({ files: [], revision: REVISION_A }),
+    onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+    onCommitChanges: () => ({
+      files: [{ path: 'added.txt', status: 'A' }],
+      revision: REVISION_B,
+    }),
+    onFile: (_url, call) =>
+      call === 1
+        ? presentedFileResponse('first\n', HASH_A, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Archon-Git-Truncated': 'true',
+            'X-Archon-Git-Cursor': 'commit+cursor',
+            'X-Archon-Git-Byte-Length': '13',
+            'X-Archon-Git-Presentation': 'text',
+          })
+        : presentedFileResponse('second\n', HASH_A, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'X-Archon-Git-Presentation': 'text',
+            'X-Archon-Git-Byte-Length': '13',
+          }),
+  });
+  await renderTab('run/one');
+  await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject) === true, 'commit row');
+  await act(async () => {
+    host.querySelector('#sc-history-commit-0')?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true })
+    );
+  });
+  await waitFor(() => host.textContent?.includes('added.txt') === true, 'commit files');
+  await clickOption('added.txt');
+  await waitFor(() => host.textContent?.includes('Load more') === true, 'Load more');
+  await act(async () => {
+    requireButton('Load more').click();
+  });
+  await waitFor(() => host.textContent?.includes('second') === true, 'second page');
+  const fileUrls = calledUrls(fetchSpy).filter(url => url.includes('/git/file/added.txt'));
+  expect(fileUrls).toHaveLength(2);
+  expect(fileUrls.every(url => url.includes('source=' + CHILD_COMMIT.oid))).toBe(true);
+  expect(fileUrls[1]).toContain('cursor=commit%2Bcursor');
+});
+
+test('Load more keeps the commit oid and opaque cursor for commit hunks', async () => {
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({ files: [], revision: REVISION_A }),
+    onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+    onCommitChanges: () => ({
+      files: [{ path: 'large.ts', status: 'M' }],
+      revision: REVISION_B,
+    }),
+    onDiff: (url, call) => {
+      expect(url).toContain('ref=' + CHILD_COMMIT.oid);
+      if (call === 2) expect(url).toContain('cursor=commit%2Bdiff');
+      return jsonResponse({
+        ...(call === 1 ? FIRST_DIFF_PAGE : SECOND_DIFF_PAGE),
+        scope: 'commit',
+        ref: CHILD_COMMIT.oid,
+        cursor: call === 1 ? 'commit+diff' : '',
+      });
+    },
+  });
+  await renderTab('run/one');
+  await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject) === true, 'commit row');
+  await act(async () => {
+    host.querySelector('#sc-history-commit-0')?.dispatchEvent(
+      new MouseEvent('click', { bubbles: true })
+    );
+  });
+  await waitFor(() => host.textContent?.includes('large.ts') === true, 'commit files');
+  await clickOption('large.ts');
+  await waitFor(() => host.textContent?.includes('Load more') === true, 'Load more');
+  await act(async () => {
+    requireButton('Load more').click();
+  });
+  await waitFor(() => host.textContent?.includes('second') === true, 'second hunk page');
+  expect(calledUrls(fetchSpy).filter(url => url.includes('/git/diff'))).toHaveLength(2);
+});
+
 test('Reload freezes an open commit diff until Changed on disk is accepted', async () => {
   let diffCall = 0;
   fetchSpy = mockGitRoutes({
@@ -1924,10 +2547,16 @@ test('Reload freezes an open commit diff until Changed on disk is accepted', asy
             revision: REVISION_B,
             truncated: false,
           },
-    onCommitChanges: () => ({
-      files: [{ path: 'then.ts', status: 'M' }],
-      revision: REVISION_B,
-    }),
+    onCommitChanges: (_ref, call) =>
+      call === 1
+        ? { files: [{ path: 'then.ts', status: 'M' }], revision: REVISION_B }
+        : {
+            files: [
+              { path: 'then.ts', status: 'M' },
+              { path: 'pending.ts', status: 'A' },
+            ],
+            revision: REVISION_C,
+          },
     onDiff: () => {
       diffCall += 1;
       const after = diffCall === 1 ? 'frozen-after' : 'pending-after';
@@ -1973,6 +2602,7 @@ test('Reload freezes an open commit diff until Changed on disk is accepted', asy
   );
   expect(host.textContent).toContain('frozen-after');
   expect(host.textContent).not.toContain('pending-after');
+  expect(host.textContent).not.toContain('pending.ts');
   expect(host.textContent).toContain(CHILD_COMMIT.subject);
   expect(host.textContent).not.toContain('rewritten subject');
   await act(async () => {
@@ -1980,14 +2610,74 @@ test('Reload freezes an open commit diff until Changed on disk is accepted', asy
   });
   await waitFor(() => host.textContent?.includes('rewritten subject') === true, 'accepted History');
   await waitFor(() => host.textContent?.includes('pending-after') === true, 'accepted commit diff');
+  expect(host.textContent).toContain('pending.ts');
+  const urls = calledUrls(fetchSpy);
+  expect(urls.filter(url => url.includes('/git/log'))).toHaveLength(2);
+  expect(
+    urls.filter(url => url.includes('/git/changes') && !url.includes('ref='))
+  ).toHaveLength(2);
+  expect(
+    urls.filter(url => url.includes('/git/changes') && url.includes('ref=' + CHILD_COMMIT.oid))
+  ).toHaveLength(2);
 });
 ```
 
-Change the existing test `'operates History from the keyboard without opening a diff or file in Story 2.1'` as follows.
-Keep ArrowDown moving `aria-activedescendant`.
-After Enter, assert a `/git/changes?ref=` fetch for the second commit oid.
-Keep asserting no `/git/diff` and no `/git/file/` until a commit file is opened.
-Rename it to `'keyboard Enter expands files and still does not open a diff until a file is activated'`.
+Replace the existing Story 2.1 History keyboard test with:
+
+```ts
+test('keyboard Enter expands files and nested Enter opens one without collapsing History', async () => {
+  const secondCommit = {
+    ...HISTORY_COMMIT,
+    oid: '2'.repeat(40),
+    subject: 'second history subject',
+  };
+  fetchSpy = mockGitRoutes({
+    onChanges: () => ({ files: [], revision: REVISION_A }),
+    onLog: () => ({
+      commits: [HISTORY_COMMIT, secondCommit],
+      revision: REVISION_A,
+      truncated: false,
+    }),
+    onCommitChanges: ref => {
+      expect(ref).toBe(secondCommit.oid);
+      return { files: [{ path: 'nested.ts', status: 'M' }], revision: REVISION_B };
+    },
+    onDiff: url => {
+      expect(url).toContain('ref=' + secondCommit.oid);
+      return jsonResponse({
+        ...readyDiff('nested.ts', 'before', 'after'),
+        scope: 'commit',
+        ref: secondCommit.oid,
+      });
+    },
+  });
+  await renderTab('run-1');
+  await waitFor(() => host.textContent?.includes(HISTORY_COMMIT.subject) === true, 'commit row');
+  const history = host.querySelector('[role="listbox"][aria-label="Commit history"]');
+  if (!(history instanceof HTMLElement)) throw new Error('Missing History listbox');
+  await act(async () => {
+    history.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  });
+  expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-1');
+  await act(async () => {
+    history.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  });
+  await waitFor(() => host.textContent?.includes('nested.ts') === true, 'nested commit file');
+  expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-1');
+  expect(host.querySelector('#sc-history-commit-1')?.getAttribute('aria-expanded')).toBe('true');
+  expect(calledUrls(fetchSpy).filter(url => url.includes('/git/diff'))).toEqual([]);
+  expect(calledUrls(fetchSpy).filter(url => url.includes('/git/file/'))).toEqual([]);
+  const commitFiles = host.querySelector('[role="listbox"][aria-label="Commit files"]');
+  if (!(commitFiles instanceof HTMLElement)) throw new Error('Missing commit files listbox');
+  await act(async () => {
+    commitFiles.focus();
+    commitFiles.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  });
+  await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'nested commit diff');
+  expect(history.getAttribute('aria-activedescendant')).toBe('sc-history-commit-1');
+  expect(host.querySelector('#sc-history-commit-1')?.getAttribute('aria-expanded')).toBe('true');
+});
+```
 
 Keep the CAP-6 tests proving History is absent and no commit fetch occurs.
 
@@ -1996,17 +2686,43 @@ Keep the CAP-6 tests proving History is absent and no commit fetch occurs.
 Run:
 
 ```bash
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
 ```
 
-Expected: FAIL on return-to-Now and/or freeze if Task 6 did not yet wire those paths; the renamed keyboard test should already fetch `?ref=` from Task 6.
+Expected: FAIL because commit Load-more still sends Now sources and Reload does not refetch or freeze the expanded commit list.
 
-- [ ] **Step 3: Make the remaining tests pass with the smallest tab changes**
+- [ ] **Step 3: Implement scoped paging and the three-snapshot Reload transaction**
 
 Do not weaken assertions.
 Do not allow `working_path` in any called URL.
-If return-to-Now fails, set `viewerScope` to `{ kind: 'now' }` in the Changes `onOpenFile` path before `loadViewerFile`.
-If freeze fails, keep `viewerState` on Reload when `viewerScope.kind === 'commit'` and only apply `pendingViewer` in `onAcceptPending`.
+Extend `pendingListRequestRef` with `commitOid: string | null`.
+When aborting a Reload, cancel the exact Now key, log key, and `['workflowRunGitChanges', runId, commitOid]` key when `commitOid` is non-null.
+Do not cancel an ordinary commit expansion from `abortCurrent`; TanStack Query owns cancellation when its key is disabled or replaced.
+
+In `onLoadMore`, capture `const scope = viewerScopeRef.current` beside `file` and `state`.
+For a text page, call `rawSourceFor(file, scope)` and set `{ kind: 'error', file }` if it returns null.
+For a diff page, pass `ref: scope.kind === 'commit' ? scope.oid : undefined` with the existing opaque cursor.
+Keep the existing content-hash and diff-identity checks, including `next.ref === state.response.ref`, before appending a page.
+`onViewerReload` must pass `viewerScopeRef.current` to `loadViewerFile`.
+
+Replace the Reload body with one `Promise.all` over `refetch()`, `refetchHistory()`, and `expandedCommitRef.current === null ? Promise.resolve(null) : refetchCommit()`.
+Store the expanded oid in `pendingListRequestRef` before starting those calls.
+Dispatch successful Now, History, and expanded-commit responses to their own reducers and never copy one response into another reducer.
+Capture the selected file and viewer scope before awaiting the viewer reload.
+Reload the selected file with that captured scope and place it in `pendingViewer`; never replace `viewerState` in the Reload callback.
+When a pending list exists for the open scope, use its path-and-status match as the file passed to `loadViewerFile`; when the open commit is not the currently expanded commit, reuse the selected file because no commit-list response for that oid was requested.
+If the refreshed viewer fingerprint and every refreshed snapshot fingerprint equal their displayed values, clear `pendingViewer`; otherwise keep all changed snapshots and the refreshed viewer pending behind the one stale banner.
+
+In `onAcceptPending`, calculate the accepted Now, History, and commit snapshots before dispatching any action.
+For a Now viewer, require a matching pending viewer when the pending Now list still contains its selected file.
+For a commit viewer whose oid equals the expanded commit, apply the same requirement against the pending commit list.
+If the accepted list for the open scope no longer contains the selected path/status, accept all ready snapshots and close the viewer.
+If any accepted snapshot is CAP-6, accept all pending reducers and close the viewer because the checkout can no longer be read.
+Otherwise dispatch `accept_pending` to every reducer that has a pending snapshot, then replace the viewer only with a `pendingViewer` whose scope matches the current viewer scope.
+If the accepted History list no longer contains the expanded oid, clear `expandedCommit` and reset `dispatchCommit`, but preserve a readable commit-scoped viewer because collapse is not a Return-to-Now action.
+
+Include `commitSnapshotState.pending` in `hasPending` and in the acceptance-readiness calculation so its stale list cannot be accepted without its matching scoped viewer.
+The Changes opener must synchronously set the scope ref and state to `{ kind: 'now' }`; this is the only Return-to-Now behavior.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -2019,7 +2735,7 @@ Expected: PASS.
 ```bash
 git add packages/web/src/component-integration/source-control-tab.test.tsx packages/web/src/components/workflows/source-control/source-control-tab.tsx
 git commit -m "$(cat <<'EOF'
-test(web): cover commit-scope source-control viewer behavior
+feat(web): preserve commit scope through reload and paging
 
 EOF
 )"
@@ -2039,8 +2755,8 @@ EOF
 ( cd packages/git && bun test src/git-oid.test.ts src/changed-files.test.ts src/file-read.test.ts )
 ( cd packages/server && bun test src/routes/api.git-changes.test.ts src/routes/git/checkout-gate.test.ts )
 ( cd packages/web && bun test src/lib/api.git-changes.test.ts )
-NODE_ENV=development bun test packages/web/src/components/workflows/source-control/commit-history-graph.test.tsx packages/web/src/components/workflows/source-control/source-control-panel.test.tsx
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx
+( cd packages/web && NODE_ENV=development bun test src/components/workflows/source-control/commit-history-graph.test.tsx src/components/workflows/source-control/source-control-panel.test.tsx )
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
 ```
 
 Expected: PASS.
@@ -2071,20 +2787,27 @@ Expected: all three exit 0.
 | Criterion | Proof |
 | --- | --- |
 | Select a commit → that commit's `M`/`A`/`D` with Now projections | git name-status tests plus mounted expand test |
+| Root commit uses `--root`; merge commit uses its first parent | root and merge `changedFiles` tests plus ordered-parent helper test |
+| Full object names must be reachable commits under the checkout's current `HEAD` | missing-object and existing-unreachable-object git tests plus HTTP 400 mapping tests |
+| Literal special paths remain safe | colon, leading-dash, space, newline, and glob-metacharacter git tests |
 | Same `FileViewer` / `ChangedFilesList` | tab wiring and distinct `idPrefix` tests |
 | `M` is `parent → commit` | fileDiff argv test and mounted diff `scope: "commit"` |
 | `A` raw from commit oid, `D` raw from first parent | mounted file URL test |
+| Binary `M` raw fallback reads and downloads the commit after-side | git binary fallback test and mounted hex/download URL test |
 | Hunk JSON `scope: "commit"` and `ref` is the full oid, never `live` | HTTP and mounted tests |
 | Client sends only `runId` plus server-issued path/oid | API client tests; no `working_path` |
 | Return to Now restores live scope | mounted Changes click test |
-| Reload / stale banner never mutate the open view | mounted freeze test |
+| Collapsing History hides inline files without changing the open commit view | mounted collapse test |
+| Commit text and hunk pagination preserve the oid and opaque cursor | git cursor-identity test and mounted two-page URL tests |
+| Reload refetches Now, History, and the expanded commit exactly once and freezes all three | mounted endpoint-count and pending-content assertions |
 | Inline expand, Changes pinned, no Back | panel tests |
+| Expanded History rows reserve measured height while the nested list remains virtualized | 200-file graph test with outer and inner size assertions |
 | Expand does not open the viewer | mounted expand test |
 | `changedFiles` / `fileDiff` / `fileAt` accept a commit ref | git tests |
 | Blob reads stay `ls-tree -z` + `cat-file blob` | existing file-read argv test plus commit diff spawn test |
 | CAP-6 HTTP 200 on commit-scoped routes | HTTP tests |
 | JSON OpenAPI except raw file wildcard | route files |
-| Keyboard: Enter expands, file open is a separate activation | mounted keyboard test |
+| Keyboard: outer Enter expands, nested Enter opens, and bubbling never collapses the row | mounted keyboard test and descendant-event guard |
 | No write chrome | panel tests |
 | Console untouched | scoped diff contains no `packages/web/src/experiments/console/` file |
 | No new dependency | `bun.lock` / package manifests unmodified |
