@@ -165,6 +165,37 @@ describe('git utilities', () => {
       const result = await git.getCanonicalRepoPath(testDir);
       expect(result).toBe('/home/user/projects/my-app');
     });
+
+    test('returns same path for submodule checkout with relative gitdir', async () => {
+      await writeFile(join(testDir, '.git'), 'gitdir: ../.git/modules/archon\n');
+      mockLogger.error.mockClear();
+      const result = await git.getCanonicalRepoPath(testDir);
+      expect(result).toBe(testDir);
+      expect(mockLogger.error).not.toHaveBeenCalled();
+    });
+
+    test('returns same path for submodule checkout with absolute gitdir', async () => {
+      await writeFile(join(testDir, '.git'), 'gitdir: /Users/dale/workspace/.git/modules/archon\n');
+      mockLogger.error.mockClear();
+      const result = await git.getCanonicalRepoPath(testDir);
+      expect(result).toBe(testDir);
+      expect(mockLogger.error).not.toHaveBeenCalled();
+    });
+
+    test('throws for a linked worktree of a submodule', async () => {
+      await writeFile(
+        join(testDir, '.git'),
+        'gitdir: /Users/dale/workspace/.git/modules/archon/worktrees/issue-42\n'
+      );
+      mockLogger.error.mockClear();
+      await expect(git.getCanonicalRepoPath(testDir)).rejects.toThrow(
+        'Cannot determine canonical repo path from worktree'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ path: testDir }),
+        'canonical_path_regex_failed'
+      );
+    });
   });
 
   describe('getWorktreeBase', () => {

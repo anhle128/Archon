@@ -1,4 +1,4 @@
-name: superpower-ralph-native-feature
+name: superpower-feature-fix-loop
 description: |
   Use when: Manual Superpowers brainstorming is complete and the user wants the
             feature built with an in-parent Ralph loop plus Codex converge.
@@ -156,8 +156,8 @@ nodes:
     depends_on:
       - verify-and-fix-plan
     provider: omp
-    effort: xhigh
-    model: openai-codex/gpt-5.5
+    model: cursor/gemini-3.8-flash  
+    effort: hight
     context: fresh
     prompt: |
       ## Persona
@@ -621,9 +621,9 @@ nodes:
   - id: create-pull-request-final
     description: Create the pull request after the exhausted final Ralph pass.
     command: archon-create-pr
-    provider: codex
-    model: gpt-5.5
-    effort: medium
+    provider: omp
+    model: cursor/gemini-3.8-flash  
+    effort: hight
     context: fresh
     idle_timeout: 900000
     depends_on:

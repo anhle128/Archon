@@ -282,6 +282,29 @@ export async function isWorktreePath(path: string): Promise<boolean> {
 }
 
 /**
+ * Classify a `.git` *file* pointer (not a `.git` directory).
+ *
+ * Linked worktrees point at `.../.git/worktrees/<id>` or
+ * `.../.git/modules/<name>/worktrees/<id>`. A submodule checkout points at
+ * `.../.git/modules/<name>` with no `worktrees` segment — that working tree
+ * IS the canonical checkout of the module.
+ */
+function classifyGitdirPointer(content: string): 'linked-worktree' | 'submodule' | 'unknown' {
+  const firstLine = content.split(/\r?\n/, 1)[0] ?? '';
+  if (!/^\s*gitdir:\s*\S/.test(firstLine)) {
+    return 'unknown';
+  }
+  const normalized = firstLine.replace(/\\/g, '/');
+  if (/\/\.git\/(?:modules\/(?:[^/]+\/)*)?worktrees(?:\/|$)/.test(normalized)) {
+    return 'linked-worktree';
+  }
+  if (normalized.includes('/.git/modules/')) {
+    return 'submodule';
+  }
+  return 'unknown';
+}
+
+/**
  * Remove a git worktree
  * Throws if uncommitted changes exist (git's natural guardrail)
  */
@@ -300,15 +323,22 @@ export async function removeWorktree(
  */
 export async function getCanonicalRepoPath(path: string): Promise<RepoPath> {
   if (await isWorktreePath(path)) {
-    // Read .git file to find main repo
     const gitPath = join(path, '.git');
     const content = await readFile(gitPath, 'utf-8');
-    // gitdir: /path/to/repo/.git/worktrees/branch-name
-    const match = /gitdir: (.+)\/\.git\/worktrees\//.exec(content);
-    if (match) {
-      return toRepoPath(match[1]);
+    const kind = classifyGitdirPointer(content);
+    if (kind === 'submodule') {
+      // The submodule working tree is the canonical checkout of that module.
+      return toRepoPath(path);
     }
-    // Worktree detected but regex didn't match - this is a real problem
+    if (kind === 'linked-worktree') {
+      // Regular linked worktree: gitdir: <repo>/.git/worktrees/<id>
+      const match = /gitdir: (.+)\/\.git\/worktrees\//.exec(content);
+      // A worktree of a submodule lives under .git/modules/<name>/worktrees/
+      // and this regex cannot map that git-dir back to a working tree.
+      if (match && !content.replace(/\\/g, '/').includes('/.git/modules/')) {
+        return toRepoPath(match[1]);
+      }
+    }
     getLog().error(
       { path, gitContentPrefix: content.substring(0, 120) },
       'canonical_path_regex_failed'
