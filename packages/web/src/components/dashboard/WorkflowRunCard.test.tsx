@@ -52,6 +52,8 @@ describe('WorkflowRunCard Plannotator review link', () => {
     const markup = renderRun(
       workflowRun({
         approval: {
+          nodeId: 'review',
+          message: 'Review the plan',
           type: 'plannotator_gate',
           reviewUrl: 'https://plannotator.example/reviews/run-1',
         },
@@ -68,6 +70,8 @@ describe('WorkflowRunCard Plannotator review link', () => {
     const markup = renderRun(
       workflowRun({
         approval: {
+          nodeId: 'review',
+          message: 'Review the plan',
           type: 'approval',
           reviewUrl: 'https://plannotator.example/reviews/run-1',
         },
@@ -81,6 +85,8 @@ describe('WorkflowRunCard Plannotator review link', () => {
     const markup = renderRun(
       workflowRun({
         approval: {
+          nodeId: 'review',
+          message: 'Review the plan',
           type: 'plannotator_gate',
           reviewUrl: 'javascript:alert(1)',
         },
