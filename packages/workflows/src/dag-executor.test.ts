@@ -96,6 +96,7 @@ import {
   applyLoopPrevToBodyNode,
   executeDagWorkflow,
   collectContainerIncompatibleProviders,
+  collectAskHumanUnsupportedProviders,
   containerCommandName,
   buildSubprocessDockerArgs,
 } from './dag-executor';
@@ -22489,6 +22490,173 @@ describe('collectContainerIncompatibleProviders', () => {
   });
 });
 
+describe('collectAskHumanUnsupportedProviders', () => {
+  const promptNode = (
+    id: string,
+    extra: {
+      provider?: string;
+      model?: string;
+      allowed_tools?: string[];
+      denied_tools?: string[];
+    } = {}
+  ): DagNode => ({ id, prompt: `do ${id}`, ...extra }) as unknown as DagNode;
+  const commandNode = (
+    id: string,
+    extra: { provider?: string; allowed_tools?: string[] } = {}
+  ): DagNode => ({ id, command: 'my-cmd', ...extra }) as unknown as DagNode;
+  const loopNode = (
+    id: string,
+    extra: { provider?: string; allowed_tools?: string[] } = {}
+  ): DagNode =>
+    ({
+      id,
+      loop: { prompt: `loop ${id}`, until: 'DONE', max_iterations: 1 },
+      ...extra,
+    }) as unknown as DagNode;
+  const scope = (
+    provider: string,
+    extra: Partial<WorkflowModelScope> = {}
+  ): WorkflowModelScope => ({
+    provider,
+    model: undefined,
+    preset: undefined,
+    tier: undefined,
+    effort: undefined,
+    providerOrigin: 'workflow',
+    ...extra,
+  });
+  const aliasProfile = {
+    defaultProvider: 'codex',
+    aliases: {
+      '@safe': { provider: 'claude', model: 'claude-sonnet' },
+      '@unsafe': { provider: 'codex', model: 'o3' },
+      '@grok': { provider: 'grok', model: 'grok-1' },
+    },
+  };
+
+  it.each([
+    {
+      name: 'AskHuman on a top-level Codex prompt',
+      nodes: [promptNode('review', { provider: 'codex', allowed_tools: ['AskHuman'] })],
+      scopeProvider: 'claude',
+      expected: ['codex'],
+    },
+    {
+      name: 'mcp__archon__AskHuman on inherited workflow grok',
+      nodes: [promptNode('review', { allowed_tools: ['mcp__archon__AskHuman'] })],
+      scopeProvider: 'grok',
+      expected: ['grok'],
+    },
+    {
+      name: 'AskHuman(allow) specifier on a Codex command',
+      nodes: [commandNode('review', { provider: 'codex', allowed_tools: ['AskHuman(allow)'] })],
+      scopeProvider: 'claude',
+      expected: ['codex'],
+    },
+    {
+      name: 'AskHuman on a Codex loop',
+      nodes: [loopNode('refine', { provider: 'codex', allowed_tools: ['AskHuman'] })],
+      scopeProvider: 'claude',
+      expected: ['codex'],
+    },
+    {
+      name: 'Claude with AskHuman is not reported',
+      nodes: [promptNode('review', { provider: 'claude', allowed_tools: ['AskHuman'] })],
+      scopeProvider: 'codex',
+      expected: [],
+    },
+    {
+      name: 'Pi with AskHuman is not reported',
+      nodes: [promptNode('review', { provider: 'pi', allowed_tools: ['mcp__archon__AskHuman'] })],
+      scopeProvider: 'codex',
+      expected: [],
+    },
+    {
+      name: 'denied_tools AskHuman does not match',
+      nodes: [promptNode('review', { provider: 'codex', denied_tools: ['AskHuman'] })],
+      scopeProvider: 'claude',
+      expected: [],
+    },
+    {
+      name: 'unrelated allowed_tools do not match',
+      nodes: [promptNode('review', { provider: 'codex', allowed_tools: ['Read', 'Bash'] })],
+      scopeProvider: 'claude',
+      expected: [],
+    },
+    {
+      name: 'missing allowed_tools does not match',
+      nodes: [promptNode('review', { provider: 'codex' })],
+      scopeProvider: 'claude',
+      expected: [],
+    },
+  ])('$name', ({ nodes, scopeProvider, expected }) => {
+    expect(collectAskHumanUnsupportedProviders(nodes, scope(scopeProvider))).toEqual(expected);
+  });
+
+  it('nested loop_group body inherits the inner group provider', () => {
+    const nested = {
+      id: 'outer',
+      provider: 'claude',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          {
+            id: 'inner',
+            provider: 'grok',
+            loop_group: {
+              max_iterations: 1,
+              nodes: [promptNode('leaf', { allowed_tools: ['AskHuman'] })],
+            },
+          },
+        ],
+      },
+    } as unknown as DagNode;
+    expect(collectAskHumanUnsupportedProviders([nested], scope('claude'))).toEqual(['grok']);
+  });
+
+  it('group model-alias scope is used for inherited AskHuman body turns', () => {
+    const safeGroup = {
+      id: 'g',
+      model: '@safe',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [promptNode('inner', { allowed_tools: ['AskHuman'] })],
+      },
+    } as unknown as DagNode;
+    expect(
+      collectAskHumanUnsupportedProviders([safeGroup], scope('codex'), {}, aliasProfile)
+    ).toEqual([]);
+
+    const unsafeGroup = {
+      id: 'g',
+      model: '@unsafe',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [promptNode('inner', { allowed_tools: ['AskHuman'] })],
+      },
+    } as unknown as DagNode;
+    expect(
+      collectAskHumanUnsupportedProviders([unsafeGroup], scope('claude'), {}, aliasProfile)
+    ).toEqual(['codex']);
+  });
+
+  it('resolves a node model alias through WorkflowModelScope', () => {
+    const node = promptNode('review', { model: '@grok', allowed_tools: ['AskHuman'] });
+    expect(collectAskHumanUnsupportedProviders([node], scope('claude'), {}, aliasProfile)).toEqual([
+      'grok',
+    ]);
+  });
+
+  it('returns each unsupported provider once in sorted order', () => {
+    const nodes = [
+      promptNode('a', { provider: 'grok', allowed_tools: ['AskHuman'] }),
+      commandNode('b', { provider: 'codex', allowed_tools: ['mcp__archon__AskHuman'] }),
+      loopNode('c', { provider: 'codex', allowed_tools: ['AskHuman(allow)'] }),
+    ];
+    expect(collectAskHumanUnsupportedProviders(nodes, scope('claude'))).toEqual(['codex', 'grok']);
+  });
+});
+
 describe('executeDagWorkflow -- container preflight group scope', () => {
   const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-preflight' };
   let testDir: string;
@@ -25044,5 +25212,136 @@ describe('executeDagWorkflow -- AskHuman pause', () => {
     });
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeDagWorkflow -- AskHuman CAP-7 preflight', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(tmpdir(), `dag-ask-cap7-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'cap7-sess' };
+    });
+    mockGetAgentProviderDag.mockClear();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+  });
+
+  afterEach(async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    try {
+      await rm(testDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  it('rejects Codex allowed_tools AskHuman before any sendQuery', async () => {
+    const mockDeps = createMockDeps();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: () => ({ ...mockClaudeCapabilities(), askHuman: false, nativeTools: false }),
+    }));
+    await expect(
+      executeDagWorkflow(
+        mockDeps,
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'cap7-codex-ask',
+          provider: 'codex',
+          nodes: [{ id: 'review', prompt: 'ask', allowed_tools: ['AskHuman'] }],
+        },
+        makeWorkflowRun(),
+        'codex',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      )
+    ).rejects.toThrow(/AskHuman is not supported by provider 'codex'/);
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+  });
+
+  it('starts the same Codex workflow when allowed_tools omits AskHuman', async () => {
+    const mockDeps = createMockDeps();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'codex',
+      getCapabilities: () => ({ ...mockClaudeCapabilities(), askHuman: false, nativeTools: false }),
+    }));
+    await executeDagWorkflow(
+      mockDeps,
+      createMockPlatform(),
+      'conv-dag',
+      testDir,
+      {
+        name: 'cap7-codex-ok',
+        provider: 'codex',
+        nodes: [{ id: 'review', prompt: 'no ask', allowed_tools: ['Read'] }],
+      },
+      makeWorkflowRun(),
+      'codex',
+      undefined,
+      join(testDir, 'artifacts'),
+      join(testDir, 'state'),
+      join(testDir, 'logs'),
+      'main',
+      'docs/',
+      minimalConfig
+    );
+    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as { nativeTools?: unknown };
+    expect(
+      optionsArg.nativeTools === undefined || (optionsArg.nativeTools as unknown[]).length === 0
+    ).toBe(true);
+  });
+
+  it('rejects mcp__archon__AskHuman on Grok at start', async () => {
+    const mockDeps = createMockDeps();
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'grok',
+      getCapabilities: () => ({ ...mockClaudeCapabilities(), askHuman: false, nativeTools: false }),
+    }));
+    await expect(
+      executeDagWorkflow(
+        mockDeps,
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        {
+          name: 'cap7-grok-ask',
+          provider: 'grok',
+          nodes: [{ id: 'review', prompt: 'ask', allowed_tools: ['mcp__archon__AskHuman'] }],
+        },
+        makeWorkflowRun(),
+        'grok',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        minimalConfig
+      )
+    ).rejects.toThrow(/AskHuman is not supported by provider 'grok'/);
+    expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 });
