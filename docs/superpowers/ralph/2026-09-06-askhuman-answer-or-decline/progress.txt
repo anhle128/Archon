@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Live interaction_resolved is identifier-only; persisted mapper branches on purged
+- **Where**: `packages/workflows/src/event-emitter.ts`, `packages/server/src/adapters/web/workflow-bridge.ts`, `packages/adapters/src/chat/slack/workflow-bridge.ts`
+- **Pattern**: Live `InteractionResolvedEvent` is `{ type, runId, nodeId, resumed }` only. The web live mapper emits `workflow_status` with `status: event.resumed ? 'running' : 'paused'`. The persisted mapper checks `data.purged` first (`terminal_status === 'failed'` → failed, else cancelled), then `data.resumed` (true → running, missing/unknown → paused). Add the type to `DASHBOARD_SOURCE_EVENT_TYPES`. Slack handles the case with `break` and sends no message. Never copy toolUseId/envelope/answer/questions/options/approval onto SSE.
+- **Example**: `status: event.resumed ? 'running' : 'paused'`
+
 ### Resolve is on the pending store port; purge is not
 - **Where**: `packages/workflows/src/store.ts`, `packages/core/src/workflows/store-adapter.ts`
 - **Pattern**: Add only `resolvePendingInteraction(input: ResolvePendingInteractionInput): Promise<ResolvePendingInteractionResult>` to `IWorkflowPendingInteractionStore`. Adapter delegates to the core DB helper. Do not add purge to the port. Each test file owns its own typed stub; do not introduce a cross-suite mock factory.
@@ -128,5 +133,32 @@
 - The pending store port is resolve-only; purge stays an internal DB lifecycle helper and must not appear on IWorkflowPendingInteractionStore or test doubles.
 - Workflow `tsconfig.json` excludes `**/*.test.ts`, so `bun x tsc --noEmit` does not typecheck doubles; class doubles that `implements IWorkflowStore` still need the method for local correctness.
 - Do not introduce a shared mock factory; repeat the typed stub inside each test file that already owns the double.
+
+---
+
+## 2026-09-06 — US-005: Map AskHuman resolution as a refetch event
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/event-emitter.ts` — added InteractionResolvedEvent to the live union
+- `packages/workflows/src/event-emitter.test.ts` — subscriber receives identifier-only interaction_resolved
+- `packages/server/src/adapters/web/workflow-bridge.ts` — live running/paused mapping, persisted answered vs purged mapping, dashboard allowlist, dataBool helper
+- `packages/server/src/adapters/web/workflow-bridge.test.ts` — resumed true/false payload-isolation tests
+- `packages/server/src/adapters/web/dashboard-event-poller.test.ts` — allowlist plus answered running and purged cancelled refetch triggers
+- `packages/adapters/src/chat/slack/workflow-bridge.ts` — explicit interaction_resolved break
+- `packages/adapters/src/chat/slack/workflow-bridge.test.ts` — asserts no Slack message
+
+**Acceptance criteria verified**:
+- [x] InteractionResolvedEvent { type: 'interaction_resolved'; runId; nodeId; resumed } added to WorkflowEmitterEvent
+- [x] Live web bridge maps to workflow_status with status running when resumed, paused otherwise
+- [x] interaction_resolved added to DASHBOARD_SOURCE_EVENT_TYPES; answered rows map running/paused; purged rows map failed/cancelled
+- [x] Neither live nor persisted SSE mappings leak toolUseId, envelope, answer, questions, options, or approval
+- [x] Slack handles case 'interaction_resolved': break without sending chat messages
+- [x] bun test src/event-emitter.test.ts; bun test src/adapters/web/workflow-bridge.test.ts; bun test src/adapters/web/dashboard-event-poller.test.ts; bun test src/chat/slack/workflow-bridge.test.ts
+
+**Learnings**:
+- Do not add interaction_resolved to ROW_WORKFLOW_STATUS; that table is a static event_type→status map and cannot branch on resumed vs purged.
+- Purge rows store both `purged: true` and `resumed: false`; check purged first or they would refetch as paused.
+- Missing persisted `resumed` must fail safe to paused, never running.
 
 ---
