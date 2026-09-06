@@ -39,6 +39,14 @@ const HISTORY_COMMIT: GitLogCommit = {
   subject: 'initial history subject',
 };
 
+const CHILD_COMMIT: GitLogCommit = {
+  oid: 'c'.repeat(40),
+  parents: ['b'.repeat(40)],
+  authorName: 'Ada',
+  authorDate: '2026-09-06T18:09:18Z',
+  subject: 'child subject',
+};
+
 const FIRST_DIFF_PAGE: GitReadyDiffResponse = {
   path: 'large.ts',
   status: 'M',
@@ -267,6 +275,11 @@ function mockGitRoutes(options: {
     call: number,
     init?: RequestInit
   ) => GitChangesResponse | Response | Promise<GitChangesResponse | Response>;
+  onCommitChanges?: (
+    ref: string,
+    call: number,
+    init?: RequestInit
+  ) => GitChangesResponse | Response | Promise<GitChangesResponse | Response>;
   onDiff?: (url: string, call: number, init?: RequestInit) => Response | Promise<Response>;
   onFile?: (url: string, call: number, init?: RequestInit) => Response | Promise<Response>;
   onLog?: (
@@ -275,6 +288,7 @@ function mockGitRoutes(options: {
   ) => GitLogResponse | Response | Promise<GitLogResponse | Response>;
 }): Mock<typeof fetch> {
   let changesCall = 0;
+  let commitChangesCall = 0;
   let diffCall = 0;
   let fileCall = 0;
   let logCall = 0;
@@ -289,6 +303,14 @@ function mockGitRoutes(options: {
       return result instanceof Response ? result : jsonResponse(result);
     }
     if (url.includes('/git/changes')) {
+      const parsed = new URL(url, 'http://archon.local');
+      const ref = parsed.searchParams.get('ref');
+      if (ref !== null) {
+        commitChangesCall += 1;
+        if (!options.onCommitChanges) throw new Error(`Unexpected commit changes fetch: ${url}`);
+        const result = await options.onCommitChanges(ref, commitChangesCall, init);
+        return result instanceof Response ? result : jsonResponse(result);
+      }
       changesCall += 1;
       const result = await options.onChanges(changesCall, init);
       return result instanceof Response ? result : jsonResponse(result);
@@ -1758,6 +1780,7 @@ describe('SourceControlTab', () => {
         revision: REVISION_A,
         truncated: false,
       }),
+      onCommitChanges: () => ({ files: [], revision: REVISION_B }),
     });
 
     await renderTab('run-1');
@@ -1847,5 +1870,203 @@ describe('SourceControlTab', () => {
     await clickOption('virtual.ts');
     await waitFor(() => host.querySelectorAll('.sc-virtual-hunk').length > 0, 'virtual hunks');
     expect(host.querySelectorAll('.sc-virtual-hunk').length).toBeLessThan(3000);
+  });
+
+  test('expanding a commit fetches that commit list and does not open the viewer', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [{ path: 'now.ts', status: 'A' }], revision: REVISION_A }),
+      onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+      onCommitChanges: ref => {
+        expect(ref).toBe(CHILD_COMMIT.oid);
+        return { files: [{ path: 'then.ts', status: 'M' }], revision: REVISION_B };
+      },
+    });
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    const row = host.querySelector('#sc-history-commit-0');
+    if (!(row instanceof HTMLElement)) throw new Error('missing commit row');
+    await act(async () => {
+      row.click();
+    });
+    await waitFor(() => host.textContent?.includes('then.ts'), 'commit files');
+    expect(host.textContent).toContain('now.ts');
+    expect(host.querySelector('[aria-label="Before"]')).toBeNull();
+    expect(
+      calledUrls(fetchSpy).filter(
+        url => url.includes('/git/changes') && url.includes('ref=' + CHILD_COMMIT.oid)
+      )
+    ).toHaveLength(1);
+    expect(calledUrls(fetchSpy).some(url => url.includes('/git/diff'))).toBe(false);
+    expect(calledUrls(fetchSpy).some(url => url.includes('/git/file/'))).toBe(false);
+    expect(calledUrls(fetchSpy).some(url => url.includes('working_path'))).toBe(false);
+  });
+
+  test('opening a commit M file uses parent-to-commit diff in the same viewer', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [{ path: 'now.ts', status: 'A' }], revision: REVISION_A }),
+      onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+      onCommitChanges: () => ({
+        files: [{ path: 'then.ts', status: 'M' }],
+        revision: REVISION_B,
+      }),
+      onDiff: url => {
+        expect(url).toContain('ref=' + CHILD_COMMIT.oid);
+        expect(url).toContain('path=then.ts');
+        return jsonResponse({
+          path: 'then.ts',
+          status: 'M',
+          scope: 'commit',
+          ref: CHILD_COMMIT.oid,
+          hunks: [
+            {
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              header: '@@ -1 +1 @@',
+              changes: [
+                { type: 'delete', content: 'before', oldLine: 1 },
+                { type: 'insert', content: 'after', newLine: 1 },
+              ],
+            },
+          ],
+          cursor: '',
+          truncated: false,
+          binary: false,
+          fileFallback: false,
+        });
+      },
+    });
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    const row = host.querySelector('#sc-history-commit-0');
+    if (!(row instanceof HTMLElement)) throw new Error('missing commit row');
+    await act(async () => {
+      row.click();
+    });
+    await waitFor(() => host.textContent?.includes('then.ts'), 'commit files');
+    await clickOption('then.ts');
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'commit diff');
+    expect(host.querySelector('[aria-label="After"]')).not.toBeNull();
+  });
+
+  test('collapsing History hides only the inline files and preserves the commit viewer', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+      onCommitChanges: () => ({
+        files: [{ path: 'then.ts', status: 'M' }],
+        revision: REVISION_B,
+      }),
+      onDiff: () =>
+        jsonResponse({
+          ...readyDiff('then.ts', 'before', 'after'),
+          scope: 'commit',
+          ref: CHILD_COMMIT.oid,
+        }),
+    });
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    const row = host.querySelector('#sc-history-commit-0');
+    if (!(row instanceof HTMLElement)) throw new Error('missing commit row');
+    await act(async () => {
+      row.click();
+    });
+    await waitFor(() => host.querySelector('[aria-label="Commit files"]') !== null, 'commit files');
+    await clickOption('then.ts');
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'commit diff');
+    await act(async () => {
+      row.click();
+    });
+    expect(row.getAttribute('aria-expanded')).toBe('false');
+    expect(host.querySelector('[aria-label="Commit files"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Before"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="After"]')).not.toBeNull();
+  });
+
+  test('opening a commit A file reads the commit oid and a D file reads the parent oid', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+      onCommitChanges: () => ({
+        files: [
+          { path: 'added.ts', status: 'A' },
+          { path: 'gone.ts', status: 'D' },
+        ],
+        revision: REVISION_B,
+      }),
+      onFile: _url => textFileResponse('body\n', HASH_A),
+    });
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    await act(async () => {
+      host
+        .querySelector('#sc-history-commit-0')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await waitFor(() => host.textContent?.includes('added.ts'), 'commit files');
+    const commitFetchSpy = fetchSpy;
+    if (!commitFetchSpy) throw new Error('Missing fetch spy');
+    await clickOption('added.ts');
+    await waitFor(
+      () =>
+        calledUrls(commitFetchSpy).some(
+          url => url.includes('/git/file/added.ts') && url.includes('source=' + CHILD_COMMIT.oid)
+        ),
+      'commit A source'
+    );
+    await clickOption('gone.ts');
+    await waitFor(
+      () =>
+        calledUrls(commitFetchSpy).some(
+          url =>
+            url.includes('/git/file/gone.ts') && url.includes('source=' + CHILD_COMMIT.parents[0])
+        ),
+      'commit D parent source'
+    );
+  });
+
+  test('a commit M raw fallback reads and downloads the after side from the commit oid', async () => {
+    fetchSpy = mockGitRoutes({
+      onChanges: () => ({ files: [], revision: REVISION_A }),
+      onLog: () => ({ commits: [CHILD_COMMIT], revision: REVISION_A, truncated: false }),
+      onCommitChanges: () => ({
+        files: [{ path: 'blob.bin', status: 'M' }],
+        revision: REVISION_B,
+      }),
+      onDiff: () =>
+        jsonResponse({
+          path: 'blob.bin',
+          status: 'M',
+          scope: 'commit',
+          ref: CHILD_COMMIT.oid,
+          hunks: [],
+          cursor: '',
+          truncated: false,
+          binary: true,
+          fileFallback: true,
+        }),
+      onFile: () =>
+        presentedFileResponse(Uint8Array.from([0, 0x41]), HASH_A, {
+          'Content-Type': 'application/octet-stream',
+          'X-Archon-Git-Presentation': 'hex',
+          'X-Archon-Git-Byte-Length': '2',
+        }),
+    });
+    await renderTab('run/one');
+    await waitFor(() => host.textContent?.includes(CHILD_COMMIT.subject), 'commit row');
+    await act(async () => {
+      host
+        .querySelector('#sc-history-commit-0')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await waitFor(() => host.textContent?.includes('blob.bin'), 'commit files');
+    await clickOption('blob.bin');
+    await waitFor(() => host.textContent?.includes('00000000'), 'hex fallback');
+    const fileUrls = calledUrls(fetchSpy).filter(url => url.includes('/git/file/blob.bin'));
+    expect(fileUrls).toHaveLength(1);
+    expect(fileUrls[0]).toContain('source=' + CHILD_COMMIT.oid);
+    expect(host.querySelector('a')?.getAttribute('href')).toContain('source=' + CHILD_COMMIT.oid);
+    expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
   });
 });
