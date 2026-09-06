@@ -539,6 +539,7 @@ import { gitChangesRoute } from './git/changes-route';
 import { handleGitChanges } from './git/changes-handler';
 import { gitDiffRoute } from './git/diff-route';
 import { handleGitDiff } from './git/diff-handler';
+import { handleGitFile } from './git/file-handler';
 
 // Read app version: use build-time constant in binary, package.json in dev
 let appVersion = 'unknown';
@@ -5005,6 +5006,14 @@ export function registerApiRoutes(
   // GET /api/workflows/runs/:runId/git/diff - Now hunks for a modified file
   registerOpenApiRoute(gitDiffRoute, async c => {
     return handleGitDiff(c, apiError);
+  });
+
+  // GET /api/workflows/runs/:runId/git/file/*
+  // The wildcard carries a server-issued git-relative path and is decoded exactly once.
+  // NUL, absolute paths, and any slash or backslash ".." segment are rejected after decoding.
+  // OpenAPI 3.0 cannot represent this wildcard, and successful responses are raw bytes.
+  app.get('/api/workflows/runs/:runId/git/file/*', async c => {
+    return handleGitFile(c, apiError);
   });
 
   // GET /api/usage - Installation usage/cost report (direct runs only)
