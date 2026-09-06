@@ -18,8 +18,8 @@
       "technicalNotes": "Follow packages/workflows/src/store.ts:177-213 for narrow capability composition. Create node-message.ts, node-message.test.ts, pending-interaction.ts, pending-interaction.test.ts; modify schemas/index.ts, store.ts, dag-executor.test.ts, executor.test.ts, executor-preamble.test.ts, script-node-deps.test.ts, subrun.test.ts, and package.json. This is plan Task 1.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/workflows/src/schemas/node-message.ts, node-message.test.ts, pending-interaction.ts, pending-interaction.test.ts, schemas/index.ts, store.ts, dag-executor.test.ts, executor.test.ts, executor-preamble.test.ts, script-node-deps.test.ts, subrun.test.ts, package.json."
     },
     {
       "id": "US-002",
@@ -37,8 +37,8 @@
       "technicalNotes": "Insert relative to migrations/000_combined.sql:721-748 and its trailing workflow ENV comments at :930-941. Mirror after the workflow ENV table in packages/core/src/db/adapters/sqlite.ts:1063-1076. Update packages/core/src/db/adapters/sqlite.test.ts around its parity floor at :1487. This is plan Task 2 and must preserve additive-only schema rules.",
       "dependsOn": [],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: migrations/000_combined.sql, packages/core/src/db/adapters/sqlite.ts, packages/core/src/db/adapters/sqlite.test.ts, packages/core/src/db/bundled-schema.generated.ts, AGENTS.md."
     },
     {
       "id": "US-003",
@@ -60,8 +60,8 @@
         "US-002"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/core/src/schemas/workflow-node-message.ts, schemas/index.ts, db/workflow-node-messages.ts, workflow-node-messages.test.ts, db/index.ts, package.json, store-adapter.ts, store-adapter.test.ts."
     },
     {
       "id": "US-004",
@@ -79,8 +79,8 @@
         "US-003"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/core/src/workflows/store-adapter.test.ts."
     },
     {
       "id": "US-005",
@@ -98,8 +98,8 @@
         "US-001"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/workflows/src/node-transcript.ts, node-transcript.test.ts, package.json."
     },
     {
       "id": "US-006",
@@ -121,8 +121,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/workflows/src/dag-executor.ts, dag-executor.test.ts."
     },
     {
       "id": "US-007",
@@ -143,8 +143,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/workflows/src/dag-executor.ts, packages/workflows/src/dag-executor.test.ts."
     },
     {
       "id": "US-008",
@@ -164,8 +164,8 @@
         "US-003"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts."
     },
     {
       "id": "US-009",
@@ -184,8 +184,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/lib/api.generated.d.ts, packages/web/src/lib/api.ts, packages/web/src/lib/get-workflow-node-messages.test.ts."
     },
     {
       "id": "US-010",
@@ -194,7 +194,7 @@
       "acceptanceCriteria": [
         "Create buildLogRows with the exact node, loop_iteration, and route_iteration selection variants and LogRow fields required by the plan.",
         "Tests prove normal rows use exact server status; loop and route events replace base rows; iteration completion/failure determines iteration status; route rows are completed; rows interleave by event position; latest node_started places a re-executed ordinary node; invalid iteration/execution sequence is ignored; and source order breaks ties.",
-        "Use node state name labels for normal rows, name ×iteration for loop rows, and name #executionSeq for route rows. Use event ids for repeated iteration/route row identity, with the latest lifecycle or stable node id fallback for ordinary rows.",
+        "Use node state name labels for normal rows, name \u00d7iteration for loop rows, and name #executionSeq for route rows. Use event ids for repeated iteration/route row identity, with the latest lifecycle or stable node id fallback for ordinary rows.",
         "Remove buildDagNodeStatesFromEvents. When server nodeStates is absent, buildWorkflowDagNodeStates returns no lifecycle nodes; route enrichment skips missing nodes and adds only routeDecision without changing existing server status.",
         "Retain loop iteration/progress enrichment only for existing nodes and remove runtimeMetadataFromEventData only if it has no remaining caller.",
         "Preserve raw nodeStates in WorkflowRunQueryData and return data.nodeStates from the query for Logs use. Pass build-log-rows and WorkflowExecution focused tests plus web type check.",
@@ -205,8 +205,8 @@
         "US-009"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/web/src/components/workflows/build-log-rows.ts, build-log-rows.test.ts, WorkflowExecution.tsx, WorkflowExecution.test.tsx."
     },
     {
       "id": "US-011",
@@ -224,8 +224,8 @@
         "US-010"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/web/src/components/workflows/NodeRunList.tsx, NodeRunList.test.tsx."
     },
     {
       "id": "US-012",
@@ -245,8 +245,8 @@
         "US-010"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/web/src/components/workflows/NodeRoom.tsx, NodeRoom.test.tsx."
     },
     {
       "id": "US-013",
@@ -266,8 +266,8 @@
         "US-012"
       ],
       "priority": 13,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 13. Files: packages/web/src/components/workflows/NodeTranscriptPane.tsx, NodeTranscriptPane.test.tsx."
     },
     {
       "id": "US-014",
@@ -289,8 +289,8 @@
         "US-013"
       ],
       "priority": 14,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 14. Files: packages/web/src/components/workflows/LegacyNodeLogs.tsx, LegacyNodeLogs.test.tsx, WorkflowExecution.tsx."
     },
     {
       "id": "US-015",

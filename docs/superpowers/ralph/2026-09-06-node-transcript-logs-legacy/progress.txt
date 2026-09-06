@@ -1,0 +1,453 @@
+## Codebase Patterns
+
+### Avoid bang-prefixed lines in eval Python strings
+- **Where**: `packages/web/src/components/workflows/WorkflowExecution.tsx` roomFooter wiring
+- **Pattern**: A line that begins with bang inside an eval-tool Python string is interpolated as a shell snippet and can rewrite source to `__omp_shell(...)`. Prefer `isRunning || length === 0` over a bang-prefixed condition. Keep unique-string Python with match count == 1 and `export function WorkflowExecution` as the surviving marker.
+- **Example**: `isRunning || workflow.artifacts.length === 0 ? undefined : footer`
+
+### HappyDOM QueryClient transcript tests
+- **Where**: `packages/web/src/components/workflows/NodeTranscriptPane.test.tsx`
+- **Pattern**: `NODE_ENV=production` loads React without `act`. Set `process.env.NODE_ENV = 'development'` then dynamically import react/react-query/react-dom and the pane. Do not destructure PascalCase names from `await import` (`naming-convention`). Make Query notifications sync with `notifyManager.setScheduler(cb => cb())` and restore afterEach. Restore HappyDOM globals, unmount the root, `win.close()`, and `queryClient.clear()` so `bun test src/components/` is not polluted. Never StrReplace this file — unique-string Python with a surviving later marker.
+- **Example**: `const reactQuery = await import('@tanstack/react-query'); new reactQuery.QueryClient({ defaultOptions: { queries: { retry: false } } })`
+
+### Static markup HTML entities
+- **Where**: `packages/web/src/components/workflows/NodeRoom.test.tsx`
+- **Pattern**: `renderToStaticMarkup` encodes apostrophes as `&#x27;` and quotes as `&quot;`. Decode in `visibleText` before asserting exact copy or JSON tool input.
+- **Example**: `.replace(/&#x27;/g, "'").replace(/&quot;/g, '"')`
+
+### NodeRunList static markup and status colors
+- **Where**: `packages/web/src/components/workflows/NodeRunList.tsx`, `NodeRunList.test.tsx`
+- **Pattern**: Copy StatusBadge classes from WorkflowExecution (`bg-success/20 text-success`, etc.). `onSelect` receives the full LogRow. Web `*.test.tsx` is ESLint-checked unlike `*.test.ts`; avoid `String#match` (`prefer-regexp-exec`) and void-expression onClick shorthands. Tests use `renderToStaticMarkup`.
+- **Example**: `aria-current={selected ? 'true' : undefined}` and `onClick={(): void => { onSelect(row); }}`
+
+### Unique-string rewrite for WorkflowExecution.tsx
+- **Where**: `packages/web/src/components/workflows/WorkflowExecution.tsx`
+- **Pattern**: Editor text-replace truncated this 885-line file to 255 lines. Restore with `git checkout --`, then unique-string Python with match count == 1, line-count assertion, and a surviving later marker such as `export function WorkflowExecution`. Keep `runtimeMetadataFromEventData` while `currentlyExecuting` still spreads it.
+- **Example**: `assert 'export function WorkflowExecution' in text` after writing
+
+
+### Isolated OpenAPI type generation
+- **Where**: `packages/web/package.json` `generate:types`, `packages/web/src/lib/api.ts`
+- **Pattern**: Do not reuse a listener on 3090 from another checkout. Start `startServer({ port, skipPlatformAdapters: true })` with a temp `ARCHON_HOME` and empty `DATABASE_URL`, then run `openapi-typescript` against that live `/api/openapi.json`. Never hand-edit `api.generated.d.ts`. Mirror `api.conversations.test.ts` fetch spies; success path does not need `window`.
+- **Example**: `getWorkflowNodeMessages(runId, nodeId)` encodes both path ids and returns `WorkflowNodeMessagesResponse`
+
+### Nested transcript GET and empty pending embed
+- **Where**: `packages/server/src/routes/api.ts`, `packages/server/src/routes/schemas/workflow.schemas.ts`, `packages/server/src/routes/api.workflow-runs.test.ts`
+- **Pattern**: Reuse engine payload schemas; omit `workflow_run_id`/`node_id`; `safeExtend` timestamps to strings. Register `GET /api/workflows/runs/{runId}/nodes/{nodeId}/messages` before GET run. Check `workflowDb.getWorkflowRun` before `listNodeMessages`. Log only `{ runId, nodeId, errorType }` on list failure. GET run always returns `pending_interactions: []` with no pending-table read. Mock only `@archon/core/db/workflow-node-messages` in the workflow-runs suite — connection is lazy so other api tests do not need it.
+- **Example**: `return apiError(c, 500, 'Failed to list workflow node messages')`
+
+### Unique-string rewrite for workflow.schemas.ts
+- **Where**: `packages/server/src/routes/schemas/workflow.schemas.ts`
+- **Pattern**: Editor text-replace truncated this file (404→336). Restore with `git checkout --`, then unique-string Python with match count == 1 and a surviving later marker.
+- **Example**: `assert 'workflowRunsQuerySchema' in text` after writing
+
+
+### Loop transcript recording
+- **Where**: `packages/workflows/src/dag-executor.ts` `executeLoopNode`
+- **Pattern**: Local `recordLoopStatus` keyed by prefixed `stepName`. Await started after scheduled `node_started`; failed inside `failLoopNode` after scheduled `node_failed`; iteration markers after the matching loop_iteration_* events with `detail: String(i)`; `iteration_failed` before `failLoopNode` at both existing failed-event sites. Cleaned non-empty assistant text and tool rows use the same id/input rule as command/prompt. Completed only after `node_completed` on completionDetected and after `finalizeLoopFromSignal`. Do not record loop-group container output.
+- **Example**: `await recordLoopStatus('iteration_started', String(i))` after `loop_iteration_started`
+
+### Command/prompt transcript recording
+- **Where**: `packages/workflows/src/dag-executor.ts` `executeNodeInternal`
+- **Pattern**: Await `appendNodeTranscript` after scheduling the matching lifecycle event. Record assistant text at the start of the non-empty assistant branch, before batch/stream send. Tool rows use the chosen toolCallId and omit `input` when undefined. Fail-open stays in `node-transcript.ts`. Move `$node.output.field` substitution into the prompt-substitution try and wrap `getAgentProvider` so both return a failed NodeExecutionResult instead of escaping to runLayers.
+- **Example**: `await recordNodeStatus('started')` after `node_started`; `await recordFailedStatus(err.message)` after `node_failed`
+
+### Mock store retains sequenced transcript rows
+- **Where**: `packages/workflows/src/dag-executor.test.ts` `createMockStore`
+- **Pattern**: Keep append inputs in an array, assign increasing seq, and filter `listNodeMessages(runId, nodeId)` by identity then sort by seq. Table-driven command/prompt tests live in a dedicated describe at the end of this 24k-line file.
+- **Example**: `expect(transcriptTimeline(rows)).toEqual(['started', 'text', 'tool', 'text', 'completed'])`
+
+
+### Isolated @archon/paths mock shard
+- **Where**: `packages/workflows/src/node-transcript.test.ts`, `packages/workflows/package.json`
+- **Pattern**: mock.module('@archon/paths') then dynamically import the helper so createLogger is intercepted. Keep `bun test src/node-transcript.test.ts` as its own invocation beside logger.test.ts. Do not mix it into the schema shard. ESLint ignores the test file; lint the production helper only.
+- **Example**: `appendNodeTranscript` logs `{ workflowRunId, nodeId, kind, errorType }` under `workflow.node_message_append_failed` and never the payload
+
+### Unique-string rewrite for store-adapter.test.ts
+- **Where**: `packages/core/src/workflows/store-adapter.test.ts`
+- **Pattern**: Editor text-replace can truncate this 1100+ line file even when the replace reports not-found. If `wc -l` drops, restore with `git checkout --`. Apply unique-string replacements in Python with match count == 1, an expected line delta, and a surviving later marker such as `createWorkflowDeps`.
+- **Example**: `assert text.count(old) == 1` then `assert 'createWorkflowDeps' in text` after writing
+
+### Additive schema: table then trailing comments
+- **Where**: `migrations/000_combined.sql`, `packages/core/src/db/adapters/sqlite.ts`
+- **Pattern**: New tables go in CREATE TABLE after the last application table and before `-- Indexes and column comments`. COMMENT ON TABLE may sit beside CREATE. COMMENT ON COLUMN and CREATE INDEX go only in the trailing section. Do not add a new table to migrateColumns; CREATE TABLE IF NOT EXISTS creates it on existing DBs. After the migration, run `bun run generate:bundled-schema`. Raise MIN_NON_AUTH_COLUMNS by the new column count.
+- **Example**: table 22 `remote_agent_workflow_node_messages` — unique `(workflow_run_id, node_id, seq)` is the covering lookup/order index, so no extra CREATE INDEX.
+
+### Narrow IWorkflowStore capabilities
+- **Where**: `packages/workflows/src/store.ts`
+- **Pattern**: Add a dedicated interface (IRunTreeStore, IWorkflowEnvOverlayStore, IWorkflowNodeMessageStore) and compose it onto IWorkflowStore with `extends`. Do not add the new methods as loose members of the fat interface.
+- **Example**: `export interface IWorkflowStore extends IRunTreeStore, IWorkflowEnvOverlayStore, IWorkflowNodeMessageStore`
+
+### Workflow package type-check excludes tests
+- **Where**: `packages/workflows/tsconfig.json`
+- **Pattern**: `exclude: ["**/*.test.ts"]`, so `bun x tsc --noEmit` will not catch missing IWorkflowStore methods on test doubles. Still update every named typed double. The real core adapter is a later story.
+
+### Schema test shard
+- **Where**: `packages/workflows/package.json` `test` script
+- **Pattern**: Schema tests belong in the existing mock-safe invocation with `src/schemas.test.ts` and `src/schemas/env-overlay.test.ts`. Do not add a new bun test process for schema files. Keep mock.module suites in their own invocations.
+
+### Zod conventions
+- **Where**: `packages/workflows/src/schemas/*.ts`
+- **Pattern**: Import `z` from `@hono/zod-openapi`, derive types with `z.infer`, use `.strict()` objects, and `z.record(z.string(), valueSchema)`. Discriminated unions keep kind/payload correlated.
+
+### Large-file edits
+- **Where**: `packages/workflows/src/subrun.test.ts`, `dag-executor.test.ts`, `packages/core/src/workflows/store-adapter.ts`, `store-adapter.test.ts`
+- **Pattern**: Line-anchored text replace can truncate these files. Prefer a unique-string in-place rewrite that asserts match count == 1 and verifies line count after writing.
+
+### Core IWorkflowStore adapter is in the type-check graph
+- **Where**: `packages/core/src/workflows/store-adapter.ts`
+- **Pattern**: Core `tsc` includes store-adapter. Adding methods to IWorkflowStore fails `bun x tsc --noEmit` until createWorkflowStore wires them. Mock `../db/workflow-node-messages` in store-adapter.test.ts before the dynamic import; that file shares a bun test invocation with child-isolation-resolver.test.ts.
+- **Example**: `appendNodeMessage: input => workflowNodeMessageDb.appendNodeMessage(input)`
+
+### Dialect numeric coercion
+- **Where**: `packages/core/src/db/workflow-node-messages.ts`
+- **Pattern**: `@typescript-eslint/no-unnecessary-type-conversion` rejects `Number()` on a `number`. Type PG/SQLite MAX() results as `number | string` when both dialects can appear.
+- **Example**: `query<{ next_seq: number | string }>(...)` then `Number(next.rows[0]?.next_seq ?? 1)`
+
+---
+
+## 2026-09-06 — US-001: Define engine transcript contracts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/schemas/node-message.ts` — discriminated text/tool/status row and append schemas
+- `packages/workflows/src/schemas/node-message.test.ts` — kind/payload correlation and identity validation
+- `packages/workflows/src/schemas/pending-interaction.ts` — adopted Ask/permission embed contract
+- `packages/workflows/src/schemas/pending-interaction.test.ts` — rejects forked kind/status enums
+- `packages/workflows/src/schemas/index.ts` — re-exports both modules
+- `packages/workflows/src/store.ts` — IWorkflowNodeMessageStore composed into IWorkflowStore
+- `packages/workflows/src/dag-executor.test.ts` — typed double append/list
+- `packages/workflows/src/executor.test.ts` — typed double append/list
+- `packages/workflows/src/executor-preamble.test.ts` — typed double append/list
+- `packages/workflows/src/script-node-deps.test.ts` — typed double append/list
+- `packages/workflows/src/subrun.test.ts` — in-memory sequencing/filtering
+- `packages/workflows/package.json` — schema tests added to mock-safe shard
+
+**Acceptance criteria verified**:
+- [x] Create node-message.ts with strict Zod discriminated text, tool, and status variants; append input omits id, seq, created_at
+- [x] Text/tool/status payload rules; tests prove kind/payload correlation and reject invalid identity while accepting a future status note
+- [x] Create pending-interaction.ts with the adopted fields; tests reject forked enum values
+- [x] z from @hono/zod-openapi, z.infer, strict objects, z.record(z.string(), z.unknown()); re-exported from schemas/index.ts
+- [x] IWorkflowNodeMessageStore with appendNodeMessage and listNodeMessages composed into IWorkflowStore
+- [x] Every named typed IWorkflowStore double updated, including in-memory sequencing in subrun.test.ts; plannotator unknown casts unchanged
+- [x] Schema tests in the existing mock-safe schema invocation; RED/GREEN plus focused workflow type/test commands passed
+- [x] Commit message `feat(workflows): define node transcript contracts`
+
+**Learnings**:
+- bun install was required in this worktree before any `@hono/zod-openapi` import resolved
+- Workflows `tsc` excludes tests; store-double updates are still required by the story even when type-check would pass without them
+- Run mock.module test files in separate bun test invocations, matching package.json shards
+
+---
+
+## 2026-09-06 — US-002: Add additive transcript storage schemas
+
+**Status**: PASSED
+**Files changed**:
+- `migrations/000_combined.sql` — table 22 remote_agent_workflow_node_messages plus trailing column comments
+- `packages/core/src/db/adapters/sqlite.ts` — matching CREATE TABLE in createSchema; not migrateColumns
+- `packages/core/src/db/adapters/sqlite.test.ts` — MIN_NON_AUTH_COLUMNS 162→169 and fresh-schema contract test
+- `packages/core/src/db/bundled-schema.generated.ts` — regenerated via bun run generate:bundled-schema
+- `AGENTS.md` — 22 application tables; Better Auth 23–26
+
+**Acceptance criteria verified**:
+- [x] Application table 22 after workflow ENVs with exact seven columns, cascade FK, seq >= 1, kind check, named UNIQUE
+- [x] SQLite table with TEXT ids/payload/timestamps, same checks, named unique, ON DELETE CASCADE; not in migrateColumns
+- [x] No standalone index; PostgreSQL COMMENT ON COLUMN only in trailing section
+- [x] Parity floor 169; fresh-schema test covers seven columns, unique index name, named constraint, cascade
+- [x] generate:bundled-schema; sqlite, migration-order, bundled-schema, and check:bundled-schema passed
+- [x] AGENTS.md lists 22 application tables and Better Auth 23–26
+- [x] Commit message `feat(db): add workflow node transcript table`
+
+**Learnings**:
+- Core `tsc` still fails on store-adapter missing appendNodeMessage/listNodeMessages from US-001; that is US-004, not this schema slice
+- `bun x prettier --check migrations/000_combined.sql` has no parser; SQL is excluded from format:check via ignore
+- Unique constraint name is enough for SQLite lookup/order; do not add CREATE INDEX for the same columns
+
+---
+
+## 2026-09-06 — US-003: Persist ordered transcript rows safely
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/schemas/workflow-node-message.ts` — alias of nodeMessageSchema via z.infer
+- `packages/core/src/schemas/index.ts` — re-export row schema and type
+- `packages/core/src/db/workflow-node-messages.ts` — append/list, sequence conflict classifier, corrupt-row redaction
+- `packages/core/src/db/workflow-node-messages.test.ts` — real SQLite sequencing, cascade, Promise.all, classifiers, sentinel redaction
+- `packages/core/src/db/index.ts` — namespaced and direct exports
+- `packages/core/package.json` — isolated bun test invocation for the connection mock
+- `packages/core/src/workflows/store-adapter.ts` — appendNodeMessage/listNodeMessages pass-throughs required for core tsc
+- `packages/core/src/workflows/store-adapter.test.ts` — mock the new DB module before import
+
+**Acceptance criteria verified**:
+- [x] Core workflow-node-message schema aliases nodeMessageSchema with z.infer and is re-exported
+- [x] DB module exposes appendNodeMessage, listNodeMessages, isNodeMessageSequenceConflict, WorkflowNodeMessageCorruptRowError, fixed-column normalization
+- [x] Append validates, MAX(seq)+1 in a transaction, dialect id, JSON payload, reread+validate
+- [x] Sequence conflict retries once; PG 23505+constraint and SQLite three fully-qualified columns; unrelated uniques do not retry
+- [x] List filters both identity fields, orders by seq ASC; SQLite tests cover independent sequences, order, cascade, Promise.all 1 and 2, classifiers
+- [x] Corrupt JSON/schema logs only row id + fixed reason; error message and logs omit sentinel DO_NOT_LOG
+- [x] Namespace + direct exports; own core test invocation; focused tests and core tsc passed
+- [x] Commit message feat(core): persist workflow node transcripts
+
+**Learnings**:
+- Core tsc cannot pass persistence-only: createWorkflowStore must implement the new IWorkflowStore methods. US-004 still needs requiredMethods/forwarding tests.
+- Seed FK parents (conversation then run) before transcript inserts; PRAGMA foreign_keys is on.
+- SQLite withTransaction serializes via txTail, so Promise.all appends get 1 then 2 without a unique race.
+
+---
+
+## 2026-09-06 — US-004: Adapt transcript persistence to IWorkflowStore
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/workflows/store-adapter.test.ts` — named workflow-node-messages mocks, requiredMethods coverage, exact-argument forwarding tests
+
+**Acceptance criteria verified**:
+- [x] Mock workflow-node-messages before importing store-adapter
+- [x] requiredMethods includes appendNodeMessage and listNodeMessages; tests return the DB result and forward exact arguments
+- [x] store-adapter.ts already namespaces the DB module and pass-throughs beside workflow-node-session methods (US-003)
+- [x] packages/core store-adapter test (39 pass) and bun x tsc --noEmit passed
+- [x] Persistence slice already committed; adapter tests committed as feat(core): adapt transcript persistence to IWorkflowStore
+
+**Learnings**:
+- StrReplace truncated store-adapter.test.ts from 1120 to 303 lines; restore from git immediately and rewrite via unique-string Python with line-count assertion
+- Production pass-throughs were already in US-003 so this story's RED phase was skipped; tests went GREEN on first run
+- ESLint ignores this test file; linting the path alone yields a matching-ignore warning that is not a real gate failure
+
+---
+
+## 2026-09-06 — US-005: Add fail-open transcript append helper
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/node-transcript.ts` — awaited appendNodeTranscript fail-open helper
+- `packages/workflows/src/node-transcript.test.ts` — success forward-once and sentinel-redacted failure log
+- `packages/workflows/package.json` — isolated bun test shard for node-transcript.test.ts
+
+**Acceptance criteria verified**:
+- [x] appendNodeTranscript(store, input): Promise<void> awaits store.appendNodeMessage exactly once on success
+- [x] Rejecting append resolves undefined and logs only workflowRunId, nodeId, kind, and errorType under workflow.node_message_append_failed
+- [x] Rejecting-store sentinel DO_NOT_LOG is absent from logged metadata (no error message, payload, text, tool input/output)
+- [x] Isolated test shard; focused tests (2 pass) and workflows tsc passed; dag-executor untouched
+- [x] Commit message feat(workflows): add fail-open transcript writer
+
+**Learnings**:
+- Plan Task 4 uses module-level createLogger; intercept it by mock.module('@archon/paths') then dynamic import
+- ESLint ignore warning on the test path is not a gate failure; lint node-transcript.ts only
+- Do not put fail-open try/catch in dag-executor; US-006/US-007 must call this helper
+
+---
+
+## 2026-09-06 — US-006: Record command and prompt transcripts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — command/prompt started, text, tool, completed/failed transcript rows
+- `packages/workflows/src/dag-executor.test.ts` — retaining mock store plus table-driven ordering, batch, failure, and fail-open tests
+
+**Acceptance criteria verified**:
+- [x] Mock store retains sequenced appends; command and prompt streams store started, text, tool, text, completed with tool payload Read / tool-1 / path a.ts
+- [x] Batch-delivery regression: assistant text precedes the following tool row; no duplicate final-batch text row
+- [x] started after node_started; non-empty assistant chunks before batching; one tool row after id selection; completed after node_completed
+- [x] failed after node_failed for command-load, prompt substitution, cancellation, credit exhaustion, empty-output, and catch paths; abort-catch still records failed
+- [x] Output-ref substitution lives in the prompt failure path; provider lookup returns the same failed NodeExecutionResult/event/emitter path
+- [x] Tests cover command-load, invalid output reference, provider lookup, exactly one completed terminal, and rejecting store that still completes the workflow
+- [x] No tool_result rows; bash nodes unrecorded; dag-executor tests (556 pass) and workflows tsc passed
+- [x] Commit message feat(workflows): record agent node transcripts
+
+**Learnings**:
+- `getAgentProvider` throws currently escape to runLayers `dag_node_pre_execution_failed`; wrap it locally or the failed transcript never records
+- Assistant text must be appended before `batchMessages.push` or batch mode will persist tool-then-text
+- Unique-string Python edits on dag-executor.ts: `toolCallId` and `iterationData` are duplicated in loop/bash/script paths — include surrounding comments
+
+**Blocker Ledger**:
+BLOCKER US-006 | gate=`(cd packages/workflows && bun test src/dag-executor.test.ts)` | cause=pre-existing `completes the native Ralph loop from the PRD` expected nodeConfig.effort xhigh but speckit-ralph-native-feature.yaml ralph-loop-run declares effort: high (fingerprint dag-executor.test.ts effort assertion) | action=chore(unblock): expect('high') on clean base, then restored story work | 2026-09-06
+
+---
+
+## 2026-09-06 — US-007: Record loop transcript lifecycles
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.ts` — loop started/failed/completed, iteration markers, cleaned text, and tool rows
+- `packages/workflows/src/dag-executor.test.ts` — two-iteration, iteration-error, finalize-on-approve, max-iteration, interactive-gate, and loop-group container tests
+
+**Acceptance criteria verified**:
+- [x] Two-iteration loop records one started, iteration_started/completed with decimal detail, cleaned assistant text between markers, and iteration_failed before node-level failed
+- [x] Finalize-on-approve resume records started then completed without a new iteration marker
+- [x] executeLoopNode appends started after node_started; failLoopNode appends failed after node_failed using prefixed stepName
+- [x] iteration_started/completed after scheduled events with String(i); iteration_failed before failLoopNode at both failed-event sites
+- [x] Cleaned non-empty assistant chunks and immutable tool rows in provider order with the same id/input rule
+- [x] completed only after node_completed on completionDetected and finalize-on-signal; max-iteration records failed; interactive gate has no completed row
+- [x] Loop-group container output unrecorded; body command/prompt uses prefixed stepName. dag-executor tests 562 pass; workflows tsc passed
+- [x] Commit message feat(workflows): record loop node transcripts because US-006 already used feat(workflows): record agent node transcripts
+
+**Learnings**:
+- Loop assistant text must be completion-tag-stripped and skipped when empty; command/prompt records raw msg.content
+- Interactive first-run still writes loop_iteration_completed before pausing, so the gate transcript ends at iteration_completed with no node-level completed
+- Unique-string edits on executeLoopNode must include surrounding comments because toolCallId handling is duplicated with executeNodeInternal
+
+---
+
+## 2026-09-06 — US-008: Expose messages and empty pending embed over HTTP
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — PendingInteraction and transcript wire schemas; required pending_interactions on WorkflowRunDetail
+- `packages/server/src/routes/api.ts` — nested GET messages route before GET run; empty pending_interactions embed
+- `packages/server/src/routes/api.workflow-runs.test.ts` — 404/empty/sequence/timestamp/500/OpenAPI and GET-run embed tests
+
+**Acceptance criteria verified**:
+- [x] OpenAPI schemas reuse engine payloads, omit identity columns, convert created_at to string
+- [x] pending_interactions is required on WorkflowRunDetail; GET run always returns []
+- [x] GET /api/workflows/runs/{runId}/nodes/{nodeId}/messages registered before GET run with 200/404/500
+- [x] Handler checks getWorkflowRun first, 404 before list, maps id/seq/kind/payload/ISO created_at
+- [x] List failure logs only runId, nodeId, errorType and returns Failed to list workflow node messages
+- [x] Route tests cover missing run, empty list, text/tool/status sequence, Date/string timestamps, safe 500, empty embed, OpenAPI refs; server tests 144 pass; tsc passed
+- [x] Commit message feat(server): expose workflow node transcripts
+
+**Learnings**:
+- StrReplace truncated workflow.schemas.ts; unique-string Python with a surviving later marker is required even under 500 lines
+- Hono matches GET /runs/{runId} for the nested path until the more specific route exists, so missing-route tests 404 without JSON
+- mock.module('@archon/core/db/workflow-node-messages') belongs only in api.workflow-runs.test.ts; connection pool is lazy
+
+---
+
+## 2026-09-06 — US-009: Generate web types and transcript client
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated from isolated live OpenAPI (port 3870; 3090 belonged to another checkout)
+- `packages/web/src/lib/api.ts` — WorkflowNodeState/Message/Messages aliases plus encoded getWorkflowNodeMessages
+- `packages/web/src/lib/get-workflow-node-messages.test.ts` — run slash encoding, dotted node id, response forwarding
+
+**Acceptance criteria verified**:
+- [x] Isolated temporary-ARCHON_HOME server; generate from live OpenAPI; stop server; no hand-edits
+- [x] Generated types contain WorkflowNodeMessage, WorkflowNodeMessagesResponse, PendingInteraction, and WorkflowRunDetail.pending_interactions
+- [x] Export WorkflowNodeStateResponse, WorkflowNodeMessageResponse, WorkflowNodeMessagesResponse from api.ts
+- [x] getWorkflowNodeMessages uses fetchJSON and encodeURIComponent for both path identifiers
+- [x] Focused client test plus web tsc passed
+- [x] Commit message feat(web): add workflow node transcript client
+
+**Learnings**:
+- `generate:types` hardcodes localhost:3090; if that port is another checkout, generate against the isolated server port instead of killing the listener
+- ESLint ignores web `*.test.ts`; lint api.ts only to avoid a matching-ignore warning under --max-warnings 0
+
+---
+
+
+## 2026-09-06 — US-010: Build chronological log rows and preserve server lifecycle
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/build-log-rows.ts` — LogRow/LogRowSelection plus buildLogRows
+- `packages/web/src/components/workflows/build-log-rows.test.ts` — server status, loop/route replacement, interleave, re-exec, invalid seq, source order
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — delete event lifecycle fallback; route enrich keeps server status; raw nodeStates on query data
+- `packages/web/src/components/workflows/WorkflowExecution.test.tsx` — absent nodeStates returns []; route enrich does not override status
+
+**Acceptance criteria verified**:
+- [x] buildLogRows with node, loop_iteration, and route_iteration selection variants and LogRow fields
+- [x] Tests prove exact server status; loop/route replace base rows; iteration status; route rows completed; event-position interleave; latest node_started for re-exec; invalid iteration/execution_seq ignored; source order ties
+- [x] Labels use name, name ×iteration, name #executionSeq; event ids for repeated rows; lifecycle/stable id fallback
+- [x] Removed buildDagNodeStatesFromEvents; absent nodeStates returns no lifecycle nodes; route enrich skips missing nodes without changing status
+- [x] Loop iteration/progress enrichment retained for existing nodes; runtimeMetadataFromEventData kept for currentlyExecuting
+- [x] Raw nodeStates preserved in WorkflowRunQueryData and returned from the query
+- [x] Focused build-log-rows + WorkflowExecution tests (13 pass) and web tsc passed
+- [x] Commit message `fix(web): keep server node lifecycle authoritative`
+
+**Learnings**:
+- StrReplace truncated WorkflowExecution.tsx (885→255); restore immediately and rewrite with unique-string Python
+- Do not delete runtimeMetadataFromEventData; currentlyExecuting still spreads start-event metadata
+- Route rows are always completed list metadata; Graph DAG status stays the server-projected value
+
+---
+
+## 2026-09-06 — US-011: Render the selectable node-run list
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/NodeRunList.tsx` — accessible Node runs nav with one type=button per LogRow
+- `packages/web/src/components/workflows/NodeRunList.test.tsx` — static markup for labels, selected aria-current, status, no extra transcript text
+
+**Acceptance criteria verified**:
+- [x] Create NodeRunList accepting rows, selectedRowId, and onSelect complete LogRow
+- [x] nav aria-label Node runs; one type=button per row; selected aria-current true; label and status text
+- [x] Tests prove normal, loop ×, and route # labels, selected markup, visible status, and no merged transcript text
+- [x] Reused StatusBadge color classes; onSelect passes the complete LogRow
+- [x] NodeRunList focused test passed
+
+**Learnings**:
+- Web `*.test.tsx` is linted; `*.test.ts` is ignored. Use `.exec()` / `.split()` instead of `String#match`
+- `onClick={(): void => onSelect(row)}` trips `no-confusing-void-expression`; use a braced body
+- Status color classes live on WorkflowExecution StatusBadge, not a shared export
+
+---
+
+
+## 2026-09-06 — US-012: Render and slice node transcript rooms
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/NodeRoom.tsx` — selectNodeRoomMessages plus accessible room renderer
+- `packages/web/src/components/workflows/NodeRoom.test.tsx` — seq sort, iteration slice, room states, kinds, prohibited chrome
+
+**Acceptance criteria verified**:
+- [x] selectNodeRoomMessages sorts a copy by seq; non-loop returns all; loop is marker-bounded or next-start/end; missing start returns full transcript
+- [x] NodeRoom null/loading/error+Retry/empty use the exact copy
+- [x] Text via existing ReactMarkdown styling; tools as named chips with JSON details; statuses as lifecycle notes; loaded region aria-label is node id plus room
+- [x] Exhaustive kind switch with assertNever; no Ask/waiting/awaiting/pending-interaction chrome
+- [x] Static tests cover every room state, order, tool input, iteration-2 slice, missing-marker fallback, region, and prohibited UI
+- [x] NodeRoom focused test passed (6 tests)
+
+**Learnings**:
+- renderToStaticMarkup encodes `'` and `"`; decode entities before asserting exact empty-state copy or JSON tool input
+- Fixture rows used as named constants avoid unnecessary `as` casts that ESLint flags on `*.test.tsx`
+
+---
+
+## 2026-09-06 — US-013: Load and live-poll selected transcripts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/NodeTranscriptPane.tsx` — transcriptRefetchInterval plus injected-loadMessages query boundary
+- `packages/web/src/components/workflows/NodeTranscriptPane.test.tsx` — HappyDOM/QueryClient first fetch, iteration re-slice, Retry recovery, refetch values
+
+**Acceptance criteria verified**:
+- [x] transcriptRefetchInterval(true) is 1000 and transcriptRefetchInterval(false) is false
+- [x] NodeTranscriptPane accepts runId, nullable LogRow, isLive, and loadMessages with the getWorkflowNodeMessages signature
+- [x] Query key ['workflowNodeMessages', runId, row?.nodeId]; enabled only when a row exists; loader called with run and node; polling via transcriptRefetchInterval
+- [x] Full row.selection passed to NodeRoom so same-node iteration re-slices cached data without a second fetch; Retry voids query.refetch
+- [x] Mounted tests cover first fetch, same-node iteration re-render, deterministic error plus Retry recovery, and both refetch values; afterEach restores globals, unmounts, closes HappyDOM, and clears QueryClient
+- [x] NodeTranscriptPane focused test passed (4 tests)
+
+**Learnings**:
+- bun test in this environment has NODE_ENV=production, so `import { act } from 'react'` fails; dynamic import after forcing development is required
+- TanStack Query notifies via setTimeout(0); without notifyManager.setScheduler(cb => cb()) HappyDOM tests stay on Loading node transcript
+- Editor text-replace truncated the new test file; unique-string Python with a surviving later marker is required even for new files
+- `const { QueryClient } = await import(...)` trips naming-convention; keep the module namespace and read `.QueryClient`
+
+---
+
+## 2026-09-06 — US-014: Compose legacy Logs with node rooms
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/LegacyNodeLogs.tsx` — selectable list plus one transcript room with a single run-change/row-removed reset effect
+- `packages/web/src/components/workflows/LegacyNodeLogs.test.tsx` — HappyDOM/QueryClient pre-selection, click-to-loader/onSelect, and run-change reset
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — rename logsPanel to mergedLogsPanel for Graph only; DAG Logs uses LegacyNodeLogs
+
+**Acceptance criteria verified**:
+- [x] LegacyNodeLogs accepts runId, nodeStates, events, isLive, loadMessages, onSelectNode, optional roomHeader/roomFooter; useMemo rows; owns selected row id; fixed-width NodeRunList plus one NodeTranscriptPane
+- [x] Row click stores id and calls onSelectNode(row.nodeId); roomHeader before and roomFooter after the room
+- [x] One reset effect calls onSelectNode(null) only on already-mounted run id change or polling-removed selected row
+- [x] Mounted composition test proves Select a node, click-to-loader/onSelect/text in one room region, and run-2 reset
+- [x] mergedLogsPanel stays in Graph; DAG Logs uses raw nodeStates/events, getWorkflowNodeMessages, isRunning, setSelectedDagNode, retry header, completed artifact footer
+- [x] StepLogs, WorkflowLogs, tool events, graph-click scrolling, Graph, and chat unchanged; focused tests 26 pass; web tsc passed
+- [x] Commit message feat(web): open node transcripts from legacy logs
+
+**Learnings**:
+- Copy the NodeTranscriptPane HappyDOM/QueryClient harness for composition tests, including notifyManager sync and NODE_ENV=development
+- Do not start an eval Python string line with bang; it can be rewritten to `__omp_shell`
+- Sequential non-DAG layout still uses mergedLogsPanel; only `if (isDag)` Logs gets LegacyNodeLogs
+
+---
