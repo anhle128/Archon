@@ -3,6 +3,8 @@ name: E2E Smoke Tests
 on:
   push:
     branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
   # The AI-credentialed smoke tiers (e2e-claude / e2e-codex / e2e-mixed) are
   # OPT-IN. CI has no funded API keys, so they fail on every dev push with
   # "credit balance too low" (Anthropic) / "quota exceeded" (OpenAI) — a
@@ -10,7 +12,8 @@ on:
   # now run locally on maintainer subscriptions as the pre-release ritual, and
   # only run in CI when deliberately enabled: dispatch this workflow with
   # run_ai_tiers=true, or set the repo variable RUN_AI_SMOKE=true (no file edit
-  # needed to re-enable). The deterministic + container tiers stay unconditional.
+  # needed to re-enable). The deterministic + container tiers stay unconditional
+  # on push and on pull_request (container remains path-gated).
   workflow_dispatch:
     inputs:
       run_ai_tiers:
