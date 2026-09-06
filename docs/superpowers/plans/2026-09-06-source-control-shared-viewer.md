@@ -3,222 +3,185 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 > Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let an operator select a Now changed file on the legacy Source Control tab and inspect it in a reusable status-keyed viewer with a 30/70 resizable split, without adding History, large-file streaming, or image/hex fallbacks.
+**Goal:** Let an operator open any Now changed file from the legacy Source Control tab in one reusable status-keyed viewer without leaving the run screen.
 
-**Architecture:** `@archon/git` owns path confinement, `fileAt`, and `fileDiff`.
-The server reuses `resolveRunCheckout`, exposes one OpenAPI hunk-JSON route for `M`, and one raw wildcard route for `A`/`D` content.
-The web tab composes a reusable Changes list widget and a reusable viewer; `WorkflowExecution.tsx` stays a one-line mount.
+**Architecture:** The <code>@archon/git</code> package owns defensive path parsing, live-path containment, binary-safe file reads, and HEAD-to-worktree hunk production.
+The server reuses the existing CAP-6 checkout gate and exposes one OpenAPI JSON diff route plus one raw wildcard content route.
+The web keeps the Story 1.1 list snapshot frozen, renders a reusable virtualized list and viewer in a responsive resizable split, and re-reads selected content only on explicit Reload.
 
-**Tech Stack:** Bun, strict TypeScript, `execFileAsync` / `execFileBufferAsync` through `@archon/git`, Hono OpenAPI, Zod from `@hono/zod-openapi`, React 19, TanStack Query 5, `react-resizable-panels` v4, `react-diff-view@3.3.3`, installed `highlight.js@^11.11.1` left unused for HTML injection, installed `@tanstack/react-virtual@^3`, and Bun tests.
+**Tech Stack:** Bun 1.3, strict TypeScript, Node <code>execFile</code>, Hono OpenAPI, Zod from <code>@hono/zod-openapi</code>, React 19, TanStack Query 5, <code>react-resizable-panels</code> 4.7.3, <code>react-diff-view</code> 3.3.3, installed <code>highlight.js</code> 11, installed <code>@tanstack/react-virtual</code> 3, and Bun tests.
 
-**Spec:** `_bmad-output/planning-artifacts/epics-source-control/epics.md` Story 1.2.
-**Companion decisions:** `_bmad-output/specs/spec-archon-source-control/SPEC.md` CAP-3 and CAP-5, `_bmad-output/specs/spec-archon-source-control/brownfield.md`, `_bmad-output/specs/spec-archon-source-control/viewer-rules.md`, and `_bmad-output/planning-artifacts/architecture/architecture-Archon-source-control-2026-09-05/ARCHITECTURE-SPINE.md` AD-1, AD-2, AD-3, AD-4, AD-5, AD-6, and AD-9.
-**Predecessor:** Story 1.1 is `done` in sprint-status (`docs/superpowers/plans/2026-09-06-source-control-changes-list.md`, issue #75).
-**Issue:** [#76](https://github.com/anhle128/Archon/issues/76), tracker key `1-2-open-a-changed-file-in-the-shared-viewer`.
+**Spec:** <code>_bmad-output/planning-artifacts/epics-source-control/epics.md</code>, Story 1.2.
+
+**Canonical design:** <code>_bmad-output/specs/spec-archon-source-control/SPEC.md</code>, CAP-3, CAP-5, and CAP-6.
+
+**Companion decisions:** <code>_bmad-output/specs/spec-archon-source-control/brownfield.md</code>, <code>_bmad-output/specs/spec-archon-source-control/viewer-rules.md</code>, and <code>_bmad-output/planning-artifacts/architecture/architecture-Archon-source-control-2026-09-05/ARCHITECTURE-SPINE.md</code>, AD-1 through AD-6 and AD-9.
+
+**Issue:** GitHub issue #76, tracker key <code>1-2-open-a-changed-file-in-the-shared-viewer</code>.
 
 ## Global Constraints
 
-- Story 1.2 opens Now files only; do not add History, `log`, per-commit file lists, or commit OIDs on the HTTP surface.
-- Load more, first-paint 256 KB / 2,000-line cutoffs, >1 MB streaming, >50 MB download-only, inline images, and hex peek are Story 1.3.
-- The v1 surface remains `/legacy/workflows/runs/:id`; do not import from or change `packages/web/src/experiments/console/`.
-- The client sends `runId` plus the server-issued git-relative path from the Changes list; it never sends `working_path` or an absolute filesystem path.
-- The server reads existing `workflow_runs.working_path`; do not add a column and do not reconstruct the checkout from isolation metadata.
-- Git commands use argv arrays; never `exec`, a shell command string, or `oid:path` (`HEAD:path` included).
-- Commit-shaped blob reads use `git --literal-pathspecs ls-tree -z <treeIsh> -- <path>` then `git cat-file blob <blobOid>`.
-- Live worktree reads `realpath` the candidate and require it to stay under the already-realpathed checkout.
-- Reject NUL, absolute paths, and `..` segments after URI decoding; `:`, leading `-`, and glob filenames MUST succeed.
-- JSON routes use `registerOpenApiRoute(createRoute(...), handler)`.
-- The raw file route uses `app.get` with the same wildcard + decode + `..` comment pattern as `/api/artifacts/:runId/*`.
-- Web response types for JSON come from `packages/web/src/lib/api.generated.d.ts`; do not hand-edit that generated file.
-- The raw file client may be hand-typed because the wildcard route is not representable in OpenAPI 3.0.
-- Auth matches run-detail and artifacts: global `/api/*` gate only, no `requireWebUser`, no per-run owner ACL.
-- CAP-6 is HTTP 200 with `{ emptyReason: "container" | "no_checkout" }` on both new git routes; it is not a 404.
-- `M` uses the hunk JSON endpoint only; `A`/`D` use the raw content endpoint only.
-- Now hunk JSON uses `scope: "now"` and `ref: "live"`; never null or omitted `ref`.
-- `cursor` is an opaque string; the web echoes it as `?cursor=` only when non-empty and MUST NOT parse it as a scroll offset.
-- `M` is diff-only; there is no standalone snapshot mode.
-- No stage, unstage, edit, discard, commit, or other write control is present.
-- Do not add Shiki, Monaco, or refractor.
-- The one new production dependency is `react-diff-view@3.3.3`; lodash arrives transitively and is not a direct dependency.
-- Pino events use `domain.action_state`, pair started with completed or failed, and never log checkout paths, remotes, file contents, file paths, or error messages that can contain a path.
-- User copy is terse and non-alarming; do not introduce `Error:`, `unsupported`, or `⚠️`.
-- Do not add a table, process, environment variable, deployable, or package besides the pinned viewer dependency.
-- `mock.module()` merges over the real module in Bun 1.3.11, so every existing `@archon/git` mock factory must stub the new package exports.
-- Server test files with distinct `mock.module()` graphs must run in separate Bun processes through `packages/server/package.json`.
-- The mounted viewer query test must run in its own Bun process so its happy-dom globals cannot pollute the existing component suite.
-- Every production behavior follows RED, verified RED, minimal GREEN, verified GREEN, and only then refactoring.
-- Run every command block from the repository root; package-scoped commands use a subshell so later commands remain rooted correctly.
+- Story 1.2 is Now-only and must not add History, log records, commit lists, client-supplied tree-ish values, or commit OIDs to HTTP.
+- Story 1.3 owns hunk pagination, Load more, the 256 KB or 2,000-line first-paint cutoff, streaming above about 1 MB, download-only above about 50 MB, inline images, and hex peek.
+- Story 1.2 must still provide a working download for every NUL-detected binary response; returning an empty attachment is not a usable fallback.
+- The surface remains <code>/legacy/workflows/runs/:id</code>, and no file under <code>packages/web/src/experiments/console/</code> may be imported or modified.
+- The client sends only <code>runId</code>, the server-issued git-relative path, the fixed Now source selector, and an opaque cursor when one is non-empty.
+- The server loads the existing <code>workflow_runs.working_path</code>, and it never accepts <code>working_path</code> or an absolute checkout path from the client.
+- The server must not reconstruct the checkout from isolation metadata or add a database column.
+- Every git invocation uses an argv array through <code>execFileAsync</code> or <code>execFileBufferAsync</code>, and no implementation may use <code>exec</code>, a shell string, or <code>oid:path</code> syntax.
+- Tree-shaped reads use <code>git --literal-pathspecs ls-tree -z TREE -- PATH</code> followed by <code>git cat-file blob BLOB_OID</code>.
+- A live candidate is realpathed and must remain beneath the already-realpathed checkout before bytes are read.
+- Path validation rejects an empty path, NUL, POSIX absolute paths, Windows drive or UNC paths, and any <code>..</code> segment after URI decoding.
+- Filenames containing a colon, a leading dash, spaces, newlines, or glob metacharacters must still work.
+- JSON routes use <code>registerOpenApiRoute(createRoute(...), handler)</code>.
+- The raw file route uses <code>app.get</code> because OpenAPI 3.0 cannot represent the wildcard path and because successful responses are raw bytes.
+- JSON web types come from the regenerated <code>packages/web/src/lib/api.generated.d.ts</code>.
+- The raw file client is hand-typed because the raw wildcard route is intentionally absent from OpenAPI.
+- Auth remains the global <code>/api/*</code> gate with no <code>requireWebUser</code> call and no per-run owner ACL.
+- Both new routes return HTTP 200 with <code>{ emptyReason: "container" | "no_checkout" }</code> for CAP-6.
+- Modified files use only the JSON diff route, added files use only raw <code>source=worktree</code>, and deleted files use only raw <code>source=head</code>.
+- A ready Now diff always has <code>scope: "now"</code>, <code>ref: "live"</code>, <code>status: "M"</code>, and no snapshot mode.
+- Story 1.2 returns all hunks with <code>cursor: ""</code> and <code>truncated: false</code>.
+- The web treats <code>cursor</code> as opaque and appends it only when non-empty.
+- The list and selected viewer content remain frozen until the operator explicitly accepts <code>Changed on disk — Reload</code>.
+- No stage, unstage, edit, discard, commit, or other write control is added.
+- Syntax highlighting uses the already-installed <code>highlight.js</code> through its public string API, and tests must prove attacker-controlled markup remains text rather than executable markup.
+- Do not add Shiki, Monaco, refractor, a sanitizer dependency, or a second diff library.
+- The only new direct production dependency is exactly <code>react-diff-view@3.3.3</code>, and lodash remains transitive.
+- <code>react-resizable-panels</code> v4 treats numeric sizes as pixels, so percentage constraints must be strings such as <code>"30%"</code>.
+- The split defaults to 30% list and 70% viewer, allows the list to resize from 20% through 70%, and does not persist sizes.
+- Modified-file panes scroll independently in both axes and stack before-over-after below 900 CSS pixels.
+- Changes and future History scopes use the same list component with distinct ID prefixes.
+- Pino events use <code>domain.action_state</code>, pair every started event with completed or failed, and never log checkout paths, remotes, file contents, file paths, or path-bearing error messages.
+- Failure logs contain only <code>runId</code> and a stable <code>errorType</code>.
+- User copy is terse and non-alarming and must not introduce <code>Error:</code>, <code>unsupported</code>, or a warning glyph.
+- <code>mock.module()</code> merges omitted exports from the real module, so all 31 existing <code>@archon/git</code> mock factories must stub the two new public I/O exports in the same task that publishes them.
+- Continue using the existing isolated <code>packages/server/src/routes/api.git-changes.test.ts</code> process for all three git HTTP routes because they share one mock graph.
+- Continue using the existing isolated <code>packages/web/src/component-integration/source-control-tab.test.tsx</code> process for mounted viewer behavior because it already owns the happy-dom and QueryClient globals.
+- Every behavior change follows RED, verified RED, minimal GREEN, verified GREEN, and only then refactoring.
+- Run all command blocks from the repository root, and use a subshell for commands that must execute inside a package.
+- Do not run <code>bun test</code> from the repository root without a path.
+- Do not mark the tracker done until focused tests, affected package suites, <code>bun run validate</code>, <code>git diff --check</code>, and the manual acceptance check all pass.
 - Every full Markdown sentence in this plan stays on one physical line.
 
 ## File Structure
 
-- Create `packages/git/src/git-path.ts` for wire-path parsing and live `realpath` containment.
-- Create `packages/git/src/git-path.test.ts` for NUL, absolute, `..`, colon, dash, glob, and symlink-escape cases.
-- Modify `packages/git/src/exec.ts` to add binary-safe `execFileBufferAsync` without changing `execFileAsync` string behavior.
-- Create `packages/git/src/file-read.ts` for `fileAt`, `fileDiff`, unified-diff parsing, and NUL detection.
-- Create `packages/git/src/file-read.test.ts` for real-git HEAD/worktree reads, `ls-tree`/`cat-file` argv, special filenames, and binary detection.
-- Modify `packages/git/src/index.ts` to publish Story 1.2 git functions and types.
-- Modify every `mock.module('@archon/git')` factory, including `packages/server/src/routes/api.git-changes.test.ts`.
-- Create `packages/server/src/routes/git/run-checkout.ts` to share run lookup plus `resolveRunCheckout` across git handlers.
-- Modify `packages/server/src/routes/git/changes-handler.ts` to call that helper without changing the HTTP contract.
-- Modify `packages/server/src/routes/schemas/git.schemas.ts` to add hunk and diff schemas.
-- Create `packages/server/src/routes/git/diff-route.ts` and `packages/server/src/routes/git/diff-handler.ts`.
-- Create `packages/server/src/routes/api.git-diff.test.ts` for the isolated diff HTTP contract.
-- Create `packages/server/src/routes/git/file-handler.ts` for the raw wildcard file route.
-- Create `packages/server/src/routes/api.git-file.test.ts` for the isolated raw-file HTTP contract.
-- Modify `packages/server/src/routes/api.ts` to register the JSON diff route and the raw file `app.get`.
-- Modify `packages/server/package.json` to isolate the two new server test files.
-- Regenerate `packages/web/src/lib/api.generated.d.ts` from the running server.
-- Modify `packages/web/src/lib/api.ts` to add the diff and file clients.
-- Create `packages/web/src/lib/api.git-file.test.ts` for encoded URLs, `source`, and no checkout path.
-- Add `react-diff-view@3.3.3` in `packages/web/package.json` / the lockfile.
-- Create `packages/web/src/components/workflows/source-control/git-hunk-adapter.ts` and `git-hunk-adapter.test.ts`.
-- Create `packages/web/src/components/workflows/source-control/changed-files-list.tsx`.
-- Modify `changed-file-row.tsx`, `source-control-panel.tsx`, and their tests so Enter/Space/click open a file through a callback.
-- Create `packages/web/src/components/workflows/source-control/file-viewer.tsx` and `file-viewer.test.tsx`.
-- Create `packages/web/src/components/workflows/source-control/source-control-split.tsx` and `viewport-stack.ts`.
-- Modify `source-control-tab.tsx` to split, fetch on open, Cancel via `AbortController`, and keep the frozen list snapshot.
-- Create `packages/web/src/component-integration/source-control-viewer.test.tsx` for the mounted open/cancel/split flow.
-- Modify `packages/web/package.json` to isolate that mounted test.
-- Modify `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml` only after every acceptance gate passes.
+- Create <code>packages/git/src/git-path.ts</code> for git-relative path validation and realpath containment.
+- Create <code>packages/git/src/git-path.test.ts</code> for traversal, special-name, and symlink containment behavior.
+- Modify <code>packages/git/src/exec.ts</code> to add the internal binary-safe <code>execFileBufferAsync</code> wrapper.
+- Create <code>packages/git/src/file-read.ts</code> for <code>fileAt</code>, <code>fileDiff</code>, NUL detection, content hashing, and unified-diff parsing.
+- Create <code>packages/git/src/file-read.test.ts</code> for real-git file and diff behavior.
+- Modify <code>packages/git/src/index.ts</code> to export only <code>fileAt</code>, <code>fileDiff</code>, and their data types.
+- Modify the 31 existing <code>@archon/git</code> mock-factory test files listed in Task 2.
+- Create <code>packages/server/src/routes/git/run-checkout.ts</code> for database lookup plus reuse of <code>resolveRunCheckout</code>.
+- Create <code>packages/server/src/routes/git/path-input.ts</code> for transport-level decoded-path validation.
+- Modify <code>packages/server/src/routes/git/changes-handler.ts</code> to use <code>loadRunCheckout</code> without changing its response.
+- Modify <code>packages/server/src/routes/schemas/git.schemas.ts</code> to add canonical hunk schemas.
+- Create <code>packages/server/src/routes/git/diff-route.ts</code> and <code>packages/server/src/routes/git/diff-handler.ts</code>.
+- Create <code>packages/server/src/routes/git/file-handler.ts</code>.
+- Modify <code>packages/server/src/routes/api.ts</code> to register the JSON diff route and raw wildcard file route.
+- Modify <code>packages/server/src/routes/api.git-changes.test.ts</code> to cover changes, diff, and file under its existing isolated mock graph.
+- Regenerate <code>packages/web/src/lib/api.generated.d.ts</code>.
+- Modify <code>packages/web/src/lib/api.ts</code> and <code>packages/web/src/lib/api.git-changes.test.ts</code> for the diff and raw clients.
+- Modify <code>packages/web/package.json</code> and <code>bun.lock</code> for the exact viewer dependency.
+- Create <code>packages/web/src/components/workflows/source-control/git-hunk-adapter.ts</code> and <code>git-hunk-adapter.test.ts</code>.
+- Create <code>packages/web/src/components/workflows/source-control/syntax-highlight.tsx</code> and <code>syntax-highlight.test.tsx</code>.
+- Create <code>packages/web/src/components/workflows/source-control/changed-files-list.tsx</code>.
+- Modify <code>packages/web/src/components/workflows/source-control/changed-file-row.tsx</code>, <code>source-control-panel.tsx</code>, and <code>source-control-panel.test.tsx</code>.
+- Create <code>packages/web/src/components/workflows/source-control/source-control-diff.css</code>.
+- Create <code>packages/web/src/components/workflows/source-control/file-viewer.tsx</code> and <code>file-viewer.test.tsx</code>.
+- Create <code>packages/web/src/components/workflows/source-control/source-control-split.tsx</code> and <code>use-stacked-viewport.ts</code>.
+- Modify <code>packages/web/src/components/workflows/source-control/source-control-tab.tsx</code>.
+- Modify the already-isolated <code>packages/web/src/component-integration/source-control-tab.test.tsx</code>.
+- Modify <code>_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml</code> only after every acceptance gate passes.
+- Do not modify <code>packages/web/src/components/workflows/WorkflowExecution.tsx</code>; its existing one-line <code>SourceControlTab</code> mount is the required boundary.
 
-## Locked Wire Contract
+## Locked Contracts
 
-```ts
-type GitEmptyReason = 'container' | 'no_checkout';
-type GitDiffScope = 'now' | 'commit';
-type GitDiffChangeType = 'normal' | 'insert' | 'delete';
-type GitFileSource = 'worktree' | 'head';
+The public git data contract is:
 
-type GitDiffChange = {
-  type: GitDiffChangeType;
-  content: string;
-  oldLine?: number;
-  newLine?: number;
-};
+~~~ts
+type DiffChange =
+  | { type: 'normal'; content: string; oldLine: number; newLine: number }
+  | { type: 'insert'; content: string; newLine: number }
+  | { type: 'delete'; content: string; oldLine: number };
 
-type GitDiffHunk = {
+interface DiffHunk {
   oldStart: number;
   oldLines: number;
   newStart: number;
   newLines: number;
   header: string;
-  changes: GitDiffChange[];
-};
+  changes: DiffChange[];
+}
 
-type GitDiffResponse =
-  | {
-      emptyReason?: never;
-      path: string;
-      status: 'M';
-      scope: GitDiffScope;
-      ref: string;
-      hunks: GitDiffHunk[];
-      cursor: string;
-      truncated: boolean;
-      binary: boolean;
-    }
-  | {
-      emptyReason: GitEmptyReason;
-    };
+interface FileAtResult {
+  path: string;
+  bytes: Uint8Array;
+  binary: boolean;
+  contentHash: string;
+}
 
-type GitFileEmptyResponse = { emptyReason: GitEmptyReason };
-```
+interface FileDiffResult {
+  path: string;
+  status: 'M';
+  scope: 'now';
+  ref: 'live';
+  hunks: DiffHunk[];
+  cursor: '';
+  truncated: false;
+  binary: boolean;
+}
+~~~
 
-HTTP:
+The JSON diff response is either a ready <code>FileDiffResult</code> or exactly <code>{ emptyReason: "container" | "no_checkout" }</code>.
 
-- `GET /api/workflows/runs/{runId}/git/diff?path=<git-relative>&cursor=<opaque?>`
-- Ready Now body has `scope: "now"`, `ref: "live"`, `status: "M"`, `cursor: ""`, `truncated: false` in this story.
-- `binary: true` means do not render hunks as text; `hunks` is `[]`.
-- CAP-6 JSON is `{ emptyReason }` with HTTP 200.
-- Missing run is HTTP 404 `{ error: "Workflow run not found" }`.
-- Invalid path is HTTP 400 `{ error: "Invalid file path" }`.
-- Missing blob/file after a ready checkout is HTTP 404 `{ error: "File not found" }`.
-- Post-gate git failure is HTTP 500 `{ error: "Could not read git diff" }`.
+The diff route is <code>GET /api/workflows/runs/{runId}/git/diff?path=GIT_PATH&cursor=OPAQUE_OPTIONAL</code>.
 
-- `GET /api/workflows/runs/:runId/git/file/*?source=worktree|head`
-- CAP-6 is HTTP 200 `Content-Type: application/json` with `{ emptyReason }`.
-- Text is HTTP 200 `text/plain; charset=utf-8` with the raw bytes decoded as UTF-8 replacement-free only when `hasNulInFirst8k` is false.
-- Binary is HTTP 200 `application/octet-stream` with empty body and `Content-Disposition: attachment; filename="download"`.
-- Missing `source` or an unknown source is HTTP 400 `{ error: "Invalid file source" }`.
-- Invalid path is HTTP 400 `{ error: "Invalid file path" }`.
-- Missing file is HTTP 404 `{ error: "File not found" }`.
-- Post-gate git/fs failure is HTTP 500 `{ error: "Could not read git file" }`.
-- Unknown query parameters, including `working_path`, never influence checkout resolution.
+The raw route is <code>GET /api/workflows/runs/:runId/git/file/*?source=worktree|head</code>.
 
-Logging (no paths):
+Successful text and binary raw responses include <code>ETag: "&lt;64-lowercase-hex-contentHash&gt;"</code>.
 
-- `git.diff_started` / `git.diff_completed` / `git.diff_failed`
-- `git.file_started` / `git.file_completed` / `git.file_failed`
-- Completed payloads may include `runId`, `emptyReason`, `binary`, `truncated`, and `fileCount` is not required.
-- Failed payloads include `runId` and `errorType` only.
+Text is HTTP 200 <code>text/plain; charset=utf-8</code> with the actual bytes.
+
+Binary is HTTP 200 <code>application/octet-stream</code> with the actual bytes and <code>Content-Disposition: attachment; filename="download"</code>.
+
+CAP-6 is HTTP 200 JSON with no ETag.
+
+Missing run is HTTP 404 with <code>{ error: "Workflow run not found" }</code>.
+
+Invalid path or source is HTTP 400 with <code>{ error: "Invalid file path" }</code> or <code>{ error: "Invalid file source" }</code>.
+
+Missing file is HTTP 404 with <code>{ error: "File not found" }</code>.
+
+Unexpected post-gate failures are opaque HTTP 500 responses with <code>Could not read git diff</code> or <code>Could not read git file</code>.
 
 ## Open Questions
 
-### OQ-1 — Independent pane scroll versus one split table
+None.
 
-`react-diff-view` split mode is a single table, so both sides share one scroll container.
-**Provisional default:** always render two independently scrolling panes (before and after), each using `Diff` with `viewType="unified"` and side-filtered hunks.
-**Provisional default:** at viewport width ≥ 900px the panes sit left/right; below 900px they stack before-over-after.
-
-### OQ-2 — Hunk cursor in Story 1.2
-
-Story 1.3 owns Load more.
-**Provisional default:** `fileDiff` returns every hunk git emits, `cursor` is `""`, and `truncated` is `false`.
-**Provisional default:** the web client accepts `cursor` on the type and does not send `?cursor=` while it is empty.
-
-### OQ-3 — highlight.js HTML injection
-
-AD-5 names installed highlight.js and forbids Shiki/Monaco/refractor.
-Inserting `highlight.js` HTML without a sanitizer is an XSS hole on attacker-controlled file content.
-**Provisional default:** Story 1.2 does not call `highlight.js` and does not pass `tokens` into `Diff`.
-**Provisional default:** A/D content is a `<pre>` of plain text; `M` uses react-diff-view default text rendering plus `+`/`-` gutter characters.
-
-### OQ-4 — List virtualization versus SSR tests
-
-`@tanstack/react-virtual` needs a measured parent; `renderToStaticMarkup` has height 0.
-**Provisional default:** `ChangedFilesList` uses `useVirtualizer` when `getVirtualItems().length > 0`, otherwise it maps all rows.
-That keeps Story 1.1 SSR tests green and still plants the virtualizer for Story 1.3.
-
-### OQ-5 — `binary` on hunk JSON
-
-AD-4 did not list `binary`, but Story 1.2 requires NUL-in-first-8KB files not to dump as text.
-**Provisional default:** add required boolean `binary` on the ready diff object (default `false` in writers).
-This is additive OpenAPI, not a second cutoff.
-
-### OQ-6 — Raw file `source`
-
-A/D need HEAD versus worktree without accepting a client tree-ish.
-**Provisional default:** required query `source=worktree|head` only; never a free OID.
-
-### OQ-7 — Split persistence
-
-**Provisional default:** default 30/70 every mount; do not persist panel sizes.
-
-### OQ-8 — Keyboard after 1.1 consumed Enter
-
-Story 1.1 consumed Enter/Space without opening.
-**Provisional default:** Enter and Space open the active row; Escape closes the viewer and focuses the listbox.
+The adopted Story 1.2 contract and repository versions resolve the earlier draft choices.
 
 ---
 
-### Task 1: Add git path confinement
+### Task 1: Add defensive git path confinement
 
 **Files:**
-- Create: `packages/git/src/git-path.ts`
-- Create: `packages/git/src/git-path.test.ts`
+
+- Create: <code>packages/git/src/git-path.ts</code>
+- Create: <code>packages/git/src/git-path.test.ts</code>
 
 **Interfaces:**
-- Consumes: `fs/promises.realpath`, `path.join`, `path.sep`.
-- Produces: `GitPathError` with `code: 'empty' | 'nul' | 'absolute' | 'dotdot' | 'escape'`.
-- Produces: `parseGitFilePath(raw: string): string`.
-- Produces: `containLivePath(checkoutRoot: string, relativePath: string): Promise<string>`.
 
-- [ ] **Step 1: Write the failing confinement tests**
+- Produces internal <code>GitPathError</code> with code <code>empty | nul | absolute | dotdot | escape</code>.
+- Produces internal <code>parseGitFilePath(raw: string): string</code>.
+- Produces internal <code>containLivePath(checkoutRoot: string, relativePath: string): Promise&lt;string&gt;</code>.
 
-Create `packages/git/src/git-path.test.ts` with this complete content:
+- [ ] **Step 1: Write the failing path tests**
 
-```ts
+Create <code>packages/git/src/git-path.test.ts</code> with the following complete behavior table.
+
+~~~ts
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -227,27 +190,15 @@ import { join } from 'path';
 import { containLivePath, GitPathError, parseGitFilePath } from './git-path';
 
 describe('parseGitFilePath', () => {
-  test('accepts colon, leading dash, glob, space, and nested relative paths', () => {
-    expect(parseGitFilePath(':colon.ts')).toBe(':colon.ts');
-    expect(parseGitFilePath('-dash.ts')).toBe('-dash.ts');
-    expect(parseGitFilePath('foo*.ts')).toBe('foo*.ts');
-    expect(parseGitFilePath('path with space.ts')).toBe('path with space.ts');
-    expect(parseGitFilePath('src/a.ts')).toBe('src/a.ts');
+  test('accepts server-issued special relative names', () => {
+    for (const path of [':colon.ts', '-dash.ts', 'foo*.ts', 'path with space.ts', 'line\nbreak.ts', 'src/a.ts']) {
+      expect(parseGitFilePath(path)).toBe(path);
+    }
   });
 
-  test('rejects empty, NUL, absolute, and dot-dot segments', () => {
-    expect(() => parseGitFilePath('')).toThrow(GitPathError);
-    expect(() => parseGitFilePath('a\0b.ts')).toThrow(GitPathError);
-    expect(() => parseGitFilePath('/etc/passwd')).toThrow(GitPathError);
-    expect(() => parseGitFilePath('\\etc\\passwd')).toThrow(GitPathError);
-    expect(() => parseGitFilePath('C:/Windows/notepad.exe')).toThrow(GitPathError);
-    expect(() => parseGitFilePath('../secret')).toThrow(GitPathError);
-    expect(() => parseGitFilePath('src/../secret')).toThrow(GitPathError);
-    try {
-      parseGitFilePath('../secret');
-    } catch (error) {
-      expect(error).toBeInstanceOf(GitPathError);
-      expect((error as GitPathError).code).toBe('dotdot');
+  test('rejects empty, NUL, POSIX absolute, Windows absolute, and dot-dot segments', () => {
+    for (const path of ['', 'a\0b', '/etc/passwd', '\\\\server\\share', 'C:\\Windows\\x', '../x', 'a/../x', 'a\\..\\x']) {
+      expect(() => parseGitFilePath(path)).toThrow(GitPathError);
     }
   });
 });
@@ -269,13 +220,12 @@ describe('containLivePath', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  test('returns the realpathed file when it stays under the checkout', async () => {
-    const resolved = await containLivePath(checkout, 'inside.ts');
-    expect(resolved.endsWith('inside.ts')).toBe(true);
-    expect(resolved.startsWith(checkout)).toBe(true);
+  test('returns the canonical file beneath the canonical checkout', async () => {
+    const path = await containLivePath(checkout, 'inside.ts');
+    expect(path.endsWith('inside.ts')).toBe(true);
   });
 
-  test.skipIf(process.platform === 'win32')('refuses a symlink that escapes the checkout', async () => {
+  test.skipIf(process.platform === 'win32')('rejects a symlink that resolves outside', async () => {
     await symlink(join(root, 'outside'), join(checkout, 'escape'));
     await expect(containLivePath(checkout, 'escape/secret.txt')).rejects.toMatchObject({
       name: 'GitPathError',
@@ -283,25 +233,25 @@ describe('containLivePath', () => {
     });
   });
 });
-```
+~~~
 
-- [ ] **Step 2: Run the test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run:
 
-```bash
-bun test packages/git/src/git-path.test.ts
-```
+~~~bash
+( cd packages/git && bun test src/git-path.test.ts )
+~~~
 
-Expected: FAIL because `./git-path` does not exist.
+Expected: FAIL because <code>packages/git/src/git-path.ts</code> does not exist.
 
-- [ ] **Step 3: Implement the minimal confinement module**
+- [ ] **Step 3: Implement the minimal path module**
 
-Create `packages/git/src/git-path.ts` with this complete content:
+Create <code>packages/git/src/git-path.ts</code> with this implementation shape.
 
-```ts
+~~~ts
 import { realpath } from 'fs/promises';
-import { join, sep } from 'path';
+import { isAbsolute, join, relative, sep } from 'path';
 
 export type GitPathErrorCode = 'empty' | 'nul' | 'absolute' | 'dotdot' | 'escape';
 
@@ -316,20 +266,19 @@ export class GitPathError extends Error {
 }
 
 export function parseGitFilePath(raw: string): string {
-  if (!raw) throw new GitPathError('empty');
+  if (raw.length === 0) throw new GitPathError('empty');
   if (raw.includes('\0')) throw new GitPathError('nul');
-  if (raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(raw)) {
+  if (
+    raw.startsWith('/') ||
+    raw.startsWith('\\') ||
+    /^[A-Za-z]:[\\/]/.test(raw)
+  ) {
     throw new GitPathError('absolute');
   }
-  if (raw.split('/').some(segment => segment === '..' || segment === '\\..')) {
+  if (raw.split(/[\\/]/).some(segment => segment === '..')) {
     throw new GitPathError('dotdot');
   }
   return raw;
-}
-
-function isInsideCheckout(checkoutRoot: string, resolved: string): boolean {
-  const root = checkoutRoot.endsWith(sep) ? checkoutRoot : checkoutRoot + sep;
-  return resolved === checkoutRoot || resolved.startsWith(root);
 }
 
 export async function containLivePath(
@@ -337,271 +286,165 @@ export async function containLivePath(
   relativePath: string
 ): Promise<string> {
   const parsed = parseGitFilePath(relativePath);
-  let resolved: string;
-  try {
-    resolved = await realpath(join(checkoutRoot, parsed));
-  } catch {
+  const canonicalRoot = await realpath(checkoutRoot);
+  const canonicalCandidate = await realpath(join(canonicalRoot, parsed));
+  const fromRoot = relative(canonicalRoot, canonicalCandidate);
+  if (
+    fromRoot === '..' ||
+    fromRoot.startsWith('..' + sep) ||
+    isAbsolute(fromRoot)
+  ) {
     throw new GitPathError('escape');
   }
-  if (!isInsideCheckout(checkoutRoot, resolved)) {
-    throw new GitPathError('escape');
-  }
-  return resolved;
+  return canonicalCandidate;
 }
-```
+~~~
 
-Missing worktree files throw `escape` here so the HTTP layer can map containment failures to 400 without distinguishing a dangling path from an escape at this helper.
-`fileAt` maps `ENOENT` on the worktree source to `GitFileError('not_found')` before calling this helper when `stat` says the path does not exist.
+Do not catch <code>realpath</code> errors here because the caller must distinguish a missing file from an unexpected filesystem failure.
 
 - [ ] **Step 4: Verify GREEN**
 
 Run:
 
-```bash
-bun test packages/git/src/git-path.test.ts
-```
+~~~bash
+( cd packages/git && bun test src/git-path.test.ts )
+~~~
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the confinement helper**
+- [ ] **Step 5: Commit**
 
-```bash
+~~~bash
 git add packages/git/src/git-path.ts packages/git/src/git-path.test.ts
-git commit -m "feat(git): confine live file paths under checkout"
-```
+git commit -m "feat(git): confine live file paths"
+~~~
 
 ---
 
-### Task 2: Add `fileAt` and `fileDiff`
+### Task 2: Add public binary-safe file and Now diff reads
 
 **Files:**
-- Modify: `packages/git/src/exec.ts`
-- Create: `packages/git/src/file-read.ts`
-- Create: `packages/git/src/file-read.test.ts`
+
+- Modify: <code>packages/git/src/exec.ts</code>
+- Create: <code>packages/git/src/file-read.ts</code>
+- Create: <code>packages/git/src/file-read.test.ts</code>
+- Modify: <code>packages/git/src/index.ts</code>
+- Modify: the 31 exact mock files listed in Step 5
 
 **Interfaces:**
-- Consumes: `execFileAsync`, `execFileBufferAsync`, `parseGitFilePath`, `containLivePath`.
-- Produces: `hasNulInFirst8k(bytes: Uint8Array): boolean`.
-- Produces: `parseUnifiedDiff(stdout: string): DiffHunk[]`.
-- Produces: `fileAt(workingPath, relativePath, source: { kind: 'worktree' } | { kind: 'tree'; treeIsh: string }): Promise<FileAtResult>`.
-- Produces: `fileDiff(workingPath, relativePath): Promise<FileDiffResult>`.
-- Produces: `GitFileError` with `code: 'not_found' | 'invalid_ref'`.
 
-- [ ] **Step 1: Write the failing file-read tests**
+- Produces public <code>fileAt(workingPath, relativePath, source): Promise&lt;FileAtResult&gt;</code>.
+- Produces public <code>fileDiff(workingPath, relativePath): Promise&lt;FileDiffResult&gt;</code>.
+- Keeps <code>parseUnifiedDiff</code>, <code>hasNulInFirst8k</code>, and the error classes internal to the package.
 
-Create `packages/git/src/file-read.test.ts` with this complete content:
+- [ ] **Step 1: Write the failing parser and real-git tests**
 
-```ts
-import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
-import { join } from 'path';
+Create <code>packages/git/src/file-read.test.ts</code>.
 
-import * as exec from './exec';
-import { execFileAsync } from './exec';
-import {
-  fileAt,
-  fileDiff,
-  GitFileError,
-  hasNulInFirst8k,
-  parseUnifiedDiff,
-} from './file-read';
-import { toWorktreePath } from './types';
+The test fixture must initialize one real repository, commit ordinary and special names plus a 1,048,577-byte NUL fixture, then modify <code>tracked.ts</code>, <code>:colon.ts</code>, and <code>foo*.ts</code>, add <code>added.ts</code> and a NUL file, and delete <code>-dash.ts</code>.
 
-describe('hasNulInFirst8k and parseUnifiedDiff', () => {
-  test('detects NUL only in the first 8 KB', () => {
-    expect(hasNulInFirst8k(new Uint8Array([1, 2, 3]))).toBe(false);
-    expect(hasNulInFirst8k(new Uint8Array([1, 0, 3]))).toBe(true);
-    const late = new Uint8Array(9000);
-    late[8192] = 0;
-    expect(hasNulInFirst8k(late)).toBe(false);
-  });
+Add these focused assertions before implementation.
 
-  test('parses a single-file unified diff into hunks without git prefixes', () => {
-    const stdout = [
-      'diff --git a/src/a.ts b/src/a.ts',
-      'index 111..222 100644',
-      '--- a/src/a.ts',
-      '+++ b/src/a.ts',
-      '@@ -1,2 +1,3 @@',
-      ' line1',
-      '-old',
-      '+new',
-      '+tail',
-      '',
-    ].join('\n');
-
-    expect(parseUnifiedDiff(stdout)).toEqual([
-      {
-        oldStart: 1,
-        oldLines: 2,
-        newStart: 1,
-        newLines: 3,
-        header: '@@ -1,2 +1,3 @@',
-        changes: [
-          { type: 'normal', content: 'line1', oldLine: 1, newLine: 1 },
-          { type: 'delete', content: 'old', oldLine: 2 },
-          { type: 'insert', content: 'new', newLine: 2 },
-          { type: 'insert', content: 'tail', newLine: 3 },
-        ],
-      },
-    ]);
-  });
-
-  test('returns no hunks for a binary git diff', () => {
-    expect(parseUnifiedDiff('Binary files a/x.bin and b/x.bin differ\n')).toEqual([]);
-  });
+~~~ts
+test('does not invent a trailing context line or drop content that resembles a file header', () => {
+  const stdout = [
+    'diff --git a/x b/x',
+    '--- a/x',
+    '+++ b/x',
+    '@@ -0,0 +1,2 @@',
+    '+++ literal-content',
+    '+tail',
+    '',
+  ].join('\n');
+  expect(parseUnifiedDiff(stdout)).toEqual([
+    {
+      oldStart: 0,
+      oldLines: 0,
+      newStart: 1,
+      newLines: 2,
+      header: '@@ -0,0 +1,2 @@',
+      changes: [
+        { type: 'insert', content: '++ literal-content', newLine: 1 },
+        { type: 'insert', content: 'tail', newLine: 2 },
+      ],
+    },
+  ]);
 });
 
-describe('fileAt and fileDiff', () => {
-  let root = '';
-  let repoPath = '';
-
-  beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), 'archon-file-read-'));
-    repoPath = join(root, 'repo');
-    await mkdir(repoPath);
-    await execFileAsync('git', ['-C', repoPath, 'init']);
-    await execFileAsync('git', ['-C', repoPath, 'config', 'user.email', 'sc@example.com']);
-    await execFileAsync('git', ['-C', repoPath, 'config', 'user.name', 'SC']);
-    await writeFile(join(repoPath, 'tracked.ts'), 'old\n');
-    await writeFile(join(repoPath, ':colon.ts'), 'colon-old\n');
-    await writeFile(join(repoPath, '-dash.ts'), 'dash-old\n');
-    await writeFile(join(repoPath, 'foo*.ts'), 'glob-old\n');
-    await execFileAsync('git', ['-C', repoPath, 'add', '-A']);
-    await execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'base']);
-    await writeFile(join(repoPath, 'tracked.ts'), 'new\n');
-    await writeFile(join(repoPath, 'added.ts'), 'added\n');
-    await rm(join(repoPath, '-dash.ts'));
-    await writeFile(join(repoPath, 'nul.bin'), Buffer.from([0x00, 1, 2]));
-    await execFileAsync('git', ['-C', repoPath, 'add', 'nul.bin']);
-  });
-
-  afterAll(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
-
-  test('reads worktree and HEAD without oid:path syntax', async () => {
-    const execSpy = spyOn(exec, 'execFileAsync');
-    const bufferSpy = spyOn(exec, 'execFileBufferAsync');
-    const wt = toWorktreePath(repoPath);
-
-    const head = await fileAt(wt, 'tracked.ts', { kind: 'tree', treeIsh: 'HEAD' });
-    const worktree = await fileAt(wt, 'tracked.ts', { kind: 'worktree' });
-    const added = await fileAt(wt, 'added.ts', { kind: 'worktree' });
-    const deleted = await fileAt(wt, '-dash.ts', { kind: 'tree', treeIsh: 'HEAD' });
-    const colon = await fileAt(wt, ':colon.ts', { kind: 'tree', treeIsh: 'HEAD' });
-
-    expect(new TextDecoder().decode(head.bytes)).toBe('old\n');
-    expect(new TextDecoder().decode(worktree.bytes)).toBe('new\n');
-    expect(new TextDecoder().decode(added.bytes)).toBe('added\n');
-    expect(new TextDecoder().decode(deleted.bytes)).toBe('dash-old\n');
-    expect(new TextDecoder().decode(colon.bytes)).toBe('colon-old\n');
-    expect(head.binary).toBe(false);
-
-    const argvJoined = [...execSpy.mock.calls, ...bufferSpy.mock.calls]
-      .map(call => (call[1] as string[]).join('\0'))
-      .join('\n');
-    expect(argvJoined).not.toContain('HEAD:');
-    expect(argvJoined).toContain('ls-tree');
-    expect(argvJoined).toContain('cat-file');
-    execSpy.mockRestore();
-    bufferSpy.mockRestore();
-  });
-
-  test('rejects colon tree-ish, invalid OID, and missing files', async () => {
-    const wt = toWorktreePath(repoPath);
-    await expect(fileAt(wt, 'tracked.ts', { kind: 'tree', treeIsh: 'HEAD:tracked.ts' })).rejects.toMatchObject(
-      { name: 'GitFileError', code: 'invalid_ref' }
-    );
-    await expect(
-      fileAt(wt, 'tracked.ts', { kind: 'tree', treeIsh: 'a'.repeat(40) })
-    ).rejects.toMatchObject({ name: 'GitFileError', code: 'not_found' });
-    await expect(fileAt(wt, 'missing.ts', { kind: 'worktree' })).rejects.toMatchObject({
-      name: 'GitFileError',
-      code: 'not_found',
-    });
-  });
-
-  test('diffs HEAD to worktree and flags NUL binaries', async () => {
-    const wt = toWorktreePath(repoPath);
-    const diff = await fileDiff(wt, 'tracked.ts');
-    expect(diff).toMatchObject({
-      path: 'tracked.ts',
-      status: 'M',
-      scope: 'now',
-      ref: 'live',
-      cursor: '',
-      truncated: false,
-      binary: false,
-    });
-    expect(diff.hunks[0]?.changes.some(change => change.type === 'delete' && change.content === 'old')).toBe(
-      true
-    );
-    expect(diff.hunks[0]?.changes.some(change => change.type === 'insert' && change.content === 'new')).toBe(
-      true
-    );
-
-    const binary = await fileDiff(wt, 'nul.bin');
-    expect(binary.binary).toBe(true);
-    expect(binary.hunks).toEqual([]);
-
-    const special = await fileDiff(wt, 'foo*.ts');
-    expect(special.path).toBe('foo*.ts');
-  });
+test('detects NUL only within the first 8192 bytes', () => {
+  expect(hasNulInFirst8k(new Uint8Array([1, 0, 2]))).toBe(true);
+  const late = new Uint8Array(9000);
+  late[8192] = 0;
+  expect(hasNulInFirst8k(late)).toBe(false);
 });
-```
+~~~
 
-`execFileBufferAsync` is imported from `./exec` in the test spy setup, so Step 3 must add it there rather than only in a disconnected file.
+The real-git tests must prove all of the following with literal expected content.
 
-- [ ] **Step 2: Run the test and verify RED**
+- HEAD returns the committed <code>tracked.ts</code> bytes through <code>ls-tree -z</code> and <code>cat-file blob</code>.
+- Worktree returns the modified <code>tracked.ts</code> and added-file bytes.
+- HEAD returns deleted <code>-dash.ts</code> content.
+- Colon, leading-dash, glob, spaces, and newlines remain literal pathspecs.
+- An in-checkout symlink returns its git blob value, which is the link target string, rather than dereferencing and returning the target file's contents.
+- A symlink resolving outside causes <code>fileAt</code> and <code>fileDiff</code> to reject with <code>GitPathError</code>.
+- Missing worktree and tree files reject with a named <code>GitFileError</code> whose code is <code>not_found</code>.
+- A missing or invalid tree-ish rejects with <code>GitFileError</code> code <code>invalid_ref</code> rather than being misreported as a missing file.
+- <code>fileDiff</code> reports HEAD-to-worktree delete and insert lines, <code>scope: "now"</code>, <code>ref: "live"</code>, empty cursor, and no truncation.
+- A NUL file returns <code>binary: true</code> and no hunks.
+- The committed 1,048,577-byte NUL fixture returns every byte through <code>fileAt</code>, proving the binary download path does not inherit Node's default one-megabyte <code>execFile</code> ceiling.
+- Every <code>FileAtResult.contentHash</code> is 64 lowercase hexadecimal characters and changes when bytes change.
+- A spy wrapping the real exec functions sees <code>--literal-pathspecs</code>, <code>ls-tree</code>, <code>cat-file</code>, and a separate path argv after <code>--</code>, and never sees <code>HEAD:</code>.
+
+- [ ] **Step 2: Verify RED**
 
 Run:
 
-```bash
-bun test packages/git/src/file-read.test.ts
-```
+~~~bash
+( cd packages/git && bun test src/file-read.test.ts )
+~~~
 
-Expected: FAIL because `./file-read` does not exist or `execFileBufferAsync` is not exported from `./exec`.
+Expected: FAIL because <code>file-read.ts</code> and <code>execFileBufferAsync</code> do not exist.
 
-- [ ] **Step 3: Implement buffer exec plus file reads**
+- [ ] **Step 3: Add the internal buffer exec wrapper**
 
-Add this export to `packages/git/src/exec.ts` immediately after `execFileAsync`:
+Add this export immediately after <code>execFileAsync</code> in <code>packages/git/src/exec.ts</code>.
 
-```ts
+~~~ts
 export async function execFileBufferAsync(
   cmd: string,
   args: string[],
   options?: { timeout?: number; cwd?: string; maxBuffer?: number; env?: NodeJS.ProcessEnv }
 ): Promise<{ stdout: Buffer; stderr: Buffer }> {
-  const result = await promisifiedExecFile(cmd, args, { ...options, encoding: 'buffer' });
+  const result = await promisifiedExecFile(cmd, args, {
+    ...options,
+    encoding: 'buffer',
+  });
   return {
     stdout: Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout ?? ''),
     stderr: Buffer.isBuffer(result.stderr) ? result.stderr : Buffer.from(result.stderr ?? ''),
   };
 }
-```
+~~~
 
-Do not create `packages/git/src/exec-buffer.ts`; keep the buffer helper next to `execFileAsync` so spies on `./exec` see both functions.
+Do not export <code>execFileBufferAsync</code> from <code>packages/git/src/index.ts</code> because it has no caller outside this package.
 
-Create `packages/git/src/file-read.ts` with this complete content:
+- [ ] **Step 4: Implement <code>file-read.ts</code> minimally**
 
-```ts
-import { readFile, stat } from 'fs/promises';
+Use discriminated change types so inserted lines cannot accidentally carry old line numbers and deleted lines cannot accidentally carry new line numbers.
+
+~~~ts
+import { createHash } from 'crypto';
+import { lstat, readFile, readlink } from 'fs/promises';
 import { join } from 'path';
 
 import * as exec from './exec';
 import { containLivePath, GitPathError, parseGitFilePath } from './git-path';
 import type { RepoPath, WorktreePath } from './types';
 
-export type DiffChangeType = 'normal' | 'insert' | 'delete';
-
-export interface DiffChange {
-  type: DiffChangeType;
-  content: string;
-  oldLine?: number;
-  newLine?: number;
-}
+export type DiffChange =
+  | { type: 'normal'; content: string; oldLine: number; newLine: number }
+  | { type: 'insert'; content: string; newLine: number }
+  | { type: 'delete'; content: string; oldLine: number };
 
 export interface DiffHunk {
   oldStart: number;
@@ -616,6 +459,7 @@ export interface FileAtResult {
   path: string;
   bytes: Uint8Array;
   binary: boolean;
+  contentHash: string;
 }
 
 export interface FileDiffResult {
@@ -630,8 +474,7 @@ export interface FileDiffResult {
 }
 
 export type FileAtSource = { kind: 'worktree' } | { kind: 'tree'; treeIsh: string };
-
-export type GitFileErrorCode = 'not_found' | 'invalid_ref';
+type GitFileErrorCode = 'not_found' | 'invalid_ref';
 
 export class GitFileError extends Error {
   readonly code: GitFileErrorCode;
@@ -645,30 +488,18 @@ export class GitFileError extends Error {
 
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
+function isMissing(error: unknown): boolean {
+  if (!(error instanceof Error) || !('code' in error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+function hashBytes(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
 export function hasNulInFirst8k(bytes: Uint8Array): boolean {
-  const limit = Math.min(8192, bytes.byteLength);
-  return bytes.subarray(0, limit).includes(0);
-}
-
-function isUnsafeTreeIsh(treeIsh: string): boolean {
-  return (
-    treeIsh.length === 0 ||
-    treeIsh.includes('\0') ||
-    treeIsh.includes(':') ||
-    treeIsh.startsWith('-')
-  );
-}
-
-function parseLsTreeBlobOid(stdout: string, expectedPath: string): string | null {
-  const record = stdout.split('\0').find(entry => entry.length > 0);
-  if (!record) return null;
-  const tab = record.indexOf('\t');
-  if (tab < 0) return null;
-  const path = record.slice(tab + 1);
-  if (path !== expectedPath) return null;
-  const meta = record.slice(0, tab).split(' ');
-  if (meta[1] !== 'blob' || !meta[2]) return null;
-  return meta[2];
+  return bytes.subarray(0, Math.min(8192, bytes.byteLength)).includes(0);
 }
 
 export function parseUnifiedDiff(stdout: string): DiffHunk[] {
@@ -678,17 +509,14 @@ export function parseUnifiedDiff(stdout: string): DiffHunk[] {
   let oldLine = 0;
   let newLine = 0;
   for (const line of stdout.split('\n')) {
-    if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
-      continue;
-    }
-    const hunkMatch = line.match(HUNK_RE);
-    if (hunkMatch) {
+    const match = line.match(HUNK_RE);
+    if (match) {
       current = {
-        oldStart: Number(hunkMatch[1]),
-        oldLines: Number(hunkMatch[2] ?? '1'),
-        newStart: Number(hunkMatch[3]),
-        newLines: Number(hunkMatch[4] ?? '1'),
-        header: line.startsWith('@@') ? line : `@@ -${hunkMatch[1]},${hunkMatch[2] ?? '1'} +${hunkMatch[3]},${hunkMatch[4] ?? '1'} @@`,
+        oldStart: Number(match[1]),
+        oldLines: Number(match[2] ?? '1'),
+        newStart: Number(match[3]),
+        newLines: Number(match[4] ?? '1'),
+        header: line,
         changes: [],
       };
       oldLine = current.oldStart;
@@ -700,69 +528,113 @@ export function parseUnifiedDiff(stdout: string): DiffHunk[] {
     if (line.startsWith('+')) {
       current.changes.push({ type: 'insert', content: line.slice(1), newLine });
       newLine += 1;
-      continue;
-    }
-    if (line.startsWith('-')) {
+    } else if (line.startsWith('-')) {
       current.changes.push({ type: 'delete', content: line.slice(1), oldLine });
       oldLine += 1;
-      continue;
-    }
-    if (line.startsWith(' ') || line === '') {
-      const content = line.startsWith(' ') ? line.slice(1) : line;
-      current.changes.push({ type: 'normal', content, oldLine, newLine });
+    } else if (line.startsWith(' ')) {
+      current.changes.push({ type: 'normal', content: line.slice(1), oldLine, newLine });
       oldLine += 1;
       newLine += 1;
     }
   }
   return hunks;
 }
+~~~
 
+Finish <code>fileAt</code> with these exact branches.
+
+~~~ts
 export async function fileAt(
   workingPath: RepoPath | WorktreePath,
   relativePath: string,
   source: FileAtSource
 ): Promise<FileAtResult> {
   const path = parseGitFilePath(relativePath);
+  let bytes: Uint8Array;
   if (source.kind === 'worktree') {
+    const candidate = join(workingPath, path);
+    let entry: Awaited<ReturnType<typeof lstat>>;
     try {
-      await stat(join(workingPath, path));
-    } catch {
-      throw new GitFileError('not_found');
-    }
-    let abs: string;
-    try {
-      abs = await containLivePath(workingPath, path);
+      entry = await lstat(candidate);
     } catch (error) {
-      if (error instanceof GitPathError) throw error;
+      if (isMissing(error)) throw new GitFileError('not_found');
+      throw error;
+    }
+    let canonical: string;
+    try {
+      canonical = await containLivePath(workingPath, path);
+    } catch (error) {
+      if (isMissing(error)) throw new GitFileError('not_found');
+      throw error;
+    }
+    const buffer = entry.isSymbolicLink()
+      ? Buffer.from(await readlink(candidate))
+      : await readFile(canonical);
+    bytes = new Uint8Array(buffer);
+  } else {
+    if (
+      source.treeIsh.length === 0 ||
+      source.treeIsh.includes('\0') ||
+      source.treeIsh.includes(':') ||
+      source.treeIsh.startsWith('-')
+    ) {
+      throw new GitFileError('invalid_ref');
+    }
+    let listing: { stdout: string };
+    try {
+      listing = await exec.execFileAsync('git', [
+        '-C',
+        workingPath,
+        '--literal-pathspecs',
+        'ls-tree',
+        '-z',
+        source.treeIsh,
+        '--',
+        path,
+      ]);
+    } catch {
+      throw new GitFileError('invalid_ref');
+    }
+    const record = listing.stdout.split('\0').find(value => value.length > 0);
+    const tab = record?.indexOf('\t') ?? -1;
+    const meta = tab >= 0 ? record?.slice(0, tab).split(' ') : undefined;
+    const listedPath = tab >= 0 ? record?.slice(tab + 1) : undefined;
+    if (!meta || meta[1] !== 'blob' || !meta[2] || listedPath !== path) {
       throw new GitFileError('not_found');
     }
-    const buf = await readFile(abs);
-    const bytes = new Uint8Array(buf);
-    return { path, bytes, binary: hasNulInFirst8k(bytes) };
+    const blob = await exec.execFileBufferAsync(
+      'git',
+      ['-C', workingPath, 'cat-file', 'blob', meta[2]],
+      { maxBuffer: Number.POSITIVE_INFINITY }
+    );
+    bytes = new Uint8Array(blob.stdout);
   }
-  if (isUnsafeTreeIsh(source.treeIsh)) throw new GitFileError('invalid_ref');
-  let ls: { stdout: string };
+  return {
+    path,
+    bytes,
+    binary: hasNulInFirst8k(bytes),
+    contentHash: hashBytes(bytes),
+  };
+}
+~~~
+
+The unbounded <code>cat-file</code> buffer deliberately avoids inventing a Story 1.2 size cutoff; Story 1.3 must replace this whole-file path with its adopted streaming and download-only policy.
+
+Finish <code>fileDiff</code> with a security-preserving binary probe and one literal HEAD-to-worktree diff command.
+
+~~~ts
+async function probeBinary(
+  workingPath: RepoPath | WorktreePath,
+  path: string,
+  source: FileAtSource
+): Promise<boolean> {
   try {
-    ls = await exec.execFileAsync('git', [
-      '-C',
-      workingPath,
-      '--literal-pathspecs',
-      'ls-tree',
-      '-z',
-      source.treeIsh,
-      '--',
-      path,
-    ]);
-  } catch {
-    throw new GitFileError('not_found');
+    return (await fileAt(workingPath, path, source)).binary;
+  } catch (error) {
+    if (error instanceof GitPathError) throw error;
+    if (error instanceof GitFileError && error.code === 'not_found') return false;
+    throw error;
   }
-  const blobOid = parseLsTreeBlobOid(ls.stdout, path);
-  if (!blobOid) throw new GitFileError('not_found');
-  const blob = await exec.execFileBufferAsync('git', ['-C', workingPath, 'cat-file', 'blob', blobOid], {
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  const bytes = new Uint8Array(blob.stdout);
-  return { path, bytes, binary: hasNulInFirst8k(bytes) };
 }
 
 export async function fileDiff(
@@ -770,389 +642,347 @@ export async function fileDiff(
   relativePath: string
 ): Promise<FileDiffResult> {
   const path = parseGitFilePath(relativePath);
-  let binary = false;
-  try {
-    const after = await fileAt(workingPath, path, { kind: 'worktree' });
-    binary = after.binary;
-  } catch {
-    // Intentional: a worktree-side read can fail for a deleted-then-modified edge; HEAD still diffs.
-  }
-  try {
-    const before = await fileAt(workingPath, path, { kind: 'tree', treeIsh: 'HEAD' });
-    binary = binary || before.binary;
-  } catch {
-    // Intentional: unborn or missing HEAD blob still allows git diff to describe the after side.
+  const binary =
+    (await probeBinary(workingPath, path, { kind: 'worktree' })) ||
+    (await probeBinary(workingPath, path, { kind: 'tree', treeIsh: 'HEAD' }));
+  if (binary) {
+    return {
+      path,
+      status: 'M',
+      scope: 'now',
+      ref: 'live',
+      hunks: [],
+      cursor: '',
+      truncated: false,
+      binary: true,
+    };
   }
   const diff = await exec.execFileAsync('git', [
     '-C',
     workingPath,
-    '--literal-pathspecs',
     '--no-optional-locks',
-    '--no-ext-diff',
+    '--literal-pathspecs',
     'diff',
     '--no-color',
+    '--no-ext-diff',
+    '--text',
     '-U3',
     'HEAD',
     '--',
     path,
   ]);
-  if (diff.stdout.includes('Binary files ') || diff.stdout.includes('GIT binary patch')) {
-    binary = true;
-  }
   return {
     path,
     status: 'M',
     scope: 'now',
     ref: 'live',
-    hunks: binary ? [] : parseUnifiedDiff(diff.stdout),
+    hunks: parseUnifiedDiff(diff.stdout),
     cursor: '',
     truncated: false,
-    binary,
+    binary: false,
   };
 }
-```
+~~~
 
-Do not catch `git diff` failures inside this module; the server maps them to the opaque 500.
+- [ ] **Step 5: Publish the narrow API and keep all merging mocks hermetic**
 
-- [ ] **Step 4: Verify GREEN**
+Add only these exports to <code>packages/git/src/index.ts</code>.
 
-Run:
-
-```bash
-bun test packages/git/src/file-read.test.ts
-bun test packages/git/src/git-path.test.ts
-```
-
-Expected: both PASS.
-
-If `git add -A` in the fixture fails to add `:colon.ts` or `foo*.ts` on a platform, set `GIT_LITERAL_PATHSPECS=1` in that `beforeAll` via `execFileAsync` env rather than changing the production helper.
-
-- [ ] **Step 5: Commit the file reads**
-
-```bash
-git add packages/git/src/exec.ts packages/git/src/file-read.ts packages/git/src/file-read.test.ts
-git commit -m "feat(git): read file contents and Now diffs"
-```
-
----
-
-### Task 3: Export file reads and stub merging git mocks
-
-**Files:**
-- Modify: `packages/git/src/index.ts`
-- Modify: the 31 exact mock-factory files in Step 2.
-
-**Interfaces:**
-- Consumes: Task 1 and Task 2 modules.
-- Produces: package exports `fileAt`, `fileDiff`, `parseGitFilePath`, `containLivePath`, `GitPathError`, `GitFileError` plus their types.
-
-- [ ] **Step 1: Write the failing export smoke by type-checking a handler-shaped import**
-
-Do not add server files yet.
-Add this block to `packages/git/src/index.ts` after the changed-files exports:
-
-```ts
-export { containLivePath, parseGitFilePath, GitPathError } from './git-path';
-export type { GitPathErrorCode } from './git-path';
-export { fileAt, fileDiff, GitFileError } from './file-read';
+~~~ts
+export { fileAt, fileDiff } from './file-read';
 export type {
   DiffChange,
   DiffHunk,
   FileAtResult,
   FileAtSource,
   FileDiffResult,
-  GitFileErrorCode,
 } from './file-read';
-```
+~~~
 
-Leave `hasNulInFirst8k` and `parseUnifiedDiff` unexported from the package root; tests import them from `./file-read`.
+Do not export either error class, either path helper, the diff parser, or the buffer exec wrapper from the package root.
 
-- [ ] **Step 2: Stub I/O exports in every merging git mock**
+Add these two stubs to every existing <code>mock.module('@archon/git')</code> factory.
 
-Add these exact properties to every existing `mock.module('@archon/git', () => ({ ... }))` factory:
-
-```ts
+~~~ts
+fileAt: mock(async () => ({
+  path: 'x.ts',
+  bytes: new Uint8Array(),
+  binary: false,
+  contentHash: '0'.repeat(64),
+})),
 fileDiff: mock(async () => ({
   path: 'x.ts',
   status: 'M' as const,
   scope: 'now' as const,
   ref: 'live' as const,
   hunks: [],
-  cursor: '',
-  truncated: false,
+  cursor: '' as const,
+  truncated: false as const,
   binary: false,
 })),
-fileAt: mock(async () => ({ path: 'x.ts', bytes: new Uint8Array(), binary: false })),
-containLivePath: mock(async (_root: string, rel: string) => rel),
-```
+~~~
 
-Use a plain async function only in a factory that intentionally does not use Bun's `mock`.
-Do not stub `GitPathError` or `parseGitFilePath`; omitted class/pure exports keep the real implementations, which is required for `instanceof GitPathError`.
-Update all 31 files:
+Use an ordinary async function instead of <code>mock</code> only in a factory that does not import Bun's <code>mock</code>.
 
-1. `packages/adapters/src/community/forge/gitea/adapter.test.ts`
-2. `packages/adapters/src/community/forge/gitlab/adapter.test.ts`
-3. `packages/adapters/src/forge/github/adapter.test.ts`
-4. `packages/adapters/src/forge/github/context.test.ts`
-5. `packages/cli/src/commands/isolation.test.ts`
-6. `packages/cli/src/commands/workflow-command-contract.test.ts`
-7. `packages/cli/src/commands/workflow.test.ts`
-8. `packages/core/src/db/workflows.test.ts`
-9. `packages/core/src/operations/isolation-operations.test.ts`
-10. `packages/core/src/operations/workflow-retry.test.ts`
-11. `packages/core/src/orchestrator/orchestrator-agent.test.ts`
-12. `packages/core/src/orchestrator/orchestrator-isolation.test.ts`
-13. `packages/core/src/orchestrator/orchestrator.test.ts`
-14. `packages/core/src/orchestrator/post-message-reminder.test.ts`
-15. `packages/core/src/services/cleanup-service.test.ts`
-16. `packages/isolation/src/pr-state.test.ts`
-17. `packages/server/src/routes/api.auth.test.ts`
-18. `packages/server/src/routes/api.codebases.test.ts`
-19. `packages/server/src/routes/api.git-changes.test.ts`
-20. `packages/server/src/routes/api.health.test.ts`
-21. `packages/server/src/routes/api.messages.test.ts`
-22. `packages/server/src/routes/api.provider-keys.test.ts`
-23. `packages/server/src/routes/api.providers.test.ts`
-24. `packages/server/src/routes/api.usage.test.ts`
-25. `packages/server/src/routes/api.user-ai-prefs.test.ts`
-26. `packages/server/src/routes/api.workflow-runs.test.ts`
-27. `packages/workflows/src/executor-preamble.test.ts`
-28. `packages/workflows/src/executor.test.ts`
-29. `packages/workflows/src/runtime-check.test.ts`
-30. `packages/workflows/src/script-node-deps.test.ts`
-31. `packages/workflows/src/subrun.test.ts`
+Update exactly these 31 files.
 
-- [ ] **Step 3: Verify GREEN and package compatibility**
+1. <code>packages/adapters/src/community/forge/gitea/adapter.test.ts</code>
+2. <code>packages/adapters/src/community/forge/gitlab/adapter.test.ts</code>
+3. <code>packages/adapters/src/forge/github/adapter.test.ts</code>
+4. <code>packages/adapters/src/forge/github/context.test.ts</code>
+5. <code>packages/cli/src/commands/isolation.test.ts</code>
+6. <code>packages/cli/src/commands/workflow-command-contract.test.ts</code>
+7. <code>packages/cli/src/commands/workflow.test.ts</code>
+8. <code>packages/core/src/db/workflows.test.ts</code>
+9. <code>packages/core/src/operations/isolation-operations.test.ts</code>
+10. <code>packages/core/src/operations/workflow-retry.test.ts</code>
+11. <code>packages/core/src/orchestrator/orchestrator-agent.test.ts</code>
+12. <code>packages/core/src/orchestrator/orchestrator-isolation.test.ts</code>
+13. <code>packages/core/src/orchestrator/orchestrator.test.ts</code>
+14. <code>packages/core/src/orchestrator/post-message-reminder.test.ts</code>
+15. <code>packages/core/src/services/cleanup-service.test.ts</code>
+16. <code>packages/isolation/src/pr-state.test.ts</code>
+17. <code>packages/server/src/routes/api.auth.test.ts</code>
+18. <code>packages/server/src/routes/api.codebases.test.ts</code>
+19. <code>packages/server/src/routes/api.git-changes.test.ts</code>
+20. <code>packages/server/src/routes/api.health.test.ts</code>
+21. <code>packages/server/src/routes/api.messages.test.ts</code>
+22. <code>packages/server/src/routes/api.provider-keys.test.ts</code>
+23. <code>packages/server/src/routes/api.providers.test.ts</code>
+24. <code>packages/server/src/routes/api.usage.test.ts</code>
+25. <code>packages/server/src/routes/api.user-ai-prefs.test.ts</code>
+26. <code>packages/server/src/routes/api.workflow-runs.test.ts</code>
+27. <code>packages/workflows/src/executor-preamble.test.ts</code>
+28. <code>packages/workflows/src/executor.test.ts</code>
+29. <code>packages/workflows/src/runtime-check.test.ts</code>
+30. <code>packages/workflows/src/script-node-deps.test.ts</code>
+31. <code>packages/workflows/src/subrun.test.ts</code>
+
+Re-run this inventory and require exactly 31 results.
+
+~~~bash
+test "$(rg -l "mock\\.module\\(['\"]@archon/git['\"]" packages | wc -l | tr -d ' ')" = "31"
+~~~
+
+- [ ] **Step 6: Verify GREEN**
 
 Run:
 
-```bash
-bun test packages/git/src/git-path.test.ts
-bun test packages/git/src/file-read.test.ts
+~~~bash
+( cd packages/git && bun test src/git-path.test.ts )
+( cd packages/git && bun test src/file-read.test.ts )
 ( cd packages/git && bun run type-check )
 bun run type-check
-```
+~~~
 
-Expected: all commands exit 0.
+Expected: every command exits 0.
 
-- [ ] **Step 4: Commit the exports and mock stubs**
+- [ ] **Step 7: Commit**
 
-Stage only `packages/git/src/index.ts` and the 31 mock files, then commit:
+Stage <code>packages/git/src/exec.ts</code>, <code>packages/git/src/file-read.ts</code>, <code>packages/git/src/file-read.test.ts</code>, <code>packages/git/src/index.ts</code>, and the 31 listed mock files.
 
-```bash
-git add packages/git/src/index.ts \
-  packages/adapters/src/community/forge/gitea/adapter.test.ts \
-  packages/adapters/src/community/forge/gitlab/adapter.test.ts \
-  packages/adapters/src/forge/github/adapter.test.ts \
-  packages/adapters/src/forge/github/context.test.ts \
-  packages/cli/src/commands/isolation.test.ts \
-  packages/cli/src/commands/workflow-command-contract.test.ts \
-  packages/cli/src/commands/workflow.test.ts \
-  packages/core/src/db/workflows.test.ts \
-  packages/core/src/operations/isolation-operations.test.ts \
-  packages/core/src/operations/workflow-retry.test.ts \
-  packages/core/src/orchestrator/orchestrator-agent.test.ts \
-  packages/core/src/orchestrator/orchestrator-isolation.test.ts \
-  packages/core/src/orchestrator/orchestrator.test.ts \
-  packages/core/src/orchestrator/post-message-reminder.test.ts \
-  packages/core/src/services/cleanup-service.test.ts \
-  packages/isolation/src/pr-state.test.ts \
-  packages/server/src/routes/api.auth.test.ts \
-  packages/server/src/routes/api.codebases.test.ts \
-  packages/server/src/routes/api.git-changes.test.ts \
-  packages/server/src/routes/api.health.test.ts \
-  packages/server/src/routes/api.messages.test.ts \
-  packages/server/src/routes/api.provider-keys.test.ts \
-  packages/server/src/routes/api.providers.test.ts \
-  packages/server/src/routes/api.usage.test.ts \
-  packages/server/src/routes/api.user-ai-prefs.test.ts \
-  packages/server/src/routes/api.workflow-runs.test.ts \
-  packages/workflows/src/executor-preamble.test.ts \
-  packages/workflows/src/executor.test.ts \
-  packages/workflows/src/runtime-check.test.ts \
-  packages/workflows/src/script-node-deps.test.ts \
-  packages/workflows/src/subrun.test.ts
+~~~bash
 git diff --cached --name-only
-git commit -m "feat(git): export fileAt and fileDiff"
-```
+git commit -m "feat(git): read changed file content and diffs"
+~~~
 
-Confirm no file outside this task appears before committing.
+Confirm the staged list contains no unrelated file before committing.
 
 ---
 
-### Task 4: Add the Now diff JSON route
+### Task 3: Add the Now diff JSON route
 
 **Files:**
-- Create: `packages/server/src/routes/git/run-checkout.ts`
-- Modify: `packages/server/src/routes/git/changes-handler.ts`
-- Modify: `packages/server/src/routes/schemas/git.schemas.ts`
-- Create: `packages/server/src/routes/git/diff-route.ts`
-- Create: `packages/server/src/routes/git/diff-handler.ts`
-- Create: `packages/server/src/routes/api.git-diff.test.ts`
-- Modify: `packages/server/src/routes/api.ts`
-- Modify: `packages/server/package.json`
+
+- Create: <code>packages/server/src/routes/git/run-checkout.ts</code>
+- Create: <code>packages/server/src/routes/git/path-input.ts</code>
+- Modify: <code>packages/server/src/routes/git/changes-handler.ts</code>
+- Modify: <code>packages/server/src/routes/schemas/git.schemas.ts</code>
+- Create: <code>packages/server/src/routes/git/diff-route.ts</code>
+- Create: <code>packages/server/src/routes/git/diff-handler.ts</code>
+- Modify: <code>packages/server/src/routes/api.ts</code>
+- Modify: <code>packages/server/src/routes/api.git-changes.test.ts</code>
 
 **Interfaces:**
-- Consumes: `loadRunCheckout`, `fileDiff`, `GitPathError`, `GitFileError`.
-- Produces: `GET /api/workflows/runs/{runId}/git/diff`.
 
-- [ ] **Step 1: Write the failing HTTP tests**
+- Produces <code>loadRunCheckout(runId: string): Promise&lt;CheckoutGateResult&gt;</code>.
+- Produces <code>isValidGitFilePath(raw: string): boolean</code> for already-decoded HTTP input.
+- Produces <code>GET /api/workflows/runs/{runId}/git/diff</code>.
 
-Create `packages/server/src/routes/api.git-diff.test.ts` using the same mock skeleton as `api.git-changes.test.ts` (same `runRow`, `makeApp`, `mockGetWorkflowRun`, conversation/isolation mocks, logger, `validationErrorHook`, `mockAllWorkflowModules`, and `registerApiRoutes`).
-Replace the git mock with:
+- [ ] **Step 1: Add failing diff-route tests to the existing isolated HTTP file**
 
-```ts
-const mockFileDiff = mock(async (_workingPath: string, _path: string): Promise<FileDiffResult> => ({
-  path: 'src/a.ts',
-  status: 'M',
-  scope: 'now',
-  ref: 'live',
-  hunks: [],
-  cursor: '',
-  truncated: false,
-  binary: false,
-}));
-const mockChangedFiles = mock(async () => ({ files: [], revision: REVISION }));
-const mockIsGitWorkTree = mock(async (_workingPath: string): Promise<boolean> => true);
+Extend the existing <code>@archon/git</code> factory in <code>api.git-changes.test.ts</code> with named <code>mockFileAt</code> and <code>mockFileDiff</code> functions.
 
-mock.module('@archon/git', () => ({
-  changedFiles: mockChangedFiles,
-  isGitWorkTree: mockIsGitWorkTree,
-  fileDiff: mockFileDiff,
-  fileAt: mock(async () => ({ path: 'x.ts', bytes: new Uint8Array(), binary: false })),
-  containLivePath: mock(async (_root: string, rel: string) => rel),
-}));
-```
+Reset and restore their default implementations in the existing <code>beforeEach</code>.
 
-Add these tests (keep the 404 / container / null-working_path / hostile-query / opaque-500 pattern from the changes file, pointed at `/git/diff?path=src%2Fa.ts`):
+Add tests with these exact behaviors and literal bodies.
 
-```ts
-test('returns 400 for encoded dot-dot and absolute paths without calling fileDiff', async () => {
-  mockGetWorkflowRun.mockResolvedValueOnce(runRow());
-  const encoded = await makeApp().request(
-    '/api/workflows/runs/run-1/git/diff?path=..%2Fetc%2Fpasswd'
-  );
-  expect(encoded.status).toBe(400);
-  expect(await encoded.json()).toEqual({ error: 'Invalid file path' });
-  expect(mockFileDiff).not.toHaveBeenCalled();
-});
-
-test('returns ready Now hunk JSON and ignores working_path', async () => {
+~~~ts
+test('returns a ready Now hunk response from the canonical checkout', async () => {
   const canonical = await realpath(checkoutDir);
   mockFileDiff.mockResolvedValueOnce({
     path: 'src/a.ts',
     status: 'M',
     scope: 'now',
     ref: 'live',
-    hunks: [
-      {
-        oldStart: 1,
-        oldLines: 1,
-        newStart: 1,
-        newLines: 1,
-        header: '@@ -1 +1 @@',
-        changes: [{ type: 'insert', content: 'x', newLine: 1 }],
-      },
-    ],
+    hunks: [{
+      oldStart: 0,
+      oldLines: 0,
+      newStart: 1,
+      newLines: 1,
+      header: '@@ -0,0 +1 @@',
+      changes: [{ type: 'insert', content: 'x', newLine: 1 }],
+    }],
     cursor: '',
     truncated: false,
     binary: false,
   });
   const response = await makeApp().request(
-    '/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&working_path=%2e%2e%2fetc&cursor='
+    '/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts&cursor=opaque-token&working_path=%2Fetc'
   );
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({
+  expect(await response.json()).toMatchObject({
     path: 'src/a.ts',
     status: 'M',
     scope: 'now',
     ref: 'live',
-    hunks: [
-      {
-        oldStart: 1,
-        oldLines: 1,
-        newStart: 1,
-        newLines: 1,
-        header: '@@ -1 +1 @@',
-        changes: [{ type: 'insert', content: 'x', newLine: 1 }],
-      },
-    ],
     cursor: '',
     truncated: false,
     binary: false,
   });
   expect(mockFileDiff).toHaveBeenCalledWith(canonical, 'src/a.ts');
-  expect(mockLogger.info.mock.calls).toContainEqual([
-    { runId: 'run-1', binary: false, truncated: false },
-    'git.diff_completed',
-  ]);
 });
+~~~
 
-test('returns CAP-6 container envelope on the diff route', async () => {
-  mockGetConversationById.mockResolvedValueOnce({ isolation_env_id: 'env-1' });
-  mockGetById.mockResolvedValueOnce({ provider: 'container' });
-  const response = await makeApp().request('/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts');
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ emptyReason: 'container' });
-  expect(mockFileDiff).not.toHaveBeenCalled();
-});
+Add separate tests for each of these mutations.
 
-test('maps GitFileError not_found to 404 without leaking paths', async () => {
-  const { GitFileError } = await import('@archon/git');
-  mockFileDiff.mockRejectedValueOnce(new GitFileError('not_found'));
-  const response = await makeApp().request('/api/workflows/runs/run-1/git/diff?path=src%2Fa.ts');
-  const body = await response.json();
-  expect(response.status).toBe(404);
-  expect(body).toEqual({ error: 'File not found' });
-  expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(checkoutDir);
-});
-```
+- Missing <code>path</code> returns the repository's standard OpenAPI validation 400 before the handler or <code>fileDiff</code>; decoded <code>../x</code>, decoded <code>a\..\x</code>, POSIX absolute, Windows absolute, and NUL enter the handler and return exactly <code>{ error: "Invalid file path" }</code> before <code>fileDiff</code>.
+- Colon, leading-dash, and glob paths reach <code>fileDiff</code> unchanged.
+- A missing run returns the existing 404 body.
+- Container and null <code>working_path</code> each return HTTP 200 with only <code>emptyReason</code> and do not call <code>fileDiff</code>.
+- Removing the checkout inside <code>mockFileDiff</code> before it rejects causes a second gate check and returns HTTP 200 <code>{ emptyReason: "no_checkout" }</code>, not 404 or 500.
+- Add the parallel regression to the existing Changes-route cases by removing the checkout inside <code>mockChangedFiles</code> before rejection and expecting its established CAP-6 changes envelope.
+- A named <code>GitFileError</code> with code <code>not_found</code> maps to the file 404 body.
+- A named <code>GitPathError</code> maps to the invalid-path 400 body.
+- An unexpected path-bearing error maps to the opaque 500 body, and serialized logger calls do not contain the checkout or requested path.
+- Every request that enters the handler records <code>git.diff_started</code> followed by exactly one <code>git.diff_completed</code> or <code>git.diff_failed</code>.
+- Completed logs may contain <code>runId</code>, <code>emptyReason</code>, <code>binary</code>, and <code>truncated</code>.
+- Failed logs contain only <code>runId</code> and a stable <code>errorType</code>.
 
-Copy `runRow`, `makeApp`, `REVISION`, logger, and `beforeEach` from `api.git-changes.test.ts` so the file is self-contained.
-If `GitFileError` cannot be constructed from the mocked module, define a local `class GitFileError extends Error { code = 'not_found'; name = 'GitFileError'; }` in the test file and throw that, then make the handler detect `error instanceof Error && error.name === 'GitFileError'`.
-Prefer detecting `error.name` so the mock-merged real class and a test double both work.
-
-- [ ] **Step 2: Run the test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run:
 
-```bash
-bun test packages/server/src/routes/api.git-diff.test.ts
-```
+~~~bash
+( cd packages/server && bun test src/routes/api.git-changes.test.ts )
+~~~
 
-Expected: FAIL because the diff route is unregistered or `fileDiff` is never called.
+Expected: the existing changes tests pass and the new diff tests fail because the route is not registered.
 
-- [ ] **Step 3: Implement schemas, shared checkout loader, route, and handler**
+- [ ] **Step 3: Extract the existing checkout-loading adapter**
 
-Append to `packages/server/src/routes/schemas/git.schemas.ts`:
+Create <code>run-checkout.ts</code> by moving only the database and filesystem adapter code from <code>changes-handler.ts</code>.
 
-```ts
-export const gitDiffScopeSchema = z.enum(['now', 'commit']).openapi('GitDiffScope');
+The complete exported function must retain the existing CAP-6 behavior.
 
+~~~ts
+import { realpath, stat } from 'fs/promises';
+
+import * as conversationDb from '@archon/core/db/conversations';
+import * as isolationEnvDb from '@archon/core/db/isolation-environments';
+import * as workflowDb from '@archon/core/db/workflows';
+import { isGitWorkTree, toWorktreePath } from '@archon/git';
+
+import { resolveRunCheckout, type CheckoutGateResult } from './checkout-gate';
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export async function loadRunCheckout(runId: string): Promise<CheckoutGateResult> {
+  const run = await workflowDb.getWorkflowRun(runId);
+  return resolveRunCheckout({
+    run: run ? { conversation_id: run.conversation_id, working_path: run.working_path } : null,
+    getConversationById: async id => {
+      const conversation = await conversationDb.getConversationById(id);
+      return conversation ? { isolation_env_id: conversation.isolation_env_id } : null;
+    },
+    getIsolationEnvById: async id => {
+      const environment = await isolationEnvDb.getById(id);
+      return environment ? { provider: environment.provider } : null;
+    },
+    pathExists,
+    realpathFn: realpath,
+    isGitWorkTree: path => isGitWorkTree(toWorktreePath(path)),
+  });
+}
+~~~
+
+Replace the inline lookup in <code>handleGitChanges</code> with <code>const gate = await loadRunCheckout(runId)</code>.
+
+If <code>changedFiles</code> rejects after a ready gate, call <code>loadRunCheckout</code> once more and return CAP-6 when the checkout disappeared; otherwise preserve the existing opaque 500 response.
+
+Do not change the changes response or log contract.
+
+- [ ] **Step 4: Add transport validation and Zod schemas**
+
+Create <code>path-input.ts</code>.
+
+~~~ts
+export function isValidGitFilePath(raw: string): boolean {
+  if (raw.length === 0 || raw.includes('\0')) return false;
+  if (raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(raw)) {
+    return false;
+  }
+  return !raw.split(/[\\/]/).some(segment => segment === '..');
+}
+~~~
+
+Append schemas to <code>git.schemas.ts</code> and derive every server type with <code>z.infer</code>.
+
+Use <code>nonnegative()</code>, not <code>positive()</code>, for hunk starts because valid empty-side hunks begin at zero.
+
+~~~ts
 export const gitDiffChangeSchema = z
-  .object({
-    type: z.enum(['normal', 'insert', 'delete']),
-    content: z.string(),
-    oldLine: z.number().int().positive().optional(),
-    newLine: z.number().int().positive().optional(),
-  })
+  .union([
+    z.object({
+      type: z.literal('normal'),
+      content: z.string(),
+      oldLine: z.number().int().positive(),
+      newLine: z.number().int().positive(),
+    }),
+    z.object({
+      type: z.literal('insert'),
+      content: z.string(),
+      newLine: z.number().int().positive(),
+    }),
+    z.object({
+      type: z.literal('delete'),
+      content: z.string(),
+      oldLine: z.number().int().positive(),
+    }),
+  ])
   .openapi('GitDiffChange');
 
 export const gitDiffHunkSchema = z
   .object({
-    oldStart: z.number().int().positive(),
+    oldStart: z.number().int().nonnegative(),
     oldLines: z.number().int().nonnegative(),
-    newStart: z.number().int().positive(),
+    newStart: z.number().int().nonnegative(),
     newLines: z.number().int().nonnegative(),
     header: z.string(),
     changes: z.array(gitDiffChangeSchema),
   })
   .openapi('GitDiffHunk');
 
-export const gitReadyDiffResponseSchema = z.object({
+const gitReadyDiffResponseSchema = z.object({
   path: z.string().min(1),
   status: z.literal('M'),
-  scope: gitDiffScopeSchema,
+  scope: z.enum(['now', 'commit']),
   ref: z.string().min(1),
   hunks: z.array(gitDiffHunkSchema),
   cursor: z.string(),
@@ -1160,574 +990,305 @@ export const gitReadyDiffResponseSchema = z.object({
   binary: z.boolean(),
 });
 
-export const gitEmptyDiffResponseSchema = z.object({
+const gitEmptyDiffResponseSchema = z.object({
   emptyReason: gitEmptyReasonSchema,
 });
 
 export const gitDiffResponseSchema = z
   .union([gitReadyDiffResponseSchema, gitEmptyDiffResponseSchema])
   .openapi('GitDiffResponse');
+
 export type GitDiffResponse = z.infer<typeof gitDiffResponseSchema>;
-```
+~~~
 
-Create `packages/server/src/routes/git/run-checkout.ts` by moving the `pathExists` helper and the `getWorkflowRun` + `resolveRunCheckout` block out of `changes-handler.ts` into `loadRunCheckout(runId: string): Promise<CheckoutGateResult>`.
-Then make `handleGitChanges` call `loadRunCheckout(runId)` so the changes tests stay green.
+- [ ] **Step 5: Add the OpenAPI route and thin handler**
 
-Create `packages/server/src/routes/git/diff-route.ts`:
+Create <code>diff-route.ts</code> with method <code>get</code>, path <code>/api/workflows/runs/{runId}/git/diff</code>, required <code>path</code>, optional string <code>cursor</code>, and documented 200, 400, 404, and 500 responses.
 
-```ts
-import { createRoute, z } from '@hono/zod-openapi';
+Use <code>gitDiffResponseSchema</code> for 200 and the existing <code>errorSchema</code> for failures.
 
-import { errorSchema } from '../schemas/common.schemas';
-import { gitDiffResponseSchema } from '../schemas/git.schemas';
+Create <code>diff-handler.ts</code> with this control-flow order.
 
-export const gitDiffRoute = createRoute({
-  method: 'get',
-  path: '/api/workflows/runs/{runId}/git/diff',
-  tags: ['Workflows'],
-  summary: "Get a run's Now modified-file diff",
-  request: {
-    params: z.object({ runId: z.string().min(1) }),
-    query: z.object({
-      path: z.string().min(1),
-      cursor: z.string().optional(),
-    }),
-  },
-  responses: {
-    200: {
-      content: { 'application/json': { schema: gitDiffResponseSchema } },
-      description: 'Now hunk JSON or a CAP-6 empty envelope',
-    },
-    400: {
-      content: { 'application/json': { schema: errorSchema } },
-      description: 'Invalid file path',
-    },
-    404: {
-      content: { 'application/json': { schema: errorSchema } },
-      description: 'Workflow run or file not found',
-    },
-    500: {
-      content: { 'application/json': { schema: errorSchema } },
-      description: 'Git read failed',
-    },
-  },
-});
-```
+1. Read <code>runId</code> and decoded query <code>path</code>.
+2. Log <code>git.diff_started</code> with only <code>runId</code>.
+3. Reject invalid transport paths before checkout lookup or git.
+4. Call <code>loadRunCheckout</code>.
+5. Map missing run and CAP-6.
+6. Call <code>fileDiff(toWorktreePath(gate.workingPath), path)</code>.
+7. Return the result without reading or interpreting <code>cursor</code>.
+8. If the git read rejects after a ready gate, call <code>loadRunCheckout</code> once more and return CAP-6 if the checkout vanished.
+9. Classify named <code>GitPathError</code> and named <code>GitFileError</code> structurally because their classes are intentionally not public package exports.
+10. Log only stable error types such as <code>invalid_path</code>, <code>run_not_found</code>, <code>file_not_found</code>, and <code>git_read_failed</code>.
+11. Never log the path or caught error message.
 
-Create `packages/server/src/routes/git/diff-handler.ts`:
+Use this local structural classifier in <code>diff-handler.ts</code> because the package deliberately does not publish its error classes.
 
-```ts
-import type { Context } from 'hono';
+~~~ts
+type ClassifiedGitReadError = 'invalid_path' | 'file_not_found' | 'git_read_failed';
 
-import { fileDiff, GitFileError, parseGitFilePath, toWorktreePath } from '@archon/git';
-import { createLogger } from '@archon/paths';
-
-import type { GitDiffResponse } from '../schemas/git.schemas';
-import { loadRunCheckout } from './run-checkout';
-
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('api');
-  return cachedLog;
-}
-
-function isNamedError(error: unknown, name: string): boolean {
-  return error instanceof Error && error.name === name;
-}
-
-export async function handleGitDiff(
-  c: Context,
-  apiError: (c: Context, status: 400 | 404 | 500, message: string) => Response
-): Promise<Response> {
-  const runId = c.req.param('runId') ?? '';
-  const rawPath = c.req.query('path') ?? '';
-  getLog().info({ runId }, 'git.diff_started');
-  try {
-    parseGitFilePath(rawPath);
-  } catch {
-    getLog().info({ runId }, 'git.diff_failed');
-    return apiError(c, 400, 'Invalid file path');
+function classifyGitReadError(error: unknown): ClassifiedGitReadError {
+  if (typeof error !== 'object' || error === null) return 'git_read_failed';
+  const candidate = error as { name?: unknown; code?: unknown };
+  if (candidate.name === 'GitPathError') return 'invalid_path';
+  if (candidate.name === 'GitFileError' && candidate.code === 'not_found') {
+    return 'file_not_found';
   }
-  try {
-    const gate = await loadRunCheckout(runId);
-    if (gate.kind === 'run_not_found') {
-      getLog().info({ runId }, 'git.diff_failed');
-      return apiError(c, 404, 'Workflow run not found');
-    }
-    if (gate.kind === 'empty') {
-      const body: GitDiffResponse = { emptyReason: gate.emptyReason };
-      getLog().info({ runId, emptyReason: gate.emptyReason }, 'git.diff_completed');
-      return c.json(body);
-    }
-    const result = await fileDiff(toWorktreePath(gate.workingPath), rawPath);
-    const body: GitDiffResponse = result;
-    getLog().info(
-      { runId, binary: result.binary, truncated: result.truncated },
-      'git.diff_completed'
-    );
-    return c.json(body);
-  } catch (error) {
-    if (isNamedError(error, 'GitPathError')) {
-      getLog().info({ runId }, 'git.diff_failed');
-      return apiError(c, 400, 'Invalid file path');
-    }
-    if (isNamedError(error, 'GitFileError') && (error as GitFileError).code === 'not_found') {
-      getLog().info({ runId }, 'git.diff_failed');
-      return apiError(c, 404, 'File not found');
-    }
-    getLog().error(
-      { runId, errorType: error instanceof Error ? error.name : typeof error },
-      'git.diff_failed'
-    );
-    return apiError(c, 500, 'Could not read git diff');
-  }
+  return 'git_read_failed';
 }
-```
+~~~
 
-Register next to the changes route in `packages/server/src/routes/api.ts`:
+Map <code>invalid_path</code> to HTTP 400 with <code>Invalid file path</code>, <code>file_not_found</code> to HTTP 404 with <code>File not found</code>, and <code>git_read_failed</code> to HTTP 500 with <code>Could not read git diff</code>.
 
-```ts
-import { gitDiffRoute } from './git/diff-route';
-import { handleGitDiff } from './git/diff-handler';
+For validation, missing-run, CAP-6, success, and caught-error branches, emit one terminal log beside the response so no early return can omit or duplicate the pair.
 
+Register it next to <code>gitChangesRoute</code> in <code>api.ts</code>.
+
+~~~ts
 registerOpenApiRoute(gitDiffRoute, async c => {
   return handleGitDiff(c, apiError);
 });
-```
+~~~
 
-Insert this isolated invocation immediately after `bun test src/routes/api.git-changes.test.ts` in `packages/server/package.json`:
+Do not add a server package test-script entry because this route is tested in the already-isolated git HTTP file.
 
-```text
-&& bun test src/routes/api.git-diff.test.ts
-```
-
-Do not call `requireWebUser`.
-Do not log `rawPath`.
-
-- [ ] **Step 4: Verify GREEN**
+- [ ] **Step 6: Verify GREEN**
 
 Run:
 
-```bash
-bun test packages/server/src/routes/api.git-diff.test.ts
-bun test packages/server/src/routes/api.git-changes.test.ts
-bun test packages/server/src/routes/git/checkout-gate.test.ts
-```
+~~~bash
+( cd packages/server && bun test src/routes/api.git-changes.test.ts )
+( cd packages/server && bun test src/routes/git/checkout-gate.test.ts )
+( cd packages/server && bun run type-check )
+~~~
 
-Expected: all PASS.
+Expected: every command exits 0.
 
-- [ ] **Step 5: Commit the diff route**
+- [ ] **Step 7: Commit**
 
-```bash
+~~~bash
 git add packages/server/src/routes/git/run-checkout.ts \
+  packages/server/src/routes/git/path-input.ts \
   packages/server/src/routes/git/changes-handler.ts \
   packages/server/src/routes/schemas/git.schemas.ts \
   packages/server/src/routes/git/diff-route.ts \
   packages/server/src/routes/git/diff-handler.ts \
-  packages/server/src/routes/api.git-diff.test.ts \
   packages/server/src/routes/api.ts \
-  packages/server/package.json
-git commit -m "feat(server): add Now git diff JSON route"
-```
+  packages/server/src/routes/api.git-changes.test.ts
+git commit -m "feat(server): expose Now git hunks"
+~~~
 
 ---
 
-### Task 5: Add the raw git file route
+### Task 4: Add the raw text and binary file route
 
 **Files:**
-- Create: `packages/server/src/routes/git/file-handler.ts`
-- Create: `packages/server/src/routes/api.git-file.test.ts`
-- Modify: `packages/server/src/routes/api.ts`
-- Modify: `packages/server/package.json`
+
+- Create: <code>packages/server/src/routes/git/file-handler.ts</code>
+- Modify: <code>packages/server/src/routes/api.ts</code>
+- Modify: <code>packages/server/src/routes/api.git-changes.test.ts</code>
 
 **Interfaces:**
-- Consumes: `loadRunCheckout`, `fileAt`, `parseGitFilePath`.
-- Produces: `GET /api/workflows/runs/:runId/git/file/*?source=worktree|head`.
 
-- [ ] **Step 1: Write the failing raw-file tests**
+- Produces <code>GET /api/workflows/runs/:runId/git/file/*?source=worktree|head</code>.
+- Produces byte-preserving text and binary responses with a content-hash ETag.
 
-Create `packages/server/src/routes/api.git-file.test.ts` with the same app/run/logger mocks as the diff tests, plus:
+- [ ] **Step 1: Add failing raw-route tests to the existing git HTTP file**
 
-```ts
-const mockFileAt = mock(async () => ({
-  path: 'src/a.ts',
-  bytes: new Uint8Array(Buffer.from('hello\n')),
-  binary: false,
-}));
-```
+Add tests that use the existing <code>makeApp</code>, checkout, database, logger, and git mocks.
 
-Tests:
+Use a default <code>mockFileAt</code> result with <code>bytes: Uint8Array.from([0x68, 0x69, 0x0a])</code>, <code>binary: false</code>, and <code>contentHash: "a".repeat(64)</code>.
 
-```ts
-test('returns 400 when source is missing or unknown', async () => {
-  const missing = await makeApp().request('/api/workflows/runs/run-1/git/file/src/a.ts');
-  expect(missing.status).toBe(400);
-  expect(await missing.json()).toEqual({ error: 'Invalid file source' });
-  const bad = await makeApp().request('/api/workflows/runs/run-1/git/file/src/a.ts?source=HEAD');
-  expect(bad.status).toBe(400);
-});
+Cover these exact cases.
 
-test('returns CAP-6 JSON for container without calling fileAt', async () => {
-  mockGetConversationById.mockResolvedValueOnce({ isolation_env_id: 'env-1' });
-  mockGetById.mockResolvedValueOnce({ provider: 'container' });
-  const response = await makeApp().request(
-    '/api/workflows/runs/run-1/git/file/src/a.ts?source=worktree'
-  );
-  expect(response.status).toBe(200);
-  expect(response.headers.get('content-type') ?? '').toContain('application/json');
-  expect(await response.json()).toEqual({ emptyReason: 'container' });
-  expect(mockFileAt).not.toHaveBeenCalled();
-});
+- Missing and unknown source values return the literal invalid-source 400 body.
+- Encoded slash, colon, leading dash, glob, spaces, and newlines arrive at <code>fileAt</code> as the original git path.
+- Encoded slash traversal, backslash traversal, POSIX absolute, Windows absolute, NUL, and malformed percent encoding return 400 before <code>fileAt</code>.
+- <code>source=worktree</code> calls <code>fileAt</code> with <code>{ kind: "worktree" }</code>.
+- <code>source=head</code> calls <code>fileAt</code> with <code>{ kind: "tree", treeIsh: "HEAD" }</code>.
+- A missing run returns 404.
+- Container and null <code>working_path</code> return CAP-6 JSON with no ETag and no <code>fileAt</code> call.
+- Removing the checkout inside <code>mockFileAt</code> before it rejects causes a second gate check and returns HTTP 200 <code>{ emptyReason: "no_checkout" }</code> with no ETag.
+- Text returns the exact bytes, text content type, and quoted content-hash ETag.
+- Binary returns the exact non-empty bytes, octet-stream content type, attachment header, and quoted content-hash ETag.
+- Named missing-file and path errors map to 404 and 400.
+- Unexpected errors map to the opaque 500 and do not leak paths through the response or logger.
+- Started, completed, and failed logging obeys the locked field allowlists.
 
-test('returns text/plain for worktree text and uses the canonical checkout', async () => {
-  const canonical = await realpath(checkoutDir);
-  const response = await makeApp().request(
-    '/api/workflows/runs/run-1/git/file/src/a.ts?source=worktree&working_path=%2e%2e%2fetc'
-  );
-  expect(response.status).toBe(200);
-  expect(response.headers.get('content-type')).toContain('text/plain');
-  expect(await response.text()).toBe('hello\n');
-  expect(mockFileAt).toHaveBeenCalledWith(canonical, 'src/a.ts', { kind: 'worktree' });
-});
+The binary assertion must be literal and must fail if the implementation returns an empty attachment.
 
-test('returns octet-stream with empty body for NUL binaries', async () => {
-  mockFileAt.mockResolvedValueOnce({
-    path: 'nul.bin',
-    bytes: new Uint8Array([0, 1, 2]),
-    binary: true,
-  });
-  const response = await makeApp().request(
-    '/api/workflows/runs/run-1/git/file/nul.bin?source=head'
-  );
-  expect(response.status).toBe(200);
-  expect(response.headers.get('content-type')).toContain('application/octet-stream');
-  expect((await response.arrayBuffer()).byteLength).toBe(0);
-  expect(mockFileAt).toHaveBeenCalledWith(await realpath(checkoutDir), 'nul.bin', {
-    kind: 'tree',
-    treeIsh: 'HEAD',
-  });
-});
+~~~ts
+expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual([0, 1, 2]);
+~~~
 
-test('rejects encoded traversal after decode', async () => {
-  const response = await makeApp().request(
-    '/api/workflows/runs/run-1/git/file/..%2Fetc%2Fpasswd?source=worktree'
-  );
-  expect(response.status).toBe(400);
-  expect(await response.json()).toEqual({ error: 'Invalid file path' });
-  expect(mockFileAt).not.toHaveBeenCalled();
-});
-
-test('decodes colon filenames and does not require a commit OID from the client', async () => {
-  mockFileAt.mockResolvedValueOnce({
-    path: ':colon.ts',
-    bytes: new Uint8Array(Buffer.from('colon\n')),
-    binary: false,
-  });
-  const response = await makeApp().request(
-    '/api/workflows/runs/run-1/git/file/%3Acolon.ts?source=head'
-  );
-  expect(response.status).toBe(200);
-  expect(await response.text()).toBe('colon\n');
-  expect(mockFileAt.mock.calls[0]?.[1]).toBe(':colon.ts');
-});
-```
-
-- [ ] **Step 2: Run the test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run:
 
-```bash
-bun test packages/server/src/routes/api.git-file.test.ts
-```
+~~~bash
+( cd packages/server && bun test src/routes/api.git-changes.test.ts )
+~~~
 
-Expected: FAIL because the wildcard route is missing.
+Expected: diff and changes tests pass and the new file tests fail because the wildcard route is absent.
 
-- [ ] **Step 3: Implement the raw handler and `app.get`**
+- [ ] **Step 3: Implement the raw handler**
 
-Create `packages/server/src/routes/git/file-handler.ts`:
+Create <code>file-handler.ts</code>.
 
-```ts
-import type { Context } from 'hono';
+Extract the wildcard path from the first <code>/git/file/</code> marker in <code>c.req.path</code> rather than rebuilding a prefix from the decoded <code>runId</code>, so an encoded run ID cannot break extraction.
 
-import { fileAt, GitFileError, parseGitFilePath, toWorktreePath } from '@archon/git';
-import { createLogger } from '@archon/paths';
+Decode exactly once with <code>decodeURIComponent</code>, then call <code>isValidGitFilePath</code>.
 
-import { loadRunCheckout } from './run-checkout';
+Copy the Task 3 structural classifier into <code>file-handler.ts</code>; two route-local uses do not justify a shared abstraction under the repository's Rule of Three.
 
-let cachedLog: ReturnType<typeof createLogger> | undefined;
+After a ready gate, re-run <code>loadRunCheckout</code> once when <code>fileAt</code> rejects and return CAP-6 if the checkout disappeared before classifying the file-read error.
 
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('api');
-  return cachedLog;
-}
+Add <code>invalid_source</code> for source validation, retain <code>invalid_path</code>, <code>run_not_found</code>, <code>file_not_found</code>, and <code>git_read_failed</code>, and map the last code to HTTP 500 with <code>Could not read git file</code>.
 
-function isNamedError(error: unknown, name: string): boolean {
-  return error instanceof Error && error.name === name;
-}
+Log <code>git.file_started</code> with only <code>runId</code>, log completed with only <code>runId</code>, <code>emptyReason</code>, and <code>binary</code> when applicable, and log failed with only <code>runId</code> and <code>errorType</code>.
 
-export function extractGitFilePath(requestPath: string, runId: string): string | null {
-  const prefix = `/api/workflows/runs/${runId}/git/file/`;
-  if (!requestPath.startsWith(prefix)) return null;
-  const rawEncoded = requestPath.slice(prefix.length);
-  let raw: string;
-  try {
-    raw = decodeURIComponent(rawEncoded);
-  } catch {
-    return null;
-  }
-  if (!raw || raw.includes('\0') || raw.split('/').some(segment => segment === '..')) return null;
-  try {
-    return parseGitFilePath(raw);
-  } catch {
-    return null;
-  }
-}
+Return bytes and headers with this exact success branch.
 
-export async function handleGitFile(
-  c: Context,
-  apiError: (c: Context, status: 400 | 404 | 500, message: string) => Response
-): Promise<Response> {
-  const runId = c.req.param('runId') ?? '';
-  const source = c.req.query('source') ?? '';
-  getLog().info({ runId }, 'git.file_started');
-  if (source !== 'worktree' && source !== 'head') {
-    getLog().info({ runId }, 'git.file_failed');
-    return apiError(c, 400, 'Invalid file source');
-  }
-  const relativePath = extractGitFilePath(c.req.path, runId);
-  if (!relativePath) {
-    getLog().info({ runId }, 'git.file_failed');
-    return apiError(c, 400, 'Invalid file path');
-  }
-  try {
-    const gate = await loadRunCheckout(runId);
-    if (gate.kind === 'run_not_found') {
-      getLog().info({ runId }, 'git.file_failed');
-      return apiError(c, 404, 'Workflow run not found');
-    }
-    if (gate.kind === 'empty') {
-      getLog().info({ runId, emptyReason: gate.emptyReason }, 'git.file_completed');
-      return c.json({ emptyReason: gate.emptyReason });
-    }
-    const result = await fileAt(
-      toWorktreePath(gate.workingPath),
-      relativePath,
-      source === 'worktree' ? { kind: 'worktree' } : { kind: 'tree', treeIsh: 'HEAD' }
-    );
-    getLog().info({ runId, binary: result.binary }, 'git.file_completed');
-    if (result.binary) {
-      return new Response(null, {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/octet-stream',
-          'Content-Disposition': 'attachment; filename="download"',
-        },
-      });
-    }
-    return new Response(Buffer.from(result.bytes), {
-      status: 200,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    });
-  } catch (error) {
-    if (isNamedError(error, 'GitPathError')) {
-      getLog().info({ runId }, 'git.file_failed');
-      return apiError(c, 400, 'Invalid file path');
-    }
-    if (isNamedError(error, 'GitFileError') && (error as GitFileError).code === 'not_found') {
-      getLog().info({ runId }, 'git.file_failed');
-      return apiError(c, 404, 'File not found');
-    }
-    getLog().error(
-      { runId, errorType: error instanceof Error ? error.name : typeof error },
-      'git.file_failed'
-    );
-    return apiError(c, 500, 'Could not read git file');
-  }
-}
-```
+~~~ts
+const headers = {
+  ETag: '"' + result.contentHash + '"',
+  'Content-Type': result.binary
+    ? 'application/octet-stream'
+    : 'text/plain; charset=utf-8',
+  ...(result.binary
+    ? { 'Content-Disposition': 'attachment; filename="download"' }
+    : {}),
+};
+return new Response(Buffer.from(result.bytes), { status: 200, headers });
+~~~
 
-In `packages/server/src/routes/api.ts`, next to the artifacts wildcard, register:
+The handler must return CAP-6 JSON before constructing raw headers.
 
-```ts
-import { handleGitFile } from './git/file-handler';
+The handler must never decode text on the server merely to decide whether it is binary because <code>fileAt</code> already applied the NUL-in-first-8KB rule.
 
+- [ ] **Step 4: Register the raw route**
+
+Register the route near the JSON git routes in <code>api.ts</code>.
+
+~~~ts
 // GET /api/workflows/runs/:runId/git/file/*
-// Wildcard captures the git-relative path (e.g. "src/a.ts", ":colon.ts").
-// Path traversal is blocked after decodeURIComponent: any ".." segment or NUL is rejected.
-// NOTE: Uses app.get() instead of registerOpenApiRoute because:
-//  1. Wildcard path params (*) are not representable in OpenAPI 3.0
-//  2. Response is raw text/octet-stream or a CAP-6 JSON envelope
+// The wildcard carries a server-issued git-relative path and is decoded exactly once.
+// NUL, absolute paths, and any slash or backslash ".." segment are rejected after decoding.
+// OpenAPI 3.0 cannot represent this wildcard, and successful responses are raw bytes.
 app.get('/api/workflows/runs/:runId/git/file/*', async c => {
   return handleGitFile(c, apiError);
 });
-```
+~~~
 
-Insert `&& bun test src/routes/api.git-file.test.ts` immediately after the git-diff test invocation in `packages/server/package.json`.
+Do not call <code>requireWebUser</code>.
 
-- [ ] **Step 4: Verify GREEN**
+- [ ] **Step 5: Verify GREEN**
 
 Run:
 
-```bash
-bun test packages/server/src/routes/api.git-file.test.ts
-bun test packages/server/src/routes/api.git-diff.test.ts
-bun test packages/server/src/routes/api.git-changes.test.ts
-```
+~~~bash
+( cd packages/server && bun test src/routes/api.git-changes.test.ts )
+( cd packages/server && bun test src/routes/git/checkout-gate.test.ts )
+( cd packages/server && bun run type-check )
+~~~
 
-Expected: all PASS.
-If `c.req.path` is not percent-encoded the same way as the artifacts route, follow that route's `decodeURIComponent` behavior exactly and adjust `extractGitFilePath` until the colon test passes.
+Expected: every command exits 0.
 
-- [ ] **Step 5: Commit the raw file route**
+- [ ] **Step 6: Commit**
 
-```bash
+~~~bash
 git add packages/server/src/routes/git/file-handler.ts \
-  packages/server/src/routes/api.git-file.test.ts \
   packages/server/src/routes/api.ts \
-  packages/server/package.json
-git commit -m "feat(server): add raw git file route"
-```
+  packages/server/src/routes/api.git-changes.test.ts
+git commit -m "feat(server): serve changed file bytes"
+~~~
 
 ---
 
-### Task 6: Generate web types and add git file clients
+### Task 5: Generate the web contract and add cancellable clients
 
 **Files:**
-- Regenerate: `packages/web/src/lib/api.generated.d.ts`
-- Modify: `packages/web/src/lib/api.ts`
-- Create: `packages/web/src/lib/api.git-file.test.ts`
+
+- Regenerate: <code>packages/web/src/lib/api.generated.d.ts</code>
+- Modify: <code>packages/web/src/lib/api.ts</code>
+- Modify: <code>packages/web/src/lib/api.git-changes.test.ts</code>
 
 **Interfaces:**
-- Consumes: generated `GitDiffResponse`.
-- Produces: `getWorkflowRunGitDiff(runId, path, options?: { cursor?: string; signal?: AbortSignal })`.
-- Produces: `getWorkflowRunGitFile(runId, path, source: 'worktree' | 'head', init?: RequestInit)`.
 
-- [ ] **Step 1: Write the failing client tests**
+- Produces <code>getWorkflowRunGitDiff(runId, path, options)</code>.
+- Produces <code>gitFileUrl(runId, path, source)</code>.
+- Produces <code>getWorkflowRunGitFile(runId, path, source, init)</code>.
 
-Create `packages/web/src/lib/api.git-file.test.ts`:
+- [ ] **Step 1: Add failing client behavior tests**
 
-```ts
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+Extend <code>api.git-changes.test.ts</code> with these cases.
 
-import { getWorkflowRunGitDiff, getWorkflowRunGitFile } from './api';
+- Diff encodes the run ID and query path, omits <code>cursor=</code> when empty, and echoes a non-empty opaque cursor without parsing it.
+- Diff forwards the exact <code>AbortSignal</code> in <code>RequestInit</code>.
+- Raw URL encoding applies <code>encodeURIComponent</code> to each path segment while preserving slash separators.
+- Added and deleted source values serialize only as <code>worktree</code> and <code>head</code>.
+- Text returns <code>{ kind: "text", text, contentHash }</code> from a quoted ETag.
+- Octet stream returns <code>{ kind: "binary", contentHash }</code> without calling <code>response.text()</code>.
+- CAP-6 JSON returns <code>{ kind: "empty", emptyReason }</code> and does not require an ETag.
+- A successful raw non-CAP-6 response without a valid 64-hex ETag fails fast.
+- Non-2xx errors retain the existing bounded API-error behavior, but UI tests never render the thrown message.
 
-let fetchSpy: ReturnType<typeof spyOn> | undefined;
-
-afterEach(() => {
-  fetchSpy?.mockRestore();
-  fetchSpy = undefined;
-});
-
-describe('getWorkflowRunGitDiff', () => {
-  test('GETs the encoded run and path without a checkout path', async () => {
-    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          path: 'src/a.ts',
-          status: 'M',
-          scope: 'now',
-          ref: 'live',
-          hunks: [],
-          cursor: '',
-          truncated: false,
-          binary: false,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      )
-    );
-    const response = await getWorkflowRunGitDiff('run/one', 'src/a.ts');
-    expect(response).toMatchObject({ status: 'M', ref: 'live', scope: 'now' });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
-      '/api/workflows/runs/run%2Fone/git/diff?path=src%2Fa.ts'
-    );
-    expect(String(fetchSpy.mock.calls[0]?.[0])).not.toContain('working_path');
-    expect(String(fetchSpy.mock.calls[0]?.[0])).not.toContain('cursor=');
-  });
-});
-
-describe('getWorkflowRunGitFile', () => {
-  test('encodes each path segment and required source', async () => {
-    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('hello\n', { status: 200, headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
-    );
-    const response = await getWorkflowRunGitFile('run/one', ':colon.ts', 'head');
-    expect(response).toEqual({ kind: 'text', text: 'hello\n' });
-    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
-      '/api/workflows/runs/run%2Fone/git/file/%3Acolon.ts?source=head'
-    );
-  });
-
-  test('treats octet-stream as binary without reading a text dump', async () => {
-    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(null, { status: 200, headers: { 'Content-Type': 'application/octet-stream' } })
-    );
-    const response = await getWorkflowRunGitFile('run-1', 'nul.bin', 'worktree');
-    expect(response).toEqual({ kind: 'binary' });
-  });
-
-  test('parses CAP-6 JSON on the raw route', async () => {
-    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ emptyReason: 'container' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    );
-    const response = await getWorkflowRunGitFile('run-1', 'a.ts', 'worktree');
-    expect(response).toEqual({ kind: 'empty', emptyReason: 'container' });
-  });
-});
-```
-
-- [ ] **Step 2: Run the test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run:
 
-```bash
-bun test packages/web/src/lib/api.git-file.test.ts
-```
+~~~bash
+( cd packages/web && bun test src/lib/api.git-changes.test.ts )
+~~~
 
-Expected: FAIL because the new client functions are not exported.
+Expected: FAIL because the new client exports do not exist.
 
-- [ ] **Step 3: Regenerate OpenAPI types from the implemented server**
+- [ ] **Step 3: Regenerate OpenAPI types**
 
-In one terminal, start the server:
+Start only the server in one terminal.
 
-```bash
+~~~bash
 bun run dev:server
-```
+~~~
 
-After the server reports that port 3090 is listening, run this in a second terminal:
+After port 3090 is listening, run this from the repository root in another terminal.
 
-```bash
+~~~bash
 bun --filter @archon/web generate:types
-```
+~~~
 
-Stop only the server process started for this task.
-Do not hand-edit `packages/web/src/lib/api.generated.d.ts`.
-Verify generation produced the diff route and schema:
+Stop only the server process started for generation.
 
-```bash
-rg -n '"/api/workflows/runs/\\{runId\\}/git/diff"|GitDiffResponse' packages/web/src/lib/api.generated.d.ts
-```
+Do not hand-edit <code>api.generated.d.ts</code>.
 
-Expected: both the path and schema name are present.
-The raw file route will not appear in OpenAPI; that is required.
+Verify the JSON route and schemas are present and the raw wildcard route is absent.
 
-- [ ] **Step 4: Add the generated-type re-exports and clients**
+~~~bash
+rg -n '"/api/workflows/runs/\{runId\}/git/diff"|GitDiffResponse|GitDiffHunk|GitDiffChange' packages/web/src/lib/api.generated.d.ts
+! rg -n 'git/file' packages/web/src/lib/api.generated.d.ts
+~~~
 
-Immediately after `getWorkflowRunGitChanges` in `packages/web/src/lib/api.ts`, add:
+- [ ] **Step 4: Add generated aliases and clients**
 
-```ts
+Add these types near the existing git aliases in <code>api.ts</code>.
+
+~~~ts
 export type GitDiffResponse = components['schemas']['GitDiffResponse'];
+export type GitReadyDiffResponse = Exclude<
+  GitDiffResponse,
+  { emptyReason: GitEmptyReason }
+>;
 export type GitDiffHunk = components['schemas']['GitDiffHunk'];
 export type GitDiffChange = components['schemas']['GitDiffChange'];
 export type GitFileSource = 'worktree' | 'head';
 export type GitFileClientResult =
   | { kind: 'empty'; emptyReason: GitEmptyReason }
-  | { kind: 'binary' }
-  | { kind: 'text'; text: string };
+  | { kind: 'binary'; contentHash: string }
+  | { kind: 'text'; text: string; contentHash: string };
+~~~
 
+Implement cursor handling exactly.
+
+~~~ts
 export async function getWorkflowRunGitDiff(
   runId: string,
   path: string,
@@ -1735,1042 +1296,1029 @@ export async function getWorkflowRunGitDiff(
 ): Promise<GitDiffResponse> {
   const params = new URLSearchParams({ path });
   if (options?.cursor) params.set('cursor', options.cursor);
-  const init = options?.signal ? { signal: options.signal } : undefined;
   return fetchJSON(
-    `/api/workflows/runs/${encodeURIComponent(runId)}/git/diff?${params.toString()}`,
-    init
+    '/api/workflows/runs/' +
+      encodeURIComponent(runId) +
+      '/git/diff?' +
+      params.toString(),
+    options?.signal ? { signal: options.signal } : undefined
+  );
+}
+~~~
+
+Implement raw URL construction by encoding segments, not the whole path.
+
+Require a quoted or unquoted 64-hex ETag only after CAP-6 JSON has been handled.
+
+Cancel an octet-stream response body before returning the binary descriptor so inspection never dumps or unnecessarily retains the bytes.
+
+The browser will perform a fresh same-origin GET through <code>gitFileUrl</code> when the operator activates Download.
+
+Use this URL and response branch shape, extracting the current bounded non-2xx body handling from <code>fetchJSON</code> into one private helper so both clients preserve the existing 200-character limit.
+
+~~~ts
+export function gitFileUrl(runId: string, path: string, source: GitFileSource): string {
+  const encodedPath = path.split('/').map(segment => encodeURIComponent(segment)).join('/');
+  return (
+    '/api/workflows/runs/' +
+    encodeURIComponent(runId) +
+    '/git/file/' +
+    encodedPath +
+    '?source=' +
+    encodeURIComponent(source)
   );
 }
 
-export function gitFileUrl(runId: string, path: string, source: GitFileSource): string {
-  const encodedPath = path
-    .split('/')
-    .map(segment => encodeURIComponent(segment))
-    .join('/');
-  return `/api/workflows/runs/${encodeURIComponent(runId)}/git/file/${encodedPath}?source=${source}`;
+function contentHashFromEtag(response: Response): string {
+  const etag = response.headers.get('ETag') ?? '';
+  const match = etag.match(/^(?:"([a-f0-9]{64})"|([a-f0-9]{64}))$/);
+  const contentHash = match?.[1] ?? match?.[2];
+  if (!contentHash) throw new Error('Invalid git file response');
+  return contentHash;
 }
 
 export async function getWorkflowRunGitFile(
   runId: string,
   path: string,
   source: GitFileSource,
-  init?: RequestInit
+  options?: { signal?: AbortSignal }
 ): Promise<GitFileClientResult> {
-  const res = await (init === undefined ? fetch(gitFileUrl(runId, path, source)) : fetch(gitFileUrl(runId, path, source), init));
-  if (!res.ok) {
-    const body = await res.text();
-    const truncated = body.length > 200 ? body.slice(0, 200) + '...' : body;
-    throw Object.assign(new Error(`API error ${res.status}: ${truncated}`), { status: res.status });
-  }
-  const contentType = res.headers.get('content-type') ?? '';
+  const url = gitFileUrl(runId, path, source);
+  const response = await fetch(url, options?.signal ? { signal: options.signal } : undefined);
+  await assertApiResponseOk(response, url);
+  const contentType = response.headers.get('Content-Type') ?? '';
   if (contentType.includes('application/json')) {
-    const body = (await res.json()) as { emptyReason?: GitEmptyReason };
-    if (body.emptyReason === 'container' || body.emptyReason === 'no_checkout') {
+    const body: unknown = await response.json();
+    if (
+      typeof body === 'object' &&
+      body !== null &&
+      'emptyReason' in body &&
+      (body.emptyReason === 'container' || body.emptyReason === 'no_checkout')
+    ) {
       return { kind: 'empty', emptyReason: body.emptyReason };
     }
+    throw new Error('Invalid git file response');
   }
+  const contentHash = contentHashFromEtag(response);
   if (contentType.includes('application/octet-stream')) {
-    return { kind: 'binary' };
+    await response.body?.cancel();
+    return { kind: 'binary', contentHash };
   }
-  return { kind: 'text', text: await res.text() };
+  if (contentType.includes('text/plain')) {
+    return { kind: 'text', text: await response.text(), contentHash };
+  }
+  throw new Error('Invalid git file response');
 }
-```
+~~~
+
+Name the extracted non-2xx helper <code>assertApiResponseOk(response: Response, url: string): Promise&lt;void&gt;</code>, have <code>fetchJSON</code> call it before <code>res.json()</code>, and keep the existing status, path-only URL, and 200-character body truncation exactly unchanged.
 
 - [ ] **Step 5: Verify GREEN**
 
 Run:
 
-```bash
-bun test packages/web/src/lib/api.git-file.test.ts
-bun test packages/web/src/lib/api.git-changes.test.ts
+~~~bash
+( cd packages/web && bun test src/lib/api.git-changes.test.ts )
 ( cd packages/web && bun run type-check )
-```
+~~~
 
-Expected: all commands exit 0.
+Expected: both commands exit 0.
 
-- [ ] **Step 6: Commit the generated contract and clients**
+- [ ] **Step 6: Commit**
 
-```bash
-git add packages/web/src/lib/api.generated.d.ts packages/web/src/lib/api.ts packages/web/src/lib/api.git-file.test.ts
-git commit -m "feat(web): add git diff and file clients"
-```
+~~~bash
+git add packages/web/src/lib/api.generated.d.ts \
+  packages/web/src/lib/api.ts \
+  packages/web/src/lib/api.git-changes.test.ts
+git commit -m "feat(web): add changed file read clients"
+~~~
 
 ---
 
-### Task 7: Pin react-diff-view and map hunk JSON
+### Task 6: Pin the viewer and adapt hunks and syntax safely
 
 **Files:**
-- Modify: `packages/web/package.json` and the lockfile via `bun add`
-- Create: `packages/web/src/components/workflows/source-control/git-hunk-adapter.ts`
-- Create: `packages/web/src/components/workflows/source-control/git-hunk-adapter.test.ts`
+
+- Modify: <code>packages/web/package.json</code>
+- Modify: <code>bun.lock</code>
+- Create: <code>packages/web/src/components/workflows/source-control/git-hunk-adapter.ts</code>
+- Create: <code>packages/web/src/components/workflows/source-control/git-hunk-adapter.test.ts</code>
+- Create: <code>packages/web/src/components/workflows/source-control/syntax-highlight.tsx</code>
+- Create: <code>packages/web/src/components/workflows/source-control/syntax-highlight.test.tsx</code>
 
 **Interfaces:**
-- Consumes: generated `GitDiffHunk` / `GitDiffChange`.
-- Produces: `toHunkData(hunk): HunkData`, `toChangeData(change): ChangeData`, `hunksForSide(hunks, 'old' | 'new'): HunkData[]`.
 
-- [ ] **Step 1: Install the pinned dependency (required before the mapper tests import it)**
+- Produces <code>toHunkData</code> and <code>hunksForSide</code> with the actual <code>react-diff-view@3.3.3</code> union types.
+- Produces <code>highlightedHtml</code>, <code>highlightDiffTokens</code>, and <code>renderHighlightedToken</code>.
 
-Run from the repository root:
-
-```bash
-bun --filter @archon/web add react-diff-view@3.3.3
-```
-
-Expected: `packages/web/package.json` lists `"react-diff-view": "3.3.3"`.
-Do not add lodash, Shiki, Monaco, or refractor as direct dependencies.
-
-- [ ] **Step 2: Write the failing mapper tests**
-
-Create `packages/web/src/components/workflows/source-control/git-hunk-adapter.test.ts`:
-
-```ts
-import { describe, expect, test } from 'bun:test';
-
-import type { GitDiffHunk } from '@/lib/api';
-
-import { hunksForSide, toHunkData } from './git-hunk-adapter';
-
-const hunk: GitDiffHunk = {
-  oldStart: 1,
-  oldLines: 2,
-  newStart: 1,
-  newLines: 3,
-  header: '@@ -1,2 +1,3 @@',
-  changes: [
-    { type: 'normal', content: 'line1', oldLine: 1, newLine: 1 },
-    { type: 'delete', content: 'old', oldLine: 2 },
-    { type: 'insert', content: 'new', newLine: 2 },
-    { type: 'insert', content: 'tail', newLine: 3 },
-  ],
-};
-
-describe('toHunkData', () => {
-  test('maps wire hunks onto react-diff-view HunkData and ChangeData flags', () => {
-    const mapped = toHunkData(hunk);
-    expect(mapped.content).toBe('@@ -1,2 +1,3 @@');
-    expect(mapped.oldStart).toBe(1);
-    expect(mapped.changes[1]).toMatchObject({
-      type: 'delete',
-      content: 'old',
-      isDelete: true,
-      isInsert: false,
-      isNormal: false,
-      oldLineNumber: 2,
-    });
-    expect(mapped.changes[2]).toMatchObject({
-      type: 'insert',
-      content: 'new',
-      isInsert: true,
-      newLineNumber: 2,
-    });
-  });
-});
-
-describe('hunksForSide', () => {
-  test('drops inserts from the before pane and deletes from the after pane', () => {
-    const mapped = toHunkData(hunk);
-    const before = hunksForSide([mapped], 'old');
-    const after = hunksForSide([mapped], 'new');
-    expect(before[0]?.changes.map(change => change.type)).toEqual(['normal', 'delete']);
-    expect(after[0]?.changes.map(change => change.type)).toEqual(['normal', 'insert', 'insert']);
-  });
-});
-```
-
-- [ ] **Step 3: Run the test and verify RED**
+- [ ] **Step 1: Install the exact dependency**
 
 Run:
 
-```bash
-bun test packages/web/src/components/workflows/source-control/git-hunk-adapter.test.ts
-```
+~~~bash
+( cd packages/web && bun add --exact react-diff-view@3.3.3 )
+~~~
 
-Expected: FAIL because `./git-hunk-adapter` does not exist.
+Expected: <code>packages/web/package.json</code> contains exactly <code>"react-diff-view": "3.3.3"</code>, and the repository's existing <code>bun.lock</code> changes.
 
-- [ ] **Step 4: Implement the mapper**
+Do not add lodash directly.
 
-Create `packages/web/src/components/workflows/source-control/git-hunk-adapter.ts`:
+- [ ] **Step 2: Write failing hunk-adapter tests**
 
-```ts
+The adapter tests must assert the real 3.3.3 shapes.
+
+~~~ts
+expect(toChangeData({ type: 'insert', content: 'new', newLine: 2 })).toEqual({
+  type: 'insert',
+  content: 'new',
+  lineNumber: 2,
+  isInsert: true,
+});
+expect(toChangeData({ type: 'delete', content: 'old', oldLine: 3 })).toEqual({
+  type: 'delete',
+  content: 'old',
+  lineNumber: 3,
+  isDelete: true,
+});
+expect(toChangeData({
+  type: 'normal',
+  content: 'same',
+  oldLine: 4,
+  newLine: 5,
+})).toEqual({
+  type: 'normal',
+  content: 'same',
+  oldLineNumber: 4,
+  newLineNumber: 5,
+  isNormal: true,
+});
+~~~
+
+Add a malformed generated change fixture missing its required line number and assert the adapter throws a stable <code>Invalid git hunk change</code> error.
+
+Add a side-filter test proving old drops insertions and new drops deletions while both keep normal lines.
+
+- [ ] **Step 3: Verify adapter RED**
+
+Run:
+
+~~~bash
+( cd packages/web && bun test src/components/workflows/source-control/git-hunk-adapter.test.ts )
+~~~
+
+Expected: FAIL because the adapter does not exist.
+
+- [ ] **Step 4: Implement the mapper against actual dependency types**
+
+Create <code>git-hunk-adapter.ts</code>.
+
+Do not emit the draft's nonexistent combination of <code>lineNumber</code>, <code>oldLineNumber</code>, <code>newLineNumber</code>, and all three boolean flags on every union member.
+
+Use this exhaustive mapping, including the runtime checks that make malformed generated data fail fast.
+
+~~~ts
 import type { ChangeData, HunkData } from 'react-diff-view';
 
 import type { GitDiffChange, GitDiffHunk } from '@/lib/api';
 
+function requiredLine(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error('Invalid git hunk change');
+  }
+  return value;
+}
+
 export function toChangeData(change: GitDiffChange): ChangeData {
-  return {
-    type: change.type,
-    content: change.content,
-    isNormal: change.type === 'normal',
-    isInsert: change.type === 'insert',
-    isDelete: change.type === 'delete',
-    oldLineNumber: change.oldLine,
-    newLineNumber: change.newLine,
-    lineNumber: change.type === 'insert' ? change.newLine : change.oldLine,
-  };
+  switch (change.type) {
+    case 'insert':
+      return {
+        type: 'insert',
+        content: change.content,
+        lineNumber: requiredLine(change.newLine),
+        isInsert: true,
+      };
+    case 'delete':
+      return {
+        type: 'delete',
+        content: change.content,
+        lineNumber: requiredLine(change.oldLine),
+        isDelete: true,
+      };
+    case 'normal':
+      return {
+        type: 'normal',
+        content: change.content,
+        oldLineNumber: requiredLine(change.oldLine),
+        newLineNumber: requiredLine(change.newLine),
+        isNormal: true,
+      };
+  }
 }
 
 export function toHunkData(hunk: GitDiffHunk): HunkData {
   return {
+    content: hunk.header,
     oldStart: hunk.oldStart,
     oldLines: hunk.oldLines,
     newStart: hunk.newStart,
     newLines: hunk.newLines,
-    content: hunk.header,
     changes: hunk.changes.map(toChangeData),
   };
 }
 
 export function hunksForSide(hunks: readonly HunkData[], side: 'old' | 'new'): HunkData[] {
-  return hunks.map(hunk => {
+  return hunks.flatMap(hunk => {
     const changes = hunk.changes.filter(change =>
       side === 'old' ? change.type !== 'insert' : change.type !== 'delete'
     );
-    return { ...hunk, changes };
+    return changes.length === 0 ? [] : [{ ...hunk, changes }];
   });
 }
-```
+~~~
 
-If `ChangeData` / `HunkData` are not exported from `react-diff-view@3.3.3`, declare local structural types with those exact fields in this file and keep the tests' assertions.
+- [ ] **Step 5: Write failing safe-highlight tests**
 
-Do not import highlight.js here.
+Create <code>syntax-highlight.test.tsx</code>.
+
+Use <code>renderToStaticMarkup</code> to prove ordinary TypeScript receives at least one <code>hljs-</code> token class.
+
+Use attacker-controlled <code>&lt;img src=x onerror=alert(1)&gt;</code> as input and prove the rendered markup contains escaped text and no real <code>&lt;img</code> element.
+
+Test both full-file HTML and a diff token rendered through <code>renderHighlightedToken</code>.
+
+- [ ] **Step 6: Verify highlight RED**
+
+Run:
+
+~~~bash
+( cd packages/web && bun test src/components/workflows/source-control/syntax-highlight.test.tsx )
+~~~
+
+Expected: FAIL because the highlight module does not exist.
+
+- [ ] **Step 7: Implement highlighting with the public highlight.js API**
+
+Create <code>syntax-highlight.tsx</code>.
+
+Import <code>highlight.js/lib/common</code>, call <code>highlightAuto(raw).value</code>, and inject only that library-produced HTML.
+
+Do not call <code>highlightElement</code> on an element that already contains untrusted markup.
+
+For diff lines, build <code>HunkTokens</code> arrays indexed by the dependency's real line numbers.
+
+Use a custom token with <code>type: "highlighted"</code> and the safe highlighted HTML in <code>value</code>.
+
+Populate both old and new arrays for normal changes, only old for deletes, and only new for inserts.
+
+Implement <code>renderHighlightedToken</code> so only <code>highlighted</code> uses <code>dangerouslySetInnerHTML</code> and every other token delegates to the dependency's default renderer.
+
+The global app stylesheet already imports <code>highlight.js/styles/github-dark-dimmed.min.css</code>, so do not add a second theme.
+
+Use this exact token indexing and renderer shape so the dependency's <code>lineNumber - 1</code> lookups receive the intended line.
+
+~~~tsx
+import hljs from 'highlight.js/lib/common';
+import type { HunkData, HunkTokens, RenderToken, TokenNode } from 'react-diff-view';
+
+export function highlightedHtml(raw: string): string {
+  return hljs.highlightAuto(raw).value;
+}
+
+function highlightedToken(content: string): TokenNode[] {
+  return [{ type: 'highlighted', value: highlightedHtml(content) }];
+}
+
+export function highlightDiffTokens(hunks: readonly HunkData[]): HunkTokens {
+  const old: TokenNode[][] = [];
+  const next: TokenNode[][] = [];
+  for (const hunk of hunks) {
+    for (const change of hunk.changes) {
+      if (change.type === 'insert') {
+        next[change.lineNumber - 1] = highlightedToken(change.content);
+      } else if (change.type === 'delete') {
+        old[change.lineNumber - 1] = highlightedToken(change.content);
+      } else {
+        old[change.oldLineNumber - 1] = highlightedToken(change.content);
+        next[change.newLineNumber - 1] = highlightedToken(change.content);
+      }
+    }
+  }
+  return { old, new: next };
+}
+
+export const renderHighlightedToken: RenderToken = (token, renderDefault, index) => {
+  if (token.type !== 'highlighted' || typeof token.value !== 'string') {
+    return renderDefault(token, index);
+  }
+  return <span key={index} dangerouslySetInnerHTML={{ __html: token.value }} />;
+};
+~~~
+
+- [ ] **Step 8: Verify GREEN**
+
+Run:
+
+~~~bash
+( cd packages/web && bun test src/components/workflows/source-control/git-hunk-adapter.test.ts )
+( cd packages/web && bun test src/components/workflows/source-control/syntax-highlight.test.tsx )
+( cd packages/web && bun run type-check )
+~~~
+
+Expected: every command exits 0.
+
+- [ ] **Step 9: Commit**
+
+~~~bash
+git add packages/web/package.json bun.lock \
+  packages/web/src/components/workflows/source-control/git-hunk-adapter.ts \
+  packages/web/src/components/workflows/source-control/git-hunk-adapter.test.ts \
+  packages/web/src/components/workflows/source-control/syntax-highlight.tsx \
+  packages/web/src/components/workflows/source-control/syntax-highlight.test.tsx
+git commit -m "feat(web): prepare highlighted diff rendering"
+~~~
+
+---
+
+### Task 7: Extract a reusable, virtualized, selectable file list
+
+**Files:**
+
+- Create: <code>packages/web/src/components/workflows/source-control/changed-files-list.tsx</code>
+- Modify: <code>packages/web/src/components/workflows/source-control/changed-file-row.tsx</code>
+- Modify: <code>packages/web/src/components/workflows/source-control/source-control-panel.tsx</code>
+- Modify: <code>packages/web/src/components/workflows/source-control/source-control-panel.test.tsx</code>
+- Modify: <code>packages/web/src/component-integration/source-control-tab.test.tsx</code>
+
+**Interfaces:**
+
+- Produces reusable <code>ChangedFilesList</code> with caller-supplied <code>ariaLabel</code>, <code>idPrefix</code>, files, active index, selected path, list ref, active-index callback, and open callback.
+- Extends <code>SourceControlPanel</code> with optional <code>onOpenFile</code>, <code>selectedPath</code>, <code>ariaLabel</code>, and <code>listRef</code>.
+
+- [ ] **Step 1: Add failing list behavior tests**
+
+Extend <code>source-control-panel.test.tsx</code> so a caller-supplied <code>ariaLabel</code> and <code>idPrefix</code> appear in the rendered listbox and option IDs.
+
+Update the selected-state expectation so <code>aria-selected</code> represents the opened file, while <code>data-active</code> represents the active descendant.
+
+Extend the already-isolated mounted tab test with a direct <code>SourceControlPanel</code> render that dispatches Enter and Space on the active row and clicks a second row.
+
+Assert the callback receives the exact file for each interaction.
+
+Add a 200-file mounted case that gives the listbox a 280-pixel measured rectangle, waits for the virtualizer, and asserts that fewer than 200 options are mounted.
+
+Scroll to a later index and assert the later path becomes mounted.
+
+- [ ] **Step 2: Verify RED**
+
+Run:
+
+~~~bash
+( cd packages/web && bun test src/components/workflows/source-control/source-control-panel.test.tsx )
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
+~~~
+
+Expected: the new API, interaction, and virtualization assertions fail.
+
+- [ ] **Step 3: Make each row a selectable option**
+
+Render each row as <code>&lt;button type="button" role="option" tabIndex={-1}&gt;</code>.
+
+Use <code>aria-selected={selected}</code>, <code>data-active={active ? "true" : "false"}</code>, and the existing visible M, A, or D badge.
+
+Click must focus the listbox, make the row active, and then call <code>onOpen(file)</code>.
+
+Prevent the row's pointer-down default so clicking an option leaves DOM focus on the listbox; this prevents a later Enter key from both bubbling to the listbox handler and synthesizing a second button click.
+
+Do not use <code>aria-selected</code> for focus because that creates multiple selected options after keyboard movement.
+
+- [ ] **Step 4: Implement actual virtual positioning**
+
+Create <code>changed-files-list.tsx</code> around <code>useVirtualizer</code> with count, scroll element, 28-pixel estimate, and overscan 8.
+
+When virtual items exist, render one relative spacer with <code>height: virtualizer.getTotalSize()</code>.
+
+Render each mounted row in an absolutely positioned full-width wrapper translated by <code>virtualItem.start</code>.
+
+Keep the all-row fallback only for unmeasured server rendering so the current static-markup tests remain meaningful.
+
+On ArrowUp, ArrowDown, Home, and End, compute the next active index, call <code>virtualizer.scrollToIndex(nextIndex, { align: "auto" })</code>, and update the active callback.
+
+On Enter or Space, prevent default and open the current active file without moving the active index.
+
+Use <code>idPrefix + "-" + index</code> for option IDs so Changes and future History lists can coexist.
+
+Set <code>aria-activedescendant</code> only when the active option is mounted after virtual scrolling.
+
+- [ ] **Step 5: Replace only the inlined listbox**
+
+Keep every CAP-6, loading, stale, error, Reload, and clean-worktree branch in <code>SourceControlPanel</code> unchanged.
+
+Keep active-index clamping in the panel and pass it into <code>ChangedFilesList</code>.
+
+Default <code>ariaLabel</code> to <code>Uncommitted changes</code>, <code>idPrefix</code> to <code>sc-changes-file</code>, <code>selectedPath</code> to null, and <code>onOpenFile</code> to a no-op.
+
+Re-export <code>nextChangedFileIndex</code> from <code>source-control-panel.tsx</code> so existing imports remain compatible.
+
+- [ ] **Step 6: Verify GREEN**
+
+Run:
+
+~~~bash
+( cd packages/web && bun test src/components/workflows/source-control/source-control-panel.test.tsx )
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
+( cd packages/web && bun test src/components/workflows/source-control/dag-run-tabs.test.tsx )
+( cd packages/web && bun run type-check )
+~~~
+
+Expected: every command exits 0 with no React act warning.
+
+- [ ] **Step 7: Commit**
+
+~~~bash
+git add packages/web/src/components/workflows/source-control/changed-files-list.tsx \
+  packages/web/src/components/workflows/source-control/changed-file-row.tsx \
+  packages/web/src/components/workflows/source-control/source-control-panel.tsx \
+  packages/web/src/components/workflows/source-control/source-control-panel.test.tsx \
+  packages/web/src/component-integration/source-control-tab.test.tsx
+git commit -m "feat(web): make changed files reusable and virtualized"
+~~~
+
+---
+
+### Task 8: Add the reusable status-keyed viewer
+
+**Files:**
+
+- Create: <code>packages/web/src/components/workflows/source-control/source-control-diff.css</code>
+- Create: <code>packages/web/src/components/workflows/source-control/file-viewer.tsx</code>
+- Create: <code>packages/web/src/components/workflows/source-control/file-viewer.test.tsx</code>
+
+**Interfaces:**
+
+- Produces a discriminated <code>FileViewerState</code> union.
+- Produces <code>FileViewer</code> with state, stacked mode, Cancel, Reload, and Close callbacks.
+
+- [ ] **Step 1: Write failing viewer tests**
+
+Create <code>file-viewer.test.tsx</code> with one behavior per test.
+
+Cover this state union.
+
+~~~ts
+export type FileViewerState =
+  | { kind: 'idle' }
+  | { kind: 'loading'; file: GitChangedFile }
+  | { kind: 'diff'; file: GitChangedFile; response: GitReadyDiffResponse }
+  | { kind: 'text'; file: GitChangedFile; text: string; contentHash: string }
+  | { kind: 'binary'; file: GitChangedFile; contentHash: string; downloadHref: string }
+  | { kind: 'unavailable'; file: GitChangedFile; emptyReason: GitEmptyReason }
+  | { kind: 'error'; file: GitChangedFile };
+~~~
+
+The tests must prove these observable outcomes.
+
+- Idle says <code>Select a file to inspect</code>.
+- Loading has a status skeleton and a native Cancel button.
+- Modified text has separately labelled Before and After panes, one visible minus marker on the deleted side, one visible plus marker on the inserted side, and no Snapshot control.
+- A normal context change with <code>oldLine: 4</code> and <code>newLine: 9</code> renders line 4 in Before and line 9 in After, guarding the version 3.3.3 unified-mode side-selection trap.
+- Wide modified mode uses side-by-side pane layout, while stacked mode uses before-over-after.
+- Each modified pane has its own horizontal and vertical scroll container and <code>tabIndex=0</code>.
+- Added and deleted text use one pane with syntax highlighting and no diff insert or delete background class.
+- Attacker-controlled source renders as text and creates no image element.
+- Binary never renders content, says <code>Binary file. Download to inspect.</code>, and has a same-origin Download link.
+- <code>no_checkout</code> says <code>This run's checkout isn't available right now.</code> and has Reload, while container says <code>This run's files aren't available on the host.</code> and has no Reload.
+- Error state keeps the file heading and has the quiet <code>Could not open this file.</code> sentence plus Reload.
+- Close is a native button with an accessible label.
+- No rendered branch contains Snapshot, stage, edit, discard, commit, <code>Error:</code>, <code>unsupported</code>, a warning glyph, or console markup.
+
+- [ ] **Step 2: Verify RED**
+
+Run:
+
+~~~bash
+( cd packages/web && bun test src/components/workflows/source-control/file-viewer.test.tsx )
+~~~
+
+Expected: FAIL because <code>file-viewer.tsx</code> does not exist.
+
+- [ ] **Step 3: Implement diff styling**
+
+Create <code>source-control-diff.css</code>.
+
+Set the dependency's insert and delete variables from <code>color-mix(in oklch, var(--success) 18%, var(--surface-inset))</code> and <code>color-mix(in oklch, var(--error) 18%, var(--surface-inset))</code>; the repository has success and error foreground tokens but no separate success or error background token.
+
+Keep marker glyph color at <code>var(--text-primary)</code> and give markers a fixed monospace one-character column.
+
+Set diff tables to a non-wrapping width that grows with content so horizontal scrolling stays inside each pane.
+
+Give each pane's <code>Diff</code> the <code>sc-diff-side</code> class plus <code>sc-diff-before</code> or <code>sc-diff-after</code>.
+
+Use split view internally, then hide columns three and four in <code>sc-diff-before</code> and columns one and two in <code>sc-diff-after</code> at both the <code>col</code> and row-cell levels.
+
+This preserves the dependency's correct old and new line-number and token lookup for normal context lines while still presenting two independent one-sided panes.
+
+Use these selectors rather than positional selectors on only code cells, because split rows contain both gutter and code cells.
+
+~~~css
+.sc-diff-side {
+  --diff-background-color: var(--surface-inset);
+  --diff-text-color: var(--text-primary);
+  --diff-gutter-insert-background-color: color-mix(in oklch, var(--success) 18%, var(--surface-inset));
+  --diff-code-insert-background-color: color-mix(in oklch, var(--success) 18%, var(--surface-inset));
+  --diff-gutter-delete-background-color: color-mix(in oklch, var(--error) 18%, var(--surface-inset));
+  --diff-code-delete-background-color: color-mix(in oklch, var(--error) 18%, var(--surface-inset));
+}
+
+.sc-diff-side.diff {
+  min-width: 100%;
+  width: max-content;
+  table-layout: auto;
+}
+
+.sc-diff-side .diff-code {
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.sc-diff-before col:nth-child(n + 3),
+.sc-diff-before .diff-line > :nth-child(n + 3),
+.sc-diff-after col:nth-child(-n + 2),
+.sc-diff-after .diff-line > :nth-child(-n + 2) {
+  display: none;
+}
+
+.sc-diff-marker {
+  display: inline-block;
+  width: 1ch;
+  margin-right: 0.5ch;
+  color: var(--text-primary);
+  font-family: monospace;
+  text-align: center;
+}
+~~~
+
+- [ ] **Step 4: Implement the viewer state branches**
+
+Import <code>Diff</code> from <code>react-diff-view</code>, its <code>style/index.css</code>, the local CSS, the hunk adapter, and the highlight helper.
+
+For modified text, map once with <code>toHunkData</code>, derive old and new side hunks, and render two separate <code>Diff diffType="modify"</code> trees.
+
+Use <code>viewType="split"</code> for both trees, <code>sc-diff-before</code> for the old filtered hunks, and <code>sc-diff-after</code> for the new filtered hunks; do not use unified view because version 3.3.3 resolves normal-line tokens and line numbers from the new side in unified mode.
+
+Pass the matching <code>highlightDiffTokens</code> result and <code>renderHighlightedToken</code> to each tree.
+
+Use a side-aware gutter renderer so delete receives <code>-</code> only in the old gutter, insert receives <code>+</code> only in the new gutter, and normal lines receive an empty marker.
+
+Then call the dependency-provided default gutter renderer so line numbers remain.
+
+~~~tsx
+const renderGutter: RenderGutter = ({ change, side, renderDefault }) => {
+  const marker =
+    change.type === 'delete' && side === 'old'
+      ? '-'
+      : change.type === 'insert' && side === 'new'
+        ? '+'
+        : '';
+  return (
+    <>
+      <span aria-hidden="true" className="sc-diff-marker">{marker}</span>
+      <span>{renderDefault()}</span>
+    </>
+  );
+};
+~~~
+
+Wrap each tree in its own <code>min-h-0 min-w-0 flex-1 overflow-auto</code> region labelled Before or After.
+
+Use <code>flex-row</code> when wide and <code>flex-col</code> when stacked.
+
+For added and deleted text, render one <code>pre</code> and <code>code className="hljs"</code> using only <code>highlightedHtml(state.text)</code>.
+
+For binary, never mount a text or diff node.
+
+For error and unavailable branches, invoke only the passed Reload callback and never show the caught exception message.
+
+Keep the component independent of <code>SourceControlTab</code>, TanStack Query, run IDs, and every console module.
 
 - [ ] **Step 5: Verify GREEN**
 
 Run:
 
-```bash
-bun test packages/web/src/components/workflows/source-control/git-hunk-adapter.test.ts
+~~~bash
+( cd packages/web && bun test src/components/workflows/source-control/file-viewer.test.tsx )
+( cd packages/web && bun test src/components/workflows/source-control/git-hunk-adapter.test.ts )
+( cd packages/web && bun test src/components/workflows/source-control/syntax-highlight.test.tsx )
 ( cd packages/web && bun run type-check )
-```
+~~~
 
-Expected: both PASS.
+Expected: every command exits 0.
 
-- [ ] **Step 6: Commit the viewer dependency and mapper**
+- [ ] **Step 6: Commit**
 
-```bash
-git add packages/web/package.json bun.lock packages/web/src/components/workflows/source-control/git-hunk-adapter.ts packages/web/src/components/workflows/source-control/git-hunk-adapter.test.ts
-git commit -m "feat(web): map git hunk JSON to react-diff-view"
-```
-
-If the lockfile name is `bun.lockb`, stage that file instead.
-
----
-
-### Task 8: Make the Changes list a reusable openable widget
-
-**Files:**
-- Create: `packages/web/src/components/workflows/source-control/changed-files-list.tsx`
-- Modify: `packages/web/src/components/workflows/source-control/changed-file-row.tsx`
-- Modify: `packages/web/src/components/workflows/source-control/source-control-panel.tsx`
-- Modify: `packages/web/src/components/workflows/source-control/source-control-panel.test.tsx`
-
-**Interfaces:**
-- Consumes: `GitChangedFile`.
-- Produces: `ChangedFilesList` with `ariaLabel`, `files`, `activeIndex`, `selectedPath`, `onActiveIndexChange`, `onOpen`.
-- Produces: `SourceControlPanel` `onOpenFile?: (file: GitChangedFile) => void`.
-
-- [ ] **Step 1: Write the failing open/select tests**
-
-Add these cases to `source-control-panel.test.tsx` (keep existing copy tests):
-
-```ts
-test('exposes a reusable listbox labelled for Changes or a caller-supplied scope', () => {
-  const html = renderPanel({
-    snapshot: { files: [{ path: 'a.ts', status: 'M' }], revision: 'a'.repeat(64) },
-    ariaLabel: 'Commit files',
-  });
-  expect(html).toContain('aria-label="Commit files"');
-});
-```
-
-That case is RED until `SourceControlPanel` accepts `ariaLabel` defaulting to `Uncommitted changes`.
-Then add a unit test file `changed-files-list.test.tsx` is unnecessary if the panel tests cover markup; add this pure expectation instead:
-
-```ts
-test('Enter and Space keep the active index so the panel can open that row', () => {
-  expect(nextChangedFileIndex('Enter', 1, 3)).toBe(1);
-  expect(nextChangedFileIndex(' ', 1, 3)).toBe(1);
-});
-```
-
-That second test already matches Task 1.1 behavior; keep it as a characterization.
-The RED for this task is the missing `ariaLabel` prop and the missing `onOpenFile` wiring documented in Step 3.
-
-- [ ] **Step 2: Run the test and verify RED**
-
-Run:
-
-```bash
-bun test packages/web/src/components/workflows/source-control/source-control-panel.test.tsx
-```
-
-Expected: FAIL on the new `ariaLabel` assertion.
-
-- [ ] **Step 3: Extract the list widget and wire open**
-
-Update `changed-file-row.tsx` so the option is clickable:
-
-```ts
-export function ChangedFileRow(props: {
-  file: GitChangedFile;
-  id: string;
-  active: boolean;
-  selected: boolean;
-  onOpen: () => void;
-}): ReactElement {
-```
-
-Set `aria-selected={props.selected || props.active}` is wrong; keep `aria-selected={props.active}` for the roving index, and add `data-open={props.selected ? 'true' : 'false'}`.
-Call `props.onOpen` from `onClick`.
-
-Create `packages/web/src/components/workflows/source-control/changed-files-list.tsx`:
-
-```ts
-import { useRef, type KeyboardEvent, type ReactElement } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
-
-import type { GitChangedFile } from '@/lib/api';
-
-import { ChangedFileRow } from './changed-file-row';
-
-export function nextChangedFileIndex(key: string, currentIndex: number, fileCount: number): number {
-  if (fileCount <= 0) return 0;
-  if (key === 'ArrowDown') return Math.min(fileCount - 1, currentIndex + 1);
-  if (key === 'ArrowUp') return Math.max(0, currentIndex - 1);
-  if (key === 'Home') return 0;
-  if (key === 'End') return fileCount - 1;
-  return Math.min(fileCount - 1, Math.max(0, currentIndex));
-}
-
-export function ChangedFilesList(props: {
-  files: readonly GitChangedFile[];
-  activeIndex: number;
-  selectedPath: string | null;
-  ariaLabel: string;
-  onActiveIndexChange: (index: number) => void;
-  onOpen: (file: GitChangedFile) => void;
-}): ReactElement {
-  const parentRef = useRef<HTMLDivElement>(null);
-  const virtualizer = useVirtualizer({
-    count: props.files.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 28,
-    overscan: 8,
-  });
-  const virtualItems = virtualizer.getVirtualItems();
-  const rows = virtualItems.length > 0 ? virtualItems.map(item => props.files[item.index]!) : [...props.files];
-  const rowIndexes =
-    virtualItems.length > 0 ? virtualItems.map(item => item.index) : props.files.map((_, index) => index);
-
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (
-      event.key === 'ArrowDown' ||
-      event.key === 'ArrowUp' ||
-      event.key === 'Home' ||
-      event.key === 'End' ||
-      event.key === 'Enter' ||
-      event.key === ' '
-    ) {
-      event.preventDefault();
-    }
-    props.onActiveIndexChange(nextChangedFileIndex(event.key, props.activeIndex, props.files.length));
-    if ((event.key === 'Enter' || event.key === ' ') && props.files[props.activeIndex]) {
-      props.onOpen(props.files[props.activeIndex]!);
-    }
-  };
-
-  return (
-    <div
-      ref={parentRef}
-      role="listbox"
-      aria-label={props.ariaLabel}
-      aria-activedescendant={`sc-file-${String(props.activeIndex)}`}
-      tabIndex={0}
-      onKeyDown={onKeyDown}
-      className="min-h-0 flex-1 overflow-auto p-2"
-    >
-      {rows.map((file, displayIndex) => {
-        const index = rowIndexes[displayIndex] ?? displayIndex;
-        return (
-          <ChangedFileRow
-            key={`${file.status}:${file.path}`}
-            id={`sc-file-${String(index)}`}
-            file={file}
-            active={index === props.activeIndex}
-            selected={props.selectedPath === file.path}
-            onOpen={(): void => {
-              props.onActiveIndexChange(index);
-              props.onOpen(file);
-            }}
-          />
-        );
-      })}
-    </div>
-  );
-}
-```
-
-Update `SourceControlPanelProps` with `onOpenFile?: (file: GitChangedFile) => void`, `selectedPath?: string | null`, and `ariaLabel?: string`.
-Replace the inlined listbox with `ChangedFilesList`.
-Default `ariaLabel` to `Uncommitted changes`.
-If `onOpenFile` is omitted, pass a no-op so existing callers compile.
-
-Keep CAP-6, stale banner, Reload, and region-empty branches unchanged.
-Move `nextChangedFileIndex` into `changed-files-list.tsx` and re-export it from `source-control-panel.tsx` so existing tests keep importing it from the panel module.
-Do not create a circular import between the panel and the list.
-
-- [ ] **Step 4: Verify GREEN**
-
-Run:
-
-```bash
-bun test packages/web/src/components/workflows/source-control/source-control-panel.test.tsx
-bun test packages/web/src/components/workflows/source-control/dag-run-tabs.test.tsx
-```
-
-Expected: PASS.
-Existing tests must still prove letter-carried badges, no History/write chrome, and keyboard index movement.
-
-- [ ] **Step 5: Commit the reusable list**
-
-```bash
-git add packages/web/src/components/workflows/source-control/changed-files-list.tsx \
-  packages/web/src/components/workflows/source-control/changed-file-row.tsx \
-  packages/web/src/components/workflows/source-control/source-control-panel.tsx \
-  packages/web/src/components/workflows/source-control/source-control-panel.test.tsx
-git commit -m "feat(web): make Changes list openable and reusable"
-```
-
----
-
-### Task 9: Add the reusable status-keyed viewer
-
-**Files:**
-- Create: `packages/web/src/components/workflows/source-control/viewport-stack.ts`
-- Create: `packages/web/src/components/workflows/source-control/viewport-stack.test.ts`
-- Create: `packages/web/src/components/workflows/source-control/source-control-diff.css`
-- Create: `packages/web/src/components/workflows/source-control/file-viewer.tsx`
-- Create: `packages/web/src/components/workflows/source-control/file-viewer.test.tsx`
-
-**Interfaces:**
-- Consumes: `GitChangedFile`, `GitDiffResponse`, `hunksForSide`, `toHunkData`, `Diff`/`Hunk` from `react-diff-view`.
-- Produces: `FileViewer` that is not imported by `WorkflowExecution.tsx` and does not import `/console`.
-
-- [ ] **Step 1: Write the failing viewer tests**
-
-Create `packages/web/src/components/workflows/source-control/viewport-stack.test.ts`:
-
-```ts
-import { describe, expect, test } from 'bun:test';
-
-import { isStackedViewport } from './viewport-stack';
-
-describe('isStackedViewport', () => {
-  test('stacks below 900px and not at 900px', () => {
-    expect(isStackedViewport(899)).toBe(true);
-    expect(isStackedViewport(900)).toBe(false);
-  });
-});
-```
-
-Create `packages/web/src/components/workflows/source-control/file-viewer.test.tsx`:
-
-```ts
-import { describe, expect, test } from 'bun:test';
-import type { ComponentProps } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-
-import { FileViewer } from './file-viewer';
-
-type Props = ComponentProps<typeof FileViewer>;
-
-function renderViewer(overrides: Partial<Props> = {}): string {
-  return renderToStaticMarkup(
-    <FileViewer
-      file={null}
-      loadState="idle"
-      stacked={false}
-      diff={null}
-      content={null}
-      binary={false}
-      downloadHref={null}
-      onCancel={(): void => undefined}
-      onClose={(): void => undefined}
-      {...overrides}
-    />
-  );
-}
-
-describe('FileViewer', () => {
-  test('shows a skeleton and Cancel while bytes are in flight', () => {
-    const html = renderViewer({
-      file: { path: 'a.ts', status: 'M' },
-      loadState: 'loading',
-    });
-    expect(html).toContain('Cancel');
-    expect(html).toContain('Loading file');
-  });
-
-  test('renders M as two labelled panes with plus and minus gutters and no snapshot control', () => {
-    const html = renderViewer({
-      file: { path: 'a.ts', status: 'M' },
-      loadState: 'ready',
-      diff: {
-        path: 'a.ts',
-        status: 'M',
-        scope: 'now',
-        ref: 'live',
-        hunks: [
-          {
-            oldStart: 1,
-            oldLines: 1,
-            newStart: 1,
-            newLines: 1,
-            header: '@@ -1 +1 @@',
-            changes: [
-              { type: 'delete', content: 'old', oldLine: 1 },
-              { type: 'insert', content: 'new', newLine: 1 },
-            ],
-          },
-        ],
-        cursor: '',
-        truncated: false,
-        binary: false,
-      },
-    });
-    expect(html).toContain('aria-label="Before"');
-    expect(html).toContain('aria-label="After"');
-    expect(html).toContain('old');
-    expect(html).toContain('new');
-    expect(html).toContain('>-<');
-    expect(html).toContain('>+<');
-    expect(html).not.toContain('Snapshot');
-    expect(html).not.toContain('console');
-  });
-
-  test('stacks before over after when stacked is true', () => {
-    const html = renderViewer({
-      file: { path: 'a.ts', status: 'M' },
-      loadState: 'ready',
-      stacked: true,
-      diff: {
-        path: 'a.ts',
-        status: 'M',
-        scope: 'now',
-        ref: 'live',
-        hunks: [],
-        cursor: '',
-        truncated: false,
-        binary: false,
-      },
-    });
-    expect(html).toContain('flex-col');
-  });
-
-  test('renders A and D as a single uncolored pane', () => {
-    const added = renderViewer({
-      file: { path: 'new.ts', status: 'A' },
-      loadState: 'ready',
-      content: 'added line',
-    });
-    expect(added).toContain('added line');
-    expect(added).not.toContain('aria-label="Before"');
-    const deleted = renderViewer({
-      file: { path: 'gone.ts', status: 'D' },
-      loadState: 'ready',
-      content: 'removed line',
-    });
-    expect(deleted).toContain('removed line');
-  });
-
-  test('does not dump binary bytes as text', () => {
-    const html = renderViewer({
-      file: { path: 'nul.bin', status: 'A' },
-      loadState: 'ready',
-      binary: true,
-      downloadHref: '/api/workflows/runs/run-1/git/file/nul.bin?source=worktree',
-      content: '\u0000secret',
-    });
-    expect(html).toContain('This file is not text');
-    expect(html).toContain('Download');
-    expect(html).not.toContain('secret');
-  });
-});
-```
-
-- [ ] **Step 2: Run the tests and verify RED**
-
-Run:
-
-```bash
-bun test packages/web/src/components/workflows/source-control/viewport-stack.test.ts
-bun test packages/web/src/components/workflows/source-control/file-viewer.test.tsx
-```
-
-Expected: FAIL because the modules do not exist.
-
-- [ ] **Step 3: Implement the viewer**
-
-Create `packages/web/src/components/workflows/source-control/viewport-stack.ts`:
-
-```ts
-export function isStackedViewport(widthPx: number, breakpointPx = 900): boolean {
-  return widthPx < breakpointPx;
-}
-```
-
-Create `packages/web/src/components/workflows/source-control/source-control-diff.css`:
-
-```css
-.source-control-diff .diff-code-insert {
-  background: color-mix(in oklch, var(--success) 18%, transparent);
-}
-.source-control-diff .diff-code-delete {
-  background: color-mix(in oklch, var(--error) 18%, transparent);
-}
-.source-control-gutter-marker {
-  color: var(--text-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  width: 1ch;
-  display: inline-block;
-}
-```
-
-Create `packages/web/src/components/workflows/source-control/file-viewer.tsx` that:
-
-- Imports `Diff` and `Hunk` from `react-diff-view` and `react-diff-view/style/index.css` plus `source-control-diff.css`.
-- For `loadState === 'loading'` renders `role="status"` text `Loading file` and a `Cancel` button calling `onCancel`.
-- For `binary` renders the sentence `This file is not text. Download to inspect.` and an `<a download href={downloadHref}>Download</a>` when `downloadHref` is set; it must not render `content`.
-- For `file.status === 'M'` and a ready non-binary `diff`, maps hunks with `toHunkData`, splits with `hunksForSide`, and renders two `overflow-auto min-h-0 flex-1` panes labelled `Before` and `After`.
-- Uses `viewType="unified"` and `diffType="modify"` on each pane.
-- Passes `renderGutter` so a `span.source-control-gutter-marker` contains `-` for deletes, `+` for inserts, and a space otherwise, then the default gutter.
-- Wraps panes in `flex h-full min-h-0` plus `flex-col` when `stacked` else `flex-row`.
-- For `A`/`D` ready text, renders one `<pre className="h-full min-h-0 overflow-auto whitespace-pre p-3 font-mono text-xs text-text-primary">`.
-- For idle with no file, renders `Select a file to inspect`.
-- Sets `tabIndex={0}` on each scroll pane.
-- Does not import highlight.js, Shiki, Monaco, or anything under `experiments/console`.
-
-If `renderToStaticMarkup` does not emit `>+<` because `renderGutter` is client-only, add a visually present `span` sibling in the gutter renderer and also put `aria-label="insert"` / `aria-label="delete"` on those markers, then assert those labels in the test instead of the raw `>+<` characters.
-Prefer asserting the marker characters because NFR7 requires the `+`/`-` glyphs.
-
-- [ ] **Step 4: Verify GREEN**
-
-Run:
-
-```bash
-bun test packages/web/src/components/workflows/source-control/viewport-stack.test.ts
-bun test packages/web/src/components/workflows/source-control/file-viewer.test.tsx
-bun test packages/web/src/components/workflows/source-control/git-hunk-adapter.test.ts
-( cd packages/web && bun run type-check )
-```
-
-Expected: all PASS.
-If `Diff` cannot render under `renderToStaticMarkup`, wrap it in a small `DiffPane` that still writes the `+`/`-` spans from `hunk.changes` even when the library returns empty HTML.
-
-- [ ] **Step 5: Commit the viewer**
-
-```bash
-git add packages/web/src/components/workflows/source-control/viewport-stack.ts \
-  packages/web/src/components/workflows/source-control/viewport-stack.test.ts \
-  packages/web/src/components/workflows/source-control/source-control-diff.css \
+~~~bash
+git add packages/web/src/components/workflows/source-control/source-control-diff.css \
   packages/web/src/components/workflows/source-control/file-viewer.tsx \
   packages/web/src/components/workflows/source-control/file-viewer.test.tsx
-git commit -m "feat(web): add shared status-keyed git viewer"
-```
+git commit -m "feat(web): render the shared changed file viewer"
+~~~
 
 ---
 
-### Task 10: Split the tab and fetch on open
+### Task 9: Orchestrate open, Cancel, Reload, and the responsive split
 
 **Files:**
-- Create: `packages/web/src/components/workflows/source-control/source-control-split.tsx`
-- Modify: `packages/web/src/components/workflows/source-control/source-control-tab.tsx`
-- Modify: `packages/web/src/components/workflows/source-control/source-control-panel.tsx` if needed to fill the list pane height
-- Create: `packages/web/src/component-integration/source-control-viewer.test.tsx`
-- Modify: `packages/web/package.json`
+
+- Create: <code>packages/web/src/components/workflows/source-control/source-control-split.tsx</code>
+- Create: <code>packages/web/src/components/workflows/source-control/use-stacked-viewport.ts</code>
+- Modify: <code>packages/web/src/components/workflows/source-control/source-control-tab.tsx</code>
+- Modify: <code>packages/web/src/component-integration/source-control-tab.test.tsx</code>
 
 **Interfaces:**
-- Consumes: `getWorkflowRunGitDiff`, `getWorkflowRunGitFile`, `gitFileUrl`, `AbortController`.
-- Produces: 30/70 `ResizablePanelGroup` inside `SourceControlTab`; `WorkflowExecution.tsx` stays a one-line mount.
 
-- [ ] **Step 1: Write the failing mounted viewer tests**
+- Produces the 30/70 resizable layout with a 20% through 70% list constraint.
+- Produces abort-safe selected-file loading and a separately frozen pending viewer snapshot.
 
-Create `packages/web/src/component-integration/source-control-viewer.test.tsx` by copying the happy-dom, QueryClient, and `renderTab` helpers from `source-control-tab.test.tsx`, then adding:
+- [ ] **Step 1: Add failing mounted acceptance tests**
 
-```ts
-test('opens an M file from the list via the diff URL and keeps the list visible', async () => {
-  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (input: RequestInfo) => {
-    const url = String(input);
-    if (url.includes('/git/changes')) {
-      return new Response(
-        JSON.stringify({
-          files: [{ path: 'src/a.ts', status: 'M' }],
-          revision: REVISION_A,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-    if (url.includes('/git/diff')) {
-      return new Response(
-        JSON.stringify({
-          path: 'src/a.ts',
-          status: 'M',
-          scope: 'now',
-          ref: 'live',
-          hunks: [
-            {
-              oldStart: 1,
-              oldLines: 1,
-              newStart: 1,
-              newLines: 1,
-              header: '@@ -1 +1 @@',
-              changes: [
-                { type: 'delete', content: 'old', oldLine: 1 },
-                { type: 'insert', content: 'new', newLine: 1 },
-              ],
-            },
-          ],
-          cursor: '',
-          truncated: false,
-          binary: false,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-    throw new Error(`unexpected ${url}`);
-  }) as unknown as typeof fetch);
+Extend the already-isolated <code>source-control-tab.test.tsx</code> instead of creating a second happy-dom harness.
 
-  await renderTab('run/one');
-  await waitFor(() => host.textContent?.includes('src/a.ts'), 'the changed file row');
-  const row = host.querySelector('#sc-file-0');
-  if (!(row instanceof HTMLElement)) throw new Error('missing row');
-  await act(async () => {
-    row.click();
-  });
-  await waitFor(() => host.textContent?.includes('old'), 'the before pane');
-  expect(host.textContent).toContain('src/a.ts');
-  expect(host.textContent).toContain('Before');
-  expect(String(fetchSpy.mock.calls.map(call => String(call[0]))).join('\n')).toContain(
-    '/api/workflows/runs/run%2Fone/git/diff?path=src%2Fa.ts'
-  );
-  expect(String(fetchSpy.mock.calls.map(call => String(call[0]))).join('\n')).not.toContain('working_path');
-});
+Add one test per behavior.
 
-test('opens A via worktree and D via head and never calls the diff route', async () => {
-  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (input: RequestInfo) => {
-    const url = String(input);
-    if (url.includes('/git/changes')) {
-      return new Response(
-        JSON.stringify({
-          files: [
-            { path: 'new.ts', status: 'A' },
-            { path: 'gone.ts', status: 'D' },
-          ],
-          revision: REVISION_A,
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-    if (url.includes('/git/file/new.ts?source=worktree')) {
-      return new Response('added\n', { status: 200, headers: { 'Content-Type': 'text/plain' } });
-    }
-    if (url.includes('/git/file/gone.ts?source=head')) {
-      return new Response('removed\n', { status: 200, headers: { 'Content-Type': 'text/plain' } });
-    }
-    throw new Error(`unexpected ${url}`);
-  }) as unknown as typeof fetch);
+- Clicking or pressing Enter on M fetches only the encoded diff URL, keeps the list visible, and shows Before and After.
+- Opening A fetches only <code>source=worktree</code>, and opening D fetches only <code>source=head</code>.
+- The client never sends <code>working_path</code>.
+- Opening a second file aborts the first request, and a late first response cannot overwrite the second selection.
+- Cancel aborts the current request, removes the skeleton, clears the selection, and leaves the list focused and visible.
+- Escape closes any viewer state and returns focus to the listbox.
+- A file 500 keeps the list and selected filename, shows quiet in-viewer Reload, and a successful retry replaces only the viewer.
+- A CAP-6 file response keeps the frozen list, shows the quiet unavailable viewer branch, and follows the container versus no-checkout Reload rule.
+- A NUL M response performs the raw worktree read needed for its content hash and renders a Download link whose GET returns actual bytes.
+- Reload re-fetches the list and the selected file, but does not mutate either displayed snapshot.
+- A divergent list does not expose the stale-accept affordance until the matching selected-file candidate has finished loading, so acceptance cannot mix a new list with old viewer content.
+- When list revision stays identical but selected diff or text content changes, the old content remains and <code>Changed on disk — Reload</code> appears.
+- Accepting the changed-on-disk affordance swaps both pending snapshots atomically.
+- If the accepted pending list removes the selected path, the viewer closes.
+- If the accepted pending list keeps the path with a changed status, the selected file and status-keyed mode update together.
+- A mocked viewport below 900 yields list-above-viewer and before-over-after.
+- A 900-pixel viewport yields the horizontal list/viewer split.
+- The resizable separator is keyboard focusable.
+- No test emits a React act warning.
 
-  await renderTab('run-1');
-  await waitFor(() => host.textContent?.includes('new.ts'), 'added row');
-  const added = host.querySelector('#sc-file-0');
-  if (!(added instanceof HTMLElement)) throw new Error('missing added row');
-  await act(async () => {
-    added.click();
-  });
-  await waitFor(() => host.textContent?.includes('added'), 'added content');
-  const deleted = host.querySelector('#sc-file-1');
-  if (!(deleted instanceof HTMLElement)) throw new Error('missing deleted row');
-  await act(async () => {
-    deleted.click();
-  });
-  await waitFor(() => host.textContent?.includes('removed'), 'deleted content');
-  const urls = fetchSpy.mock.calls.map(call => String(call[0])).join('\n');
-  expect(urls).not.toContain('/git/diff');
-});
-
-test('Cancel aborts the in-flight open and leaves the list in place', async () => {
-  let diffStarted: (() => void) | undefined;
-  const diffGate = new Promise<void>(resolve => {
-    diffStarted = resolve;
-  });
-  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (input: RequestInfo, init?: RequestInit) => {
-    const url = String(input);
-    if (url.includes('/git/changes')) {
-      return new Response(
-        JSON.stringify({ files: [{ path: 'slow.ts', status: 'M' }], revision: REVISION_A }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-    if (url.includes('/git/diff')) {
-      diffStarted?.();
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(resolve, 5_000);
-        init?.signal?.addEventListener('abort', () => {
-          clearTimeout(timeout);
-          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
-        });
-      });
-    }
-    throw new Error(`unexpected ${url}`);
-  }) as unknown as typeof fetch);
-
-  await renderTab('run-1');
-  await waitFor(() => host.textContent?.includes('slow.ts'), 'row');
-  const row = host.querySelector('#sc-file-0');
-  if (!(row instanceof HTMLElement)) throw new Error('missing row');
-  await act(async () => {
-    row.click();
-  });
-  await waitFor(() => host.textContent?.includes('Cancel'), 'cancel control');
-  await act(async () => {
-    requireButton('Cancel').click();
-  });
-  await waitFor(() => !host.textContent?.includes('Loading file'), 'cancelled viewer');
-  expect(host.textContent).toContain('slow.ts');
-});
-```
-
-Copy `REVISION_A`, `installHappyDom`, `waitFor`, `requireButton`, and render helpers from the existing tab test so this file is isolated.
-
-- [ ] **Step 2: Run the test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run:
 
-```bash
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-viewer.test.tsx
-```
+~~~bash
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
+~~~
 
-Expected: FAIL because clicking a row does not fetch `/git/diff`.
+Expected: existing Story 1.1 tests pass and the new viewer tests fail because the tab does not open files or render a split.
 
-- [ ] **Step 3: Implement the split and open orchestration**
+- [ ] **Step 3: Implement the responsive primitives**
 
-Create `packages/web/src/components/workflows/source-control/source-control-split.tsx`:
+Create <code>use-stacked-viewport.ts</code> with an initial <code>window.matchMedia("(max-width: 899px)")</code> read, a <code>change</code> listener, listener cleanup, and an SSR-safe false default.
 
-```ts
-import type { ReactElement, ReactNode } from 'react';
+Create <code>source-control-split.tsx</code>.
 
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+Use percentage strings because the installed panel library interprets numbers as pixels.
 
-export function SourceControlSplit(props: {
-  stacked: boolean;
-  list: ReactNode;
-  viewer: ReactNode;
-}): ReactElement {
-  return (
-    <ResizablePanelGroup
-      orientation={props.stacked ? 'vertical' : 'horizontal'}
-      className="h-full min-h-0"
-    >
-      <ResizablePanel defaultSize={30} minSize={20} maxSize={70}>
-        {props.list}
-      </ResizablePanel>
-      <ResizableHandle withHandle />
-      <ResizablePanel defaultSize={70} minSize={30}>
-        {props.viewer}
-      </ResizablePanel>
-    </ResizablePanelGroup>
-  );
+~~~tsx
+<ResizablePanelGroup
+  orientation={stacked ? 'vertical' : 'horizontal'}
+  className="h-full min-h-0 min-w-0"
+>
+  <ResizablePanel id="source-control-list" defaultSize="30%" minSize="20%" maxSize="70%">
+    {list}
+  </ResizablePanel>
+  <ResizableHandle withHandle />
+  <ResizablePanel id="source-control-viewer" defaultSize="70%" minSize="30%" maxSize="80%">
+    {viewer}
+  </ResizablePanel>
+</ResizablePanelGroup>
+~~~
+
+Do not provide persistence storage or callbacks.
+
+- [ ] **Step 4: Implement one abort-safe viewer loader**
+
+In <code>source-control-tab.tsx</code>, add a helper that accepts <code>runId</code>, <code>GitChangedFile</code>, and <code>AbortSignal</code> and returns a non-loading <code>FileViewerState</code>.
+
+Use this exact routing.
+
+- M calls <code>getWorkflowRunGitDiff</code>.
+- A calls <code>getWorkflowRunGitFile</code> with worktree.
+- D calls <code>getWorkflowRunGitFile</code> with head.
+- A ready binary M performs one raw worktree read to obtain <code>contentHash</code> for change detection, then returns the binary state and worktree download URL.
+- A CAP-6 result becomes unavailable and never replaces the Changes snapshot.
+- A thrown <code>AbortError</code> is ignored by the caller.
+- Every other exception becomes the quiet error state without retaining or rendering the exception.
+
+Use this complete status dispatch and let fetch failures reject to the request-ID-guarded caller.
+
+~~~ts
+type LoadedViewerState = Exclude<
+  FileViewerState,
+  { kind: 'idle' | 'loading' | 'error' }
+>;
+
+async function loadViewerFile(
+  runId: string,
+  file: GitChangedFile,
+  signal: AbortSignal
+): Promise<LoadedViewerState> {
+  if (file.status === 'M') {
+    const response = await getWorkflowRunGitDiff(runId, file.path, { signal });
+    if ('emptyReason' in response) {
+      return { kind: 'unavailable', file, emptyReason: response.emptyReason };
+    }
+    if (!response.binary) return { kind: 'diff', file, response };
+    const raw = await getWorkflowRunGitFile(runId, file.path, 'worktree', { signal });
+    if (raw.kind === 'empty') {
+      return { kind: 'unavailable', file, emptyReason: raw.emptyReason };
+    }
+    if (raw.kind !== 'binary') throw new Error('Invalid binary git file response');
+    return {
+      kind: 'binary',
+      file,
+      contentHash: raw.contentHash,
+      downloadHref: gitFileUrl(runId, file.path, 'worktree'),
+    };
+  }
+
+  const source: GitFileSource = file.status === 'A' ? 'worktree' : 'head';
+  const response = await getWorkflowRunGitFile(runId, file.path, source, { signal });
+  if (response.kind === 'empty') {
+    return { kind: 'unavailable', file, emptyReason: response.emptyReason };
+  }
+  if (response.kind === 'binary') {
+    return {
+      kind: 'binary',
+      file,
+      contentHash: response.contentHash,
+      downloadHref: gitFileUrl(runId, file.path, source),
+    };
+  }
+  return {
+    kind: 'text',
+    file,
+    text: response.text,
+    contentHash: response.contentHash,
+  };
 }
-```
+~~~
 
-Update `SourceControlTab` to:
+Track a monotonically increasing request ID with the current <code>AbortController</code>.
 
-1. Keep the existing changes query and snapshot reducer (do not poll).
-2. Track `selected: GitChangedFile | null`, `loadState` for the viewer, `diff`, `content`, `binary`, and an `AbortController` ref.
-3. On `onOpenFile`, abort the previous controller, create a new one, set loading, then:
-   - `M` → `getWorkflowRunGitDiff(runId, file.path, { signal })`
-   - `A` → `getWorkflowRunGitFile(runId, file.path, 'worktree', { signal })`
-   - `D` → `getWorkflowRunGitFile(runId, file.path, 'head', { signal })`
-4. Ignore `AbortError`.
-5. If the diff/file result is CAP-6 empty, do not replace the frozen Changes snapshot.
-   Show the viewer idle instead.
-6. If `binary` (diff.binary or file result kind binary), set `binary` true and `downloadHref` to `gitFileUrl` with worktree for A/M and head for D.
-7. Cancel calls `abort()` and clears the open file so Cancel matches Story 1.2 cancel-in-flight.
-8. Use `window.matchMedia('(max-width: 899px)')` to set `stacked`; subscribe to `change`.
-9. Wrap `SourceControlPanel` and `FileViewer` in `SourceControlSplit`.
-10. Pass `onOpenFile` and `selectedPath`.
-11. On `accept_pending`, close the viewer when the new file list no longer includes the selected path.
-    If it still includes that path, refetch the open file.
-12. Handle `Escape` on the split container by closing the viewer and focusing the listbox.
-13. Do not pass `workingPath` anywhere.
-14. Do not import `/console`.
+Apply a result only when its request ID is still current and its signal is not aborted.
 
-Insert this isolated invocation into `packages/web/package.json` immediately after the existing `source-control-tab.test.tsx` invocation:
+Abort on a new selection, a new Reload, Cancel, Close, Escape, accepting pending data, run ID change, and component unmount.
 
-```text
-&& NODE_ENV=development bun test src/component-integration/source-control-viewer.test.tsx
-```
+- [ ] **Step 5: Keep displayed and pending viewer snapshots separate**
 
-- [ ] **Step 4: Verify GREEN**
+Track <code>selectedFile</code>, displayed <code>viewerState</code>, and optional <code>{ file, state }</code> pending viewer data.
+
+The ordinary open action clears pending viewer data, enters loading, and replaces the displayed viewer only when its current request completes.
+
+The Reload action first calls the existing changes <code>refetch</code>.
+
+Use the <code>refetch</code> result only when <code>isSuccess</code> is true, convert <code>result.data</code> through <code>toSourceControlSnapshot</code>, and do not mistake TanStack Query's retained prior data for a successful candidate after an error.
+
+Change the existing <code>data</code> effect so it dispatches only the first successful snapshot when <code>snapshotState.displayed</code> is null; after initial load, the explicit Reload callback alone owns candidate-list dispatch.
+
+If the returned candidate snapshot is ready and still contains the selected path, re-read that candidate file without showing a loading state over the displayed viewer.
+
+Compare text by <code>contentHash</code>, binary by <code>contentHash</code>, and diff by its typed fields and hunk content.
+
+Implement that comparison as a pure <code>viewerFingerprint</code> helper: <code>text:&lt;hash&gt;</code>, <code>binary:&lt;hash&gt;</code>, <code>diff:&lt;JSON.stringify(response)&gt;</code>, <code>unavailable:&lt;emptyReason&gt;</code>, <code>error</code>, <code>idle</code>, or <code>loading:&lt;status&gt;:&lt;path&gt;</code>.
+
+Store a differing candidate as pending and leave the displayed viewer unchanged.
+
+When a selected path remains in a ready candidate list, wait for its candidate viewer read before dispatching either pending value, then batch the list dispatch and pending-viewer update in the same event turn.
+
+Do not expose a newly divergent list through <code>snapshotState.pending</code> while its matching viewer request is still in flight.
+
+Clear pending viewer data when the candidate fingerprint matches the displayed viewer, and never infer equality from the Changes revision.
+
+If the list refetch or selected-file re-read fails during this global Reload, retain both displayed snapshots, clear no existing pending data, leave the Changes-header Reload button enabled, and store no exception object.
+
+Set the stale affordance when either the Story 1.1 snapshot reducer has pending list data or pending viewer data exists.
+
+The accept action applies the pending list and matching pending viewer together.
+
+The accept action closes the viewer if the accepted list is CAP-6 or no longer contains the selected path.
+
+The accept action reuses the candidate file object so a status change selects the correct viewer mode.
+
+Do not treat a same-revision list as proof that open file bytes stayed unchanged.
+
+- [ ] **Step 6: Compose the tab and keyboard behavior**
+
+Wrap <code>SourceControlPanel</code> and <code>FileViewer</code> in <code>SourceControlSplit</code>.
+
+Pass selected path, open callback, and a real listbox ref to the panel.
+
+Pass Cancel, Reload, and Close callbacks to the viewer.
+
+When the displayed state is <code>error</code>, the viewer's Reload callback starts a direct selected-file request and replaces only that error state on success; it does not create a stale candidate.
+
+When the displayed state is <code>unavailable</code> with <code>no_checkout</code>, the viewer's Reload callback runs the global list-and-selected-file Reload path because checkout availability may have changed.
+
+Handle Escape on the tab root, close the viewer, and focus the listbox ref.
+
+Keep the existing query options with <code>retry: false</code>, no interval, no reconnect refetch, no focus refetch, and infinite stale time.
+
+Do not pass <code>workingPath</code> or modify <code>WorkflowExecution.tsx</code>.
+
+- [ ] **Step 7: Verify GREEN**
 
 Run:
 
-```bash
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-viewer.test.tsx
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx
-bun test packages/web/src/components/workflows/source-control/
+~~~bash
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
+( cd packages/web && bun test src/components/workflows/source-control/ )
+( cd packages/web && bun test src/lib/api.git-changes.test.ts )
+( cd packages/web && bun test src/components/workflows/WorkflowExecution.test.tsx )
 ( cd packages/web && bun run type-check )
-```
+~~~
 
-Expected: all PASS with no React act warnings.
-The existing stale-list test must still keep `old.ts` until `Changed on disk — Reload` is accepted.
+Expected: every command exits 0 with no React act warning.
 
-- [ ] **Step 5: Commit the split tab**
+The existing Story 1.1 test must still keep an old file list visible until the changed-on-disk affordance is accepted.
 
-```bash
+- [ ] **Step 8: Commit**
+
+~~~bash
 git add packages/web/src/components/workflows/source-control/source-control-split.tsx \
+  packages/web/src/components/workflows/source-control/use-stacked-viewport.ts \
   packages/web/src/components/workflows/source-control/source-control-tab.tsx \
-  packages/web/src/component-integration/source-control-viewer.test.tsx \
-  packages/web/package.json
-git commit -m "feat(web): open Source Control files in a 30/70 viewer"
-```
+  packages/web/src/component-integration/source-control-tab.test.tsx
+git commit -m "feat(web): open changed files in a frozen shared viewer"
+~~~
 
 ---
 
-### Task 11: Run acceptance gates and update sprint status
+### Task 10: Run acceptance gates and update the tracker
 
 **Files:**
-- Modify: `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml`
+
+- Modify: <code>_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml</code>
 
 **Interfaces:**
-- Consumes: the complete implementation from Tasks 1 through 10.
-- Produces: `1-2-open-a-changed-file-in-the-shared-viewer: done` only after all gates pass.
+
+- Produces tracker state <code>1-2-open-a-changed-file-in-the-shared-viewer: done</code> only after all gates pass.
 
 - [ ] **Step 1: Run every focused test in its intended process**
 
-Run:
+~~~bash
+( cd packages/git && bun test src/git-path.test.ts )
+( cd packages/git && bun test src/file-read.test.ts )
+( cd packages/server && bun test src/routes/git/checkout-gate.test.ts )
+( cd packages/server && bun test src/routes/api.git-changes.test.ts )
+( cd packages/web && bun test src/lib/api.git-changes.test.ts )
+( cd packages/web && bun test src/components/workflows/source-control/ )
+( cd packages/web && NODE_ENV=development bun test src/component-integration/source-control-tab.test.tsx )
+( cd packages/web && bun test src/components/workflows/WorkflowExecution.test.tsx )
+~~~
 
-```bash
-bun test packages/git/src/git-path.test.ts
-bun test packages/git/src/file-read.test.ts
-bun test packages/server/src/routes/git/checkout-gate.test.ts
-bun test packages/server/src/routes/api.git-changes.test.ts
-bun test packages/server/src/routes/api.git-diff.test.ts
-bun test packages/server/src/routes/api.git-file.test.ts
-bun test packages/web/src/lib/api.git-changes.test.ts
-bun test packages/web/src/lib/api.git-file.test.ts
-bun test packages/web/src/components/workflows/source-control/
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-tab.test.tsx
-NODE_ENV=development bun test packages/web/src/component-integration/source-control-viewer.test.tsx
-bun test packages/web/src/components/workflows/WorkflowExecution.test.tsx
-```
-
-Expected: every command exits 0 with no test failures or React act warnings.
+Expected: every command exits 0 with no failure, warning, unexpected network request, or React act warning.
 
 - [ ] **Step 2: Run affected package suites**
 
-Run:
-
-```bash
+~~~bash
 bun --filter @archon/git test
 bun --filter @archon/server test
 bun --filter @archon/web test
-```
+~~~
 
 Expected: all package scripts exit 0.
-The new server tests and the mounted viewer test must appear as their own Bun invocations in the script output.
 
-- [ ] **Step 3: Run the mandatory repository gate**
+The git HTTP test and mounted Source Control tab test must each appear as their own Bun invocation in package output.
+
+- [ ] **Step 3: Run the repository gate**
+
+~~~bash
+bun run validate
+git diff --check
+~~~
+
+Expected: both commands exit 0.
+
+Do not mark the story done if type-check, lint with zero warnings, formatting, install smoke, generated-file checks, or any package test fails.
+
+- [ ] **Step 4: Inspect scope and dependency invariants**
+
+~~~bash
+git diff --name-only dev...HEAD
+rg -n "from ['\"].*experiments/console|Shiki|Monaco|refractor" packages/web/src/components/workflows/source-control packages/web/src/lib/api.ts
+rg -n '"react-diff-view": "3\\.3\\.3"' packages/web/package.json
+~~~
+
+Expected: only planned files appear, the forbidden import and library search has no match, and the exact dependency search has one match.
+
+Confirm no database, environment, process, package, write control, History region, or polling behavior was added.
+
+- [ ] **Step 5: Confirm the acceptance matrix**
+
+| Criterion | Evidence |
+| --- | --- |
+| Select or keyboard-open a Now file | Mounted tab interaction tests |
+| Reusable list and viewer boundaries | <code>ChangedFilesList</code> and <code>FileViewer</code> component tests |
+| 30/70 percentage split and 20–70% list resizing | Split code, mounted orientation tests, and manual drag |
+| M before-left and after-right with independent scrolling | Viewer tests and manual overflow check |
+| M is HEAD to worktree and has no snapshot mode | Real-git test and viewer test |
+| Plus and minus gutters are not color-only | Viewer glyph assertions |
+| Marker contrast is at least 4.5:1 | Browser contrast inspection in Step 6 |
+| A and D use the correct raw source and no diff coloring | Mounted route tests and viewer tests |
+| Hunk JSON, zero starts, live ref, and opaque cursor | Parser, HTTP, generated-type, and client tests |
+| Syntax uses highlight.js without markup injection | Safe-highlight tests |
+| Below 900 stacks both layout levels | Mounted breakpoint and viewer tests |
+| Loading skeleton, Cancel, retry, close, and Escape | Mounted interaction tests |
+| Virtualized list remains keyboard-correct | Mounted 200-file test |
+| Live realpath containment and symlink semantics | Git path and file tests |
+| Encoded traversal is refused | HTTP tests |
+| Colon, dash, glob, space, and newline paths work | Real-git and HTTP tests |
+| Tree reads use ls-tree and cat-file, never oid:path | Wrapped-real-exec assertions |
+| CAP-6 is HTTP 200 on both new routes | HTTP tests for container and no checkout |
+| Binary bytes download and never render as text | Raw byte, client, and viewer tests |
+| Same-list-revision content changes remain frozen | Mounted Reload test |
+| Logs pair and do not leak paths | HTTP logger tests |
+| No write or History chrome | Existing and new component tests |
+| One exact new dependency | Manifest and lockfile inspection |
+
+- [ ] **Step 6: Perform the legacy-screen manual check**
 
 Run:
 
-```bash
-bun run validate
-git diff --check
-```
-
-Expected: both commands exit 0.
-Do not mark the story done if type-check, lint with zero warnings, format-check, install smoke, any package test, or any generated-file check fails.
-
-- [ ] **Step 4: Confirm the acceptance matrix**
-
-| Criterion | Automated or inspection proof |
-| --- | --- |
-| Select a Now file opens the shared viewer | `source-control-viewer.test.tsx` |
-| Viewer lives under `source-control/` and is not welded into `WorkflowExecution.tsx` | `WorkflowExecution.tsx` still mounts only `SourceControlTab`; scoped diff has no console import |
-| List widget is reusable via `ariaLabel` | panel `ariaLabel` test plus `ChangedFilesList` export |
-| 30/70 split resizable 20–70% | `SourceControlSplit` `defaultSize={30}` / `70`, `minSize={20}` / `maxSize={70}` |
-| `M` is two independently scrolling panes, HEAD → worktree | viewer tests plus `fileDiff` real-git test |
-| `+` / `-` gutters, not color-only | file-viewer marker assertions plus `source-control-diff.css` using `--text-primary` |
-| No standalone snapshot mode | file-viewer test forbids `Snapshot` |
-| `A`/`D` use the raw route, not diff | mounted A/D test |
-| Hunk JSON shape with `scope: "now"` and `ref: "live"` | HTTP diff test plus mapper test |
-| `cursor` is opaque and unused in 1.2 | client test omits `cursor=` when empty |
-| Below 900px lists-above-viewer and before-over-after | `isStackedViewport(899)` and viewer `flex-col` test |
-| Skeleton + Cancel for in-flight open | file-viewer loading test and mounted Cancel test |
-| Viewer keyboard: panes tabbable, Escape closes | tab `tabIndex={0}` and Escape handler in `SourceControlTab` |
-| Live `realpath` containment and symlink refuse | `git-path.test.ts` |
-| Encoded `..` refuse | HTTP diff and file tests |
-| Colon / leading-dash / glob success | `file-read.test.ts` and raw colon HTTP test |
-| `ls-tree` + `cat-file`, never `oid:path` | `file-read.test.ts` argv assertion |
-| CAP-6 HTTP 200 on both new routes | diff and file HTTP tests |
-| One new dep `react-diff-view@3.3.3` | `packages/web/package.json` |
-| No Shiki/Monaco/refractor | scoped diff |
-| NUL not dumped as text | file-read binary test, raw octet-stream test, viewer binary test |
-| Frozen list snapshot still holds during Reload | existing tab integration test |
-| Pino names and path privacy | HTTP logger assertions |
-| No write chrome | existing panel tests |
-| Story 1.3 thresholds not invented | no 256 KB / 1 MB / 50 MB constants added |
-
-- [ ] **Step 5: Perform a legacy-screen smoke check**
-
-Run the application:
-
-```bash
+~~~bash
 bun run dev
-```
+~~~
 
-Open an existing DAG run, select Source Control, click an `M` file and an `A` or `D` file.
-Confirm the 30/70 split, independent pane scroll, Cancel while loading if the file is slow, no History region, and no browser console React errors.
-Stop the dev processes started for this check.
-If no DAG run with a live checkout exists, record that the automated git, HTTP, mapper, viewer, and mounted tests are the acceptance evidence; do not fabricate a run or broaden this story.
+Open an existing DAG run with a live host checkout at <code>/legacy/workflows/runs/:id</code>.
 
-- [ ] **Step 6: Update sprint status only after Steps 1 through 5 pass**
+Open one M file and one A or D file.
 
-In `_bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml`, change only:
+Drag the list from 20% through 70% and confirm the viewer never overflows the window.
 
-```yaml
-development_status:
-  epic-1: in-progress
-  1-1-see-this-runs-uncommitted-files: done
+At a viewport below 900 pixels, confirm the list is above the viewer and Before is above After.
+
+Use long lines and enough lines to confirm each diff pane scrolls independently in both axes.
+
+Use browser accessibility or color tools to record that the visible plus and minus markers have contrast of at least 4.5:1 against their rendered backgrounds.
+
+Trigger Reload after changing the selected file and confirm the old content remains until <code>Changed on disk — Reload</code> is accepted.
+
+Confirm the browser console has no React error and that no write or History control appears.
+
+Stop only the processes started for this check.
+
+If no suitable live run exists, record that limitation in PR Validation and do not fabricate a run, but all automated gates must still pass.
+
+- [ ] **Step 7: Update exactly one tracker value**
+
+In <code>sprint-status.yaml</code>, change only:
+
+~~~yaml
+  1-2-open-a-changed-file-in-the-shared-viewer: backlog
+~~~
+
+to:
+
+~~~yaml
   1-2-open-a-changed-file-in-the-shared-viewer: done
-```
+~~~
 
-Keep Story 1.3 at `backlog`.
-Set `last_updated: 2026-09-06`.
+The existing <code>last_updated: 2026-09-06</code> already has the correct date and must not be rewritten for noise.
 
-- [ ] **Step 7: Commit the tracker update**
+Keep Story 1.3 at backlog and Epic 1 at in-progress.
 
-```bash
+- [ ] **Step 8: Commit the tracker update**
+
+~~~bash
 git add _bmad-output/implementation-artifacts/archon-source-control/sprint-status.yaml
-git commit -m "chore(sc): mark shared-viewer story done"
-```
+git commit -m "chore(sc): mark shared viewer story done"
+~~~
 
 ## Out of Scope
 
-- Story 1.3 large-text cutoffs, Load more, streaming, 50 MB download-only, inline images, and hex peek.
-- Epic 2 History, commit log, per-commit files, commit OIDs on HTTP, and lane graph.
+- Story 1.3 hunk pagination, large-text chunking, Load more, streaming, the final 50 MB policy, inline images, and hex peek.
+- Epic 2 History, commit log, per-commit file lists, commit OIDs, and lane graph.
 - CAP-8 durable snapshot writing.
 - Container overlay reads.
 - Secret redaction.
-- Syntax highlighting via highlight.js HTML.
 - Persisted split sizes.
-- A new tab model for sequential non-DAG runs.
+- A Source Control tab model for sequential non-DAG runs.
 
 ## Pull Request Handoff
 
-Before opening a pull request, rerun `bun run validate` and use `.github/pull_request_template.md`.
-Keep Problem and outcome, Review guidance, Solution, and Validation.
-Include focused RED/GREEN evidence, the full validation result, the manual smoke result or its explicit no-local-run limitation, and `Closes #76`.
-Do not write `N/A` sections and do not close the issue outside the PR workflow.
+Before opening a pull request, rerun <code>bun run validate</code> and copy <code>.github/pull_request_template.md</code> into the PR body.
+
+Target <code>dev</code>, never <code>main</code>.
+
+Keep Problem and outcome, Review guidance, Solution, and Validation, and delete unused conditional sections and every instructional comment.
+
+Record focused RED and GREEN evidence, full validation, the manual check or its explicit live-run limitation, the binary-download behavior, the containment review, and the new dependency.
+
+Link the issue with <code>Closes #76</code>.
+
+Do not close the issue separately.
