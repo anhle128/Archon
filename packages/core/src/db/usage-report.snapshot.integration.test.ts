@@ -75,28 +75,28 @@ type SeedTarget = {
   withTransaction: SqliteAdapter['withTransaction'];
 };
 
-async function seedUsageObservation(
-  target: SeedTarget,
-  opts: {
-    runId: string;
-    eventId: string;
-    ledgerId: string;
-    createdAt: string;
-    tokensInput: number;
-    provider?: string;
-  }
+type SeedObservation = {
+  runId: string;
+  eventId: string;
+  ledgerId: string;
+  createdAt: string;
+  tokensInput: number;
+  provider?: string;
+};
+
+async function insertUsageObservation(
+  query: (sql: string, params?: unknown[]) => Promise<unknown>,
+  opts: SeedObservation
 ): Promise<void> {
   const provider = opts.provider ?? 'anthropic';
-  // Atomic event+ledger pair — mirrors the recorder's single-transaction write.
-  await target.withTransaction(async query => {
-    await query(
-      `INSERT INTO remote_agent_workflow_events
+  await query(
+    `INSERT INTO remote_agent_workflow_events
          (id, workflow_run_id, event_type, step_name, data, created_at)
        VALUES ($1, $2, 'node_usage_recorded', 'step-a', '{}', $3)`,
-      [opts.eventId, opts.runId, opts.createdAt]
-    );
-    await query(
-      `INSERT INTO remote_agent_usage_ledger (
+    [opts.eventId, opts.runId, opts.createdAt]
+  );
+  await query(
+    `INSERT INTO remote_agent_usage_ledger (
          id, workflow_event_id, entry_index, agent_provider, provider, model, model_source, kind,
          tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
          requests, cost_usd, cost_estimated_usd, pricing_source
@@ -105,8 +105,26 @@ async function seedUsageObservation(
          $3, NULL, NULL, NULL, NULL,
          NULL, NULL, NULL, NULL
        )`,
-      [opts.ledgerId, opts.eventId, opts.tokensInput, provider]
-    );
+    [opts.ledgerId, opts.eventId, opts.tokensInput, provider]
+  );
+}
+
+async function seedUsageObservation(target: SeedTarget, opts: SeedObservation): Promise<void> {
+  // Atomic event+ledger pair — mirrors the recorder's single-transaction write.
+  await target.withTransaction(async query => {
+    await insertUsageObservation(query, opts);
+  });
+}
+
+/** One transaction for N observations — 500 per-row commits timed out on windows-latest. */
+async function seedUsageObservations(
+  target: SeedTarget,
+  rows: readonly SeedObservation[]
+): Promise<void> {
+  await target.withTransaction(async query => {
+    for (const opts of rows) {
+      await insertUsageObservation(query, opts);
+    }
   });
 }
 
@@ -187,9 +205,11 @@ describe('queryUsageReport — coherent snapshot under concurrent write', () => 
 
   test('concurrent 501st group cannot flip an in-flight 500-group snapshot into overflow', async () => {
     // 500 distinct providers → 500 groups (under LIMIT 501, no overflow).
+    // One transaction: 500 sequential commits hit 8938 ms on windows-latest.
+    const overflowRows: SeedObservation[] = [];
     for (let i = 0; i < 500; i++) {
       const n = String(i).padStart(3, '0');
-      await seedUsageObservation(db, {
+      overflowRows.push({
         runId: RUN_OVERFLOW,
         eventId: `evt-ovf-${n}`,
         ledgerId: `led-ovf-${n}`,
@@ -198,6 +218,7 @@ describe('queryUsageReport — coherent snapshot under concurrent write', () => 
         provider: `prov-${n}`,
       });
     }
+    await seedUsageObservations(db, overflowRows);
 
     let seamWrote = false;
     setUsageReportSnapshotSeamForTest(async phase => {
