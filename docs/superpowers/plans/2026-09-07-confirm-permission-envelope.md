@@ -1,132 +1,108 @@
 # Confirm a Permission by Envelope Only Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task by task.
-> Track each checkbox in order, and do not combine RED, GREEN, REFACTOR, or commit steps.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let the authenticated run starter confirm one pending `kind: permission` row exactly once through `POST /api/workflows/runs/{runId}/permissions/{callId}/confirm` with `{ intent: string }`, where `callId` is `tool_use_id`.
+**Goal:** Let the authenticated run starter confirm one pending `kind: permission` interaction exactly once through `POST /api/workflows/runs/{runId}/permissions/{callId}/confirm` with an exact `{ intent: string }` body, where `callId` is the persisted `tool_use_id`.
 
-**Architecture:** Story 6.7 ships the split Permission confirm type-contract on the same `pending_interaction` envelope that Story 6.2 and Story 6.3 already persist.
-`confirmPermission` in `packages/core/src/operations/workflow-operations.ts` is the only application-level Permission-confirm owner.
-Its single persistence call is a new `confirmPendingPermission` helper in `packages/core/src/db/workflow-pending-interactions.ts`.
-That helper reuses the existing lock, first-write CAS, last-pending `resumeWorkflowRunInTransaction(..., 'paused-ask')`, and identifier-only `interaction_resolved` event path already used by `resolvePendingInteraction`.
-Ask answer stays Ask-only: `resolvePendingInteraction` continues to reject `kind !== 'ask'` with `kind_not_ask`.
-Permission confirm stays Permission-only: `confirmPendingPermission` rejects `kind !== 'permission'` with `kind_not_permission`.
-The executor, Claude provider, Pi provider, AskHuman tool, and both UI surfaces do not gain a live permission-activation source or variant cards.
+**Architecture:** Add a split Permission request schema beside the existing Ask schemas while continuing to use the canonical `pendingInteractionSchema` row.
+Core persistence owns the first-write CAS and the transaction that records `interaction_resolved` and resumes the run when no pending interactions remain.
+`workflow-operations` owns starter authorization and post-commit notification, while the OpenAPI route remains a thin transport adapter and deliberately does not add live Permission activation, provider resume injection, auto-dispatch, or UI cards.
 
-**Tech Stack:** Bun, strict TypeScript, Zod from `@hono/zod-openapi`, SQLite and PostgreSQL, OpenAPIHono, Bun Test, Claude Agent SDK `0.3.209`, and Pi `0.80.6`.
+**Tech Stack:** Bun, strict TypeScript, Zod from `@hono/zod-openapi`, SQLite and PostgreSQL through the existing database adapter, OpenAPIHono, Bun Test, and generated `openapi-typescript` declarations.
 
-**Spec:** `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md`, Story 6.7.
-
-**Approved design inputs:** `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md` (Permission envelope/type-contract only; variant cards and live activation are non-goals), `_bmad-output/specs/spec-workflow-run-view-hitl/hitl-contract.md` (POST `{ intent }`, `callId` ≡ `tool_use_id`), `_bmad-output/specs/spec-workflow-run-view-hitl/.memlog.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/brownfield.md`, `_bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md` AD-1, AD-2, AD-7, AD-8, and AD-9, and `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md` FR9, FR11, and NFR9.
-
-**Issue:** https://github.com/anhle128/Archon/issues/92
-
-**Depends on:** Story 6.3 `6-3-answer-or-decline-the-ask-so-the-node-can-continue` is `done`.
+**Spec:** `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md`, Story 6.7, with `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md`, `_bmad-output/specs/spec-workflow-run-view-hitl/hitl-contract.md`, and `_bmad-output/planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md` as binding companions.
 
 ## Global Constraints
 
-- Story 6.1, Story 6.2, and Story 6.3 are complete prerequisites, and this plan must preserve their characterization coverage.
-- The Permission confirm route is `POST /api/workflows/runs/{runId}/permissions/{callId}/confirm`, where `callId` is `tool_use_id`.
-- The route must use `registerOpenApiRoute(createRoute(...), handler)`.
-- Server route schemas must import and decorate engine schemas instead of copying them.
-- Only the identity in `workflow_runs.user_id` may confirm, and an admin is not an override.
-- A request without a resolved identity is `401` even when the installation API gate is disabled.
-- First write wins, and a second confirm returns `409` without changing the original `answer`.
-- The stored answer is `{ intent: string }` and must never appear in logs, events, SSE payloads, or error messages.
-- `intent` is an opaque non-empty string, not an allow/deny enum and not a variant-card vocabulary.
-- The Permission envelope remains an opaque JSON object and is not semantically validated in this story.
-- `resolvePendingInteraction` remains Ask-only and must keep rejecting permission rows with `kind_not_ask`.
-- `confirmPendingPermission` must reject Ask rows with `kind_not_permission`.
-- Last-pending resume stays inside the persistence transaction via existing `resumeWorkflowRunInTransaction(..., 'paused-ask')`.
-- Do not rename `'paused-ask'` in this story.
-- The executor must not call `resumeWorkflowRun` for a Permission confirm.
-- `mapAnsweredAskResume` in `packages/workflows/src/dag-executor.ts` must keep ignoring answered permission rows.
-- `interaction_resolved` remains an identifier-only refetch signal and must not carry `envelope`, `answer`, or `intent`.
-- Run status remains `paused` or `running`, and no `awaiting` run status is added.
+- Implement GitHub issue `anhle128/Archon#92`, whose accepted outcome is Story 6.7 only.
+- Story 6.3 is complete at base SHA `19482482bc8fa270b8ed30d989e99a6fb48b2762` and supplies the Ask-only reference path.
+- The Permission route is `POST /api/workflows/runs/{runId}/permissions/{callId}/confirm`, and `callId` maps exactly to `tool_use_id`.
+- The route must use `registerOpenApiRoute(createRoute({...}), handler)`.
+- Server route schemas must decorate the engine-owned schema instead of copying it.
+- Only `workflow_runs.user_id` may confirm, and an admin role is not an override.
+- A request without a resolved requester is `401` before body validation, even when the installation API gate is disabled.
+- First write wins on `(workflow_run_id, tool_use_id)`, and a later write is `409` without changing the first answer.
+- The stored answer is exactly `{ intent: string }` as submitted after proving that the string contains at least one non-whitespace character.
+- `intent` is opaque and must not become an allow/deny enum or a permission-card vocabulary.
+- Never include the submitted intent value or answer/envelope payload in structured logs, persisted event data, live emitter payloads, HTTP errors, or SSE payloads.
+- Permission envelopes remain opaque JSON objects and receive no semantic validation in this story.
+- `resolvePendingInteraction` remains Ask-only and continues to reject a pending Permission row with `kind_not_ask`.
+- `confirmPendingPermission` remains Permission-only and rejects a pending Ask row with `kind_not_permission`.
+- The last-pending transition remains inside the persistence transaction through `resumeWorkflowRunInTransaction(..., 'paused-ask')`.
+- Keep the existing `'paused-ask'` eligibility name because renaming it would expand this story into an unrelated compatibility change.
+- Do not call public `resumeWorkflowRun` from the executor, operation, or route.
+- Do not extend `tryAutoResumeAfterGate` with a Permission action because the approved scope has no live activation or Permission resume-injection path.
+- `mapAnsweredAskResume` must continue to ignore answered Permission rows.
+- Persisted `interaction_resolved` data is an identifier-only refetch signal and must not contain `intent`, `answer`, or `envelope`.
+- Run status remains `paused` or `running`, and this story adds no `awaiting` run status.
 - The wait remains indefinite, with no timeout, auto-confirm, or default intent.
-- `NativeTool.handler` remains `(input, context?) => Promise<string>`.
-- `pendingInteractionSchema` remains the canonical row schema in `packages/workflows/src/schemas/pending-interaction.ts`.
-- `Claude` must stay pinned to `0.3.209`.
-- Pi must stay on lockfile version `0.80.6`.
-- No `any` type is permitted.
-- Every added or changed `mock.module()` factory must expose all runtime exports imported by the module under test.
-- Adding `confirmPendingPermission` to `packages/core/src/db/workflow-pending-interactions.ts` requires updating every `mock.module` factory of that module in the same change.
-- Each test file that uses `mock.module()` must run in its package's existing isolated process.
-- Do not run unscoped `bun test` from the repository root.
-- Do not add migrations, because Story 6.2 already shipped `kind: permission` on `remote_agent_pending_interactions`.
-- Do not modify `packages/core/src/schemas/pending-interaction.ts`, `packages/core/src/schemas/index.ts`, `packages/core/src/db/index.ts`, or `packages/core/src/handlers/command-handler.ts`.
-- Do not add `confirmPendingPermission` to `IWorkflowPendingInteractionStore` or `IWorkflowStore`.
-- Do not implement variant permission cards, live permission activation, PreToolUse defer, `AskUserQuestion`, Claude `canUseTool` permission prompts, or a producer that inserts `kind: permission` outside tests.
-- Do not modify `packages/web/src/components/workflows/WorkflowExecution.tsx` or any file under `packages/web/src/experiments/console/` except generated OpenAPI types.
-- Do not add CLI, chat, or `manage_run` confirm commands.
-- Do not add a workflow YAML field or parse assistant prose as a permission.
-- Each behavior slice must follow RED, observed expected failure, minimal GREEN, explicit REFACTOR, focused GREEN, and commit.
-- Each full Markdown sentence in this plan must remain on its own physical line.
+- `pendingInteractionSchema` in `packages/workflows/src/schemas/pending-interaction.ts` remains the canonical row schema.
+- Use `z.infer<typeof schema>` for new schema-derived types, and do not use `any`.
+- Do not add a migration because Story 6.2 already shipped `kind: permission` in `remote_agent_pending_interactions`.
+- Do not add `confirmPendingPermission` to `IWorkflowStore`, because no workflow-engine caller confirms Permission in this story.
+- Do not modify `packages/core/src/workflows/store-adapter.ts` or `packages/core/src/workflows/store-adapter.test.ts`.
+- Do not modify `packages/workflows/src/dag-executor.ts`, `packages/workflows/src/executor.ts`, provider implementations, `packages/web/src/components/workflows/WorkflowExecution.tsx`, or any file under `packages/web/src/experiments/console/`.
+- Do not add a Permission producer, Permission card, CLI command, chat command, `manage_run` command, workflow YAML field, or prose parser.
+- Every production behavior must follow RED, observed expected failure, minimal GREEN, explicit REFACTOR, and focused GREEN before its commit.
+- Each `mock.module()` factory touched by this work must expose every runtime export imported by its module under test.
+- Run mock-heavy test files in their existing package-isolated processes, and never run unscoped `bun test` from the repository root.
+- Regenerate `packages/web/src/lib/api.generated.d.ts`; never hand-edit it.
+- Use base SHA `19482482bc8fa270b8ed30d989e99a6fb48b2762` for scope checks instead of the moving `origin/dev` ref.
+- Keep each full Markdown sentence in this plan on its own physical line.
+
+---
 
 ## Verified Repository Baseline
 
-- `packages/workflows/src/schemas/pending-interaction.ts` already accepts `kind: 'ask' | 'permission'` and already owns Ask answer plus `resolvePendingInteractionInputSchema`.
-- `packages/core/src/db/workflow-pending-interactions.ts` already inserts either kind, lists in `created_at ASC, id ASC` order, and implements Ask-only `resolvePendingInteraction`.
-- `resolvePendingInteraction` currently throws `PendingInteractionValidationError('kind_not_ask')` when `current.kind !== 'ask'`.
-- `packages/core/src/db/workflow-pending-interactions.test.ts` already covers `rejects a permission row on the Ask endpoint`.
-- `packages/core/src/db/workflow-resume-transition.ts` already exports `resumeWorkflowRunInTransaction` with `'paused-ask'` eligibility that matches only `status = 'paused'`.
-- `packages/core/src/operations/workflow-operations.ts` already owns `answerAskHuman` with starter-only auth, post-commit `workflow.ask_resolved`, and identifier-only `interaction_resolved` emit.
-- `POST /api/workflows/runs/{runId}/ask/{requestId}/answer` is already registered in `packages/server/src/routes/api.ts` with a pre-validation `401` middleware, `registerOpenApiRoute`, and `tryAutoResumeAfterGate(..., 'ask-answer', ...)`.
-- `tryAutoResumeAfterGate` currently types `action` as `'approve' | 'reject' | 'review-open' | 'ask-answer'` and uses an `else` branch for Ask logs.
-- `packages/workflows/src/dag-executor.ts` `mapAnsweredAskResume` already filters `row.kind === 'ask' && row.status === 'answered'`.
-- `packages/workflows/src/dag-executor.test.ts` already covers `ignores answered Permission rows when mapping Ask resume`.
-- `packages/workflows/src/executor.test.ts` already covers `rejects a still-pending Permission without claiming the run`.
-- There is no Permission confirm schema, db helper, operation, or HTTP route.
-- There is no live permission-activation source and no permission card component.
-- The current worktree has no database schema change for Story 6.7.
-- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` currently lists `6-7-confirm-a-permission-by-envelope-only: backlog` and may contain unresolved `last_updated` merge-conflict markers that must be cleaned when marking the story done.
+- `packages/workflows/src/schemas/pending-interaction.ts:5-86` owns the canonical row, Ask answer body, Ask resolve input, and shared resolve result schemas.
+- `packages/core/src/db/workflow-pending-interactions.ts:79-90` defines the Ask validation codes, and `:279-387` implements the existing Ask-only transaction.
+- `packages/core/src/db/workflow-pending-interactions.test.ts:416-850` already proves Ask CAS, rollback, run-status, kind-mismatch, validation, and safe-event behavior against real SQLite.
+- `packages/core/src/db/workflow-resume-transition.ts:87-141` exposes the query-scoped resume primitive, and `'paused-ask'` matches only `status = 'paused'`.
+- `packages/core/src/operations/workflow-operations.ts:91-125` defines the Ask operation contract, and `:271-340` authorizes the starter, delegates once, logs, and emits after commit.
+- `packages/server/src/routes/schemas/workflow.schemas.ts:307-308` decorates the engine-owned Ask request schema.
+- `packages/server/src/routes/api.ts:1457-1488` defines the Ask OpenAPI route, and `:4861-4923` registers its pre-validation auth middleware and handler.
+- `packages/server/src/routes/api.ts:2879-2967` auto-dispatches only declared gates, review-open, and answered Ask interactions.
+- `packages/workflows/src/dag-executor.ts:1839-1865` filters resume injection to answered Ask rows.
+- `packages/workflows/src/dag-executor.test.ts:26025-26044` already proves answered Permission rows are ignored by Ask resume mapping.
+- `packages/workflows/src/executor.test.ts:2616-2641` and `:2806-2831` already prove pending Permission rows block inspect and hydrate without claiming the run.
+- Exactly four non-persistence test modules need a new DB mock export once `workflow-operations.ts` imports it: `packages/core/src/operations/workflow-operations.test.ts`, `packages/server/src/routes/api.workflow-runs.test.ts`, `packages/cli/src/commands/workflow.test.ts`, and `packages/cli/src/commands/workflow-command-contract.test.ts`.
+- `packages/core/src/workflows/store-adapter.test.ts` does not load `workflow-operations.ts` and therefore does not need a speculative `confirmPendingPermission` mock or store method.
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml:64-81` contains literal conflict-registry report text appended after valid YAML, not ordinary Git conflict markers.
+- The generated-types script in `packages/web/package.json:12` is hard-coded to port `3090`, while worktree servers otherwise auto-allocate ports.
 
 ## File Map
 
-### Create
+### Modify
 
-- Do not create a new package, table, or UI module.
+- `packages/workflows/src/schemas/pending-interaction.ts` owns `permissionConfirmBodySchema`, `PermissionConfirmBody`, `confirmPendingPermissionInputSchema`, and `ConfirmPendingPermissionInput`.
+- `packages/workflows/src/schemas/pending-interaction.test.ts` proves the exact body and persistence-input contracts.
+- `packages/core/src/db/workflow-pending-interactions.ts` owns `confirmPendingPermission` and `kind_not_permission`.
+- `packages/core/src/db/workflow-pending-interactions.test.ts` proves the real-SQLite Permission CAS, atomic resume/event behavior, and error boundaries.
+- `packages/core/src/operations/workflow-operations.ts` owns starter authorization, post-commit logging, and live notification for Permission confirm.
+- `packages/core/src/operations/workflow-operations.test.ts` proves the operation boundary and supplies the DB mock used by that module.
+- `packages/server/src/routes/schemas/workflow.schemas.ts` exposes the engine request schema to OpenAPI.
+- `packages/server/src/routes/api.ts` registers the authenticated route and maps typed errors.
+- `packages/server/src/routes/api.workflow-runs.test.ts` proves HTTP validation, authorization, status mapping, OpenAPI publication, no auto-dispatch, and safe logging.
+- `packages/cli/src/commands/workflow.test.ts` and `packages/cli/src/commands/workflow-command-contract.test.ts` add the DB mock export needed when their real workflow-operations import graph loads.
+- `packages/web/src/lib/api.generated.d.ts` is regenerated from the live OpenAPI document.
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` is repaired and marks only Story 6.7 done after validation.
 
-### Modify for contracts
+### Do Not Create
 
-- Modify `packages/workflows/src/schemas/pending-interaction.ts` for `permissionConfirmBodySchema` and `confirmPendingPermissionInputSchema`.
-- Modify `packages/workflows/src/schemas/pending-interaction.test.ts` for exact schema behavior.
-
-### Modify for persistence
-
-- Modify `packages/core/src/db/workflow-pending-interactions.ts` for `confirmPendingPermission`, `kind_not_permission`, and `blank_intent`.
-- Modify `packages/core/src/db/workflow-pending-interactions.test.ts` for real-SQLite Permission confirm behavior.
-- Modify every `mock.module` factory of `workflow-pending-interactions` so the new export is stubbed:
-  - `packages/core/src/operations/workflow-operations.test.ts`
-  - `packages/core/src/workflows/store-adapter.test.ts`
-  - `packages/server/src/routes/api.workflow-runs.test.ts`
-  - `packages/cli/src/commands/workflow.test.ts`
-  - `packages/cli/src/commands/workflow-command-contract.test.ts`
-
-### Modify for operations and HTTP
-
-- Modify `packages/core/src/operations/workflow-operations.ts` and `packages/core/src/operations/workflow-operations.test.ts` for starter authorization, confirm ownership, and safe logs.
-- Modify `packages/server/src/routes/schemas/workflow.schemas.ts` for the OpenAPI request schema.
-- Modify `packages/server/src/routes/api.ts` for the registered POST route, pre-validation `401` middleware, Permission auto-dispatch action, and error mapping.
-- Modify `packages/server/src/routes/api.workflow-runs.test.ts` for HTTP status, auth, kind mismatch, and auto-dispatch behavior.
-
-### Modify at completion
-
-- Regenerate `packages/web/src/lib/api.generated.d.ts` only through the existing generator.
-- Modify `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` only after every validation gate passes.
+- Do not create a package, table, migration, UI module, provider module, workflow field, or new store interface.
 
 ## Authoritative Contracts
 
-### Request and response
-
-The route is `POST /api/workflows/runs/{runId}/permissions/{callId}/confirm`.
-
-The engine-owned request schemas are:
+The request body is strict and preserves the submitted string without trimming it.
 
 ```ts
 export const permissionConfirmBodySchema = z
   .object({
-    intent: z.string().min(1),
+    intent: z
+      .string()
+      .min(1)
+      .refine(value => value.trim().length > 0, 'Intent must not be blank'),
   })
   .strict();
 
@@ -146,31 +122,15 @@ export type ConfirmPendingPermissionInput = z.infer<
 >;
 ```
 
-Reuse `resolvePendingInteractionResultSchema` and `ResolvePendingInteractionResult` as the persistence result.
+The persistence function is:
 
-The sample valid body is `{ intent: 'allow-once' }`.
+```ts
+export async function confirmPendingPermission(
+  input: ConfirmPendingPermissionInput
+): Promise<ResolvePendingInteractionResult>;
+```
 
-The route returns `200` with `workflowRunActionResponseSchema` after a winning write.
-
-The route returns `400` for invalid JSON, a missing `intent`, a non-string `intent`, an empty `intent`, a whitespace-only `intent`, unknown keys, an Ask answer body, or `kind !== 'permission'`.
-
-The route returns `401` when `resolveAuthContext` returns no requester.
-
-The route returns `403` when the requester id differs from `workflow_runs.user_id`, including for an admin.
-
-The route returns `404` when the run or `(runId, callId)` row is missing.
-
-The route returns `409` when the row is not pending or the run is not yet paused.
-
-The route returns `500` for an unexpected operation or database error.
-
-The operation succeeds before auto-dispatch, so a failed auto-dispatch is logged and the HTTP write still returns `200`.
-
-### Stored answer and event payload
-
-The stored answer is exactly `{ intent: string }` as submitted, without trimming, after the trimmed value has been proven non-empty.
-
-The persisted `interaction_resolved` event data is:
+The winning persisted event data is exactly:
 
 ```ts
 {
@@ -181,45 +141,7 @@ The persisted `interaction_resolved` event data is:
 }
 ```
 
-The event must not contain `intent`, `answer`, `envelope`, `declined`, or `purged`.
-
-### Persistence function
-
-```ts
-export async function confirmPendingPermission(
-  input: ConfirmPendingPermissionInput
-): Promise<ResolvePendingInteractionResult>;
-```
-
-`PendingInteractionValidationCode` gains `'kind_not_permission' | 'blank_intent'` and keeps every existing Ask code.
-
-`confirmPendingPermission` owns one `withTransaction` and performs these actions in order:
-
-1. Shape-parse the input with `confirmPendingPermissionInputSchema.safeParse` and convert failure to `PendingInteractionValidationError('invalid_body')` without serializing the input.
-2. If `answer.intent.trim()` is empty, throw `PendingInteractionValidationError('blank_intent')` before opening the transaction.
-3. Lock the run row with `FOR UPDATE` on PostgreSQL and the existing SQLite transaction semantics.
-4. Throw `PendingInteractionNotFoundError` when the run is missing.
-5. Lock the interaction selected by `workflow_run_id` and `tool_use_id`.
-6. Throw `PendingInteractionNotFoundError` when the interaction is missing.
-7. Throw `PendingInteractionAlreadyResolvedError` when its status is not `pending`.
-8. Throw `PendingInteractionRunNotPausedError` when the run is not `paused`.
-9. Throw `PendingInteractionValidationError('kind_not_permission')` when `current.kind !== 'permission'`.
-10. Compare-and-swap the row from `pending` to `answered` while setting `answer` to `JSON.stringify(answer)`, `resolved_at`, and `resolved_by`.
-11. Treat a zero-row update as `PendingInteractionAlreadyResolvedError`.
-12. Count remaining `pending` rows for the whole run.
-13. Invoke `resumeWorkflowRunInTransaction(..., 'paused-ask')` only when the count is zero.
-14. Require the resume CAS to win or throw a safe conflict that rolls the row update back.
-15. Insert `interaction_resolved` with `step_name = node_id` and the identifier-only permission payload after the resume result is known.
-16. Re-read and parse the resolved interaction.
-17. Return the canonical result.
-
-Do not validate `envelope` keys, tool names, or intent vocabulary.
-
-The call chain `confirmPermission -> confirmPendingPermission -> resumeWorkflowRunInTransaction` is the only Permission-resume path.
-
-The executor and route must never invoke the query-scoped primitive.
-
-### Authorization and operation result
+The operation contract is:
 
 ```ts
 export class PermissionRunNotFoundError extends Error {}
@@ -245,26 +167,1079 @@ export async function confirmPermission(
 ): Promise<ConfirmPermissionResult>;
 ```
 
-`PermissionAuthenticationRequiredError` uses message `Authentication required`.
+The HTTP status contract is `200` for the winning confirm, `400` for an invalid body or wrong interaction kind, `401` for missing requester identity, `403` for a non-starter or unowned run, `404` for a missing run or interaction, `409` for an already-resolved interaction or a run that is not paused, and `500` for an unexpected safe failure.
 
-`PermissionForbiddenError` uses message `Not allowed to confirm permission for run ${runId}`.
+## Implementation Order
 
-`PermissionRunNotFoundError` uses message `Workflow run not found: ${runId}`.
+Execute Tasks 1 through 5 in numeric order.
+Do not start Task 3 until Task 2 is green, and do not start Task 4 until Task 3 plus its mock consumers are green.
+Do not update sprint status until the generated types, focused tests, and full validation have passed.
 
-The operation loads the run, requires `actorUserId`, requires a non-null matching `run.user_id`, calls the persistence CAS once, logs once after commit, emits once after commit, and returns the pre-resolution run for transport routing.
+### Task 1: Add the split Permission schemas
 
-Duplicate the six-line starter assertion used by `answerAskHuman` with the Permission error classes.
-Do not rename or reuse `AskHumanForbiddenError` on this route.
+**Files:**
 
-The winning log is exactly `workflow.permission_resolved` with `workflowRunId`, `nodeId`, `toolUseId`, and `resumed`.
+- Modify: `packages/workflows/src/schemas/pending-interaction.test.ts:1-165`
+- Modify: `packages/workflows/src/schemas/pending-interaction.ts:52-86`
 
-The log must not receive `body`, `answer`, `envelope`, `intent`, or a raw serialized error.
+**Interfaces:**
 
-The live emit is `{ type: 'interaction_resolved', runId, nodeId, resumed }` and is identical to the Ask emit shape.
+- Consumes: `z` from `@hono/zod-openapi` and the existing `resolvePendingInteractionResultSchema`.
+- Produces: `permissionConfirmBodySchema`, `PermissionConfirmBody`, `confirmPendingPermissionInputSchema`, and `ConfirmPendingPermissionInput` with the exact shapes in Authoritative Contracts.
 
-### HTTP route
+- [ ] **Step 1: Write the RED schema tests.**
 
-Register this OpenAPI route next to the Ask answer route:
+Add these imports and tests to `pending-interaction.test.ts`.
+
+```ts
+import {
+  confirmPendingPermissionInputSchema,
+  permissionConfirmBodySchema,
+  type ConfirmPendingPermissionInput,
+  type PermissionConfirmBody,
+} from './pending-interaction';
+
+describe('permissionConfirmBodySchema', () => {
+  test('accepts an exact opaque intent and preserves surrounding whitespace', () => {
+    const body: PermissionConfirmBody = permissionConfirmBodySchema.parse({
+      intent: ' allow-once ',
+    });
+    expect(body).toEqual({ intent: ' allow-once ' });
+  });
+
+  test.each([
+    {},
+    { intent: '' },
+    { intent: '   ' },
+    { intent: 1 },
+    { intent: 'allow-once', extra: true },
+    { intent: 'allow-once', decline: true },
+    { answers: [{ questionId: 'q1', value: 'yes' }] },
+  ])('rejects a body outside the exact intent contract: %#', body => {
+    expect(permissionConfirmBodySchema.safeParse(body).success).toBe(false);
+  });
+});
+
+test('confirmPendingPermissionInputSchema accepts only the persistence fields', () => {
+  const input: ConfirmPendingPermissionInput = confirmPendingPermissionInputSchema.parse({
+    workflow_run_id: 'run-1',
+    tool_use_id: 'tool-1',
+    answer: { intent: 'allow-once' },
+    resolved_by: 'user-1',
+  });
+  expect(input.answer).toEqual({ intent: 'allow-once' });
+  expect(
+    confirmPendingPermissionInputSchema.safeParse({ ...input, extra: true }).success
+  ).toBe(false);
+});
+```
+
+- [ ] **Step 2: Run the schema test and observe RED.**
+
+Run:
+
+```bash
+(cd packages/workflows && bun test src/schemas/pending-interaction.test.ts)
+```
+
+Expected result: the new tests fail because the Permission schemas and inferred types do not exist, rather than because of a fixture or syntax error.
+
+- [ ] **Step 3: Add the minimal engine-owned schemas and inferred types.**
+
+Add the exact schema code from Authoritative Contracts immediately after `AskAnswerBody` and before `resolvePendingInteractionInputSchema`.
+Do not change `pendingInteractionSchema`, `askAnswerBodySchema`, or `resolvePendingInteractionInputSchema`.
+Do not trim or normalize `intent`.
+
+- [ ] **Step 4: Run GREEN, perform the schema-only REFACTOR check, and rerun.**
+
+Run:
+
+```bash
+(cd packages/workflows && bun test src/schemas/pending-interaction.test.ts)
+```
+
+Expected result: every test in the file passes.
+For REFACTOR, verify that no parallel hand-written body type or Permission envelope schema was added, then rerun the same command without changing behavior.
+
+- [ ] **Step 5: Commit the contract slice.**
+
+```bash
+git add packages/workflows/src/schemas/pending-interaction.ts packages/workflows/src/schemas/pending-interaction.test.ts
+git commit -m "feat(workflows): define permission confirm contract"
+```
+
+### Task 2: Implement the atomic Permission confirmation CAS
+
+**Files:**
+
+- Modify: `packages/core/src/db/workflow-pending-interactions.test.ts:11-868`
+- Modify: `packages/core/src/db/workflow-pending-interactions.ts:8-439`
+
+**Interfaces:**
+
+- Consumes: `ConfirmPendingPermissionInput`, `confirmPendingPermissionInputSchema`, `ResolvePendingInteractionResult`, `workflowRunLockClause()`, `resumeWorkflowRunInTransaction(query, runId, dialect, 'paused-ask')`, and `insertWorkflowEvent()`.
+- Produces: `confirmPendingPermission(input): Promise<ResolvePendingInteractionResult>` and the added validation code `'kind_not_permission'`.
+
+- [ ] **Step 1: Add the RED real-SQLite fixtures and confirmation tests before production code.**
+
+Import `ConfirmPendingPermissionInput`, destructure `confirmPendingPermission` and `PendingInteractionNotFoundError` from the dynamic module import, and add these fixtures beside `resolveInput` and `insertPausedAsk`.
+
+```ts
+const SENTINEL_INTENT = 'DO_NOT_LOG_PERMISSION_INTENT';
+
+function permissionInput(
+  overrides: Partial<ConfirmPendingPermissionInput> = {}
+): ConfirmPendingPermissionInput {
+  return {
+    workflow_run_id: 'run-1',
+    tool_use_id: 'toolu_perm_1',
+    answer: { intent: ` ${SENTINEL_INTENT} ` },
+    resolved_by: 'user-1',
+    ...overrides,
+  };
+}
+
+async function insertPausedPermission(): Promise<void> {
+  await insertPendingInteraction({
+    ...baseInput,
+    tool_use_id: 'toolu_perm_1',
+    kind: 'permission',
+    envelope: { tool: 'Bash' },
+  });
+  await pauseRun();
+}
+```
+
+Add a new `describe('confirmPendingPermission', ...)` with these tests.
+
+```ts
+test('confirms the last Permission and commits an identifier-only event with the resume', async () => {
+  await insertPausedPermission();
+
+  const result = await confirmPendingPermission(permissionInput());
+
+  expect(result.resumed).toBe(true);
+  expect(result.remaining_pending).toBe(0);
+  expect(result.interaction.status).toBe('answered');
+  expect(result.interaction.answer).toEqual({ intent: ` ${SENTINEL_INTENT} ` });
+  expect(result.interaction.resolved_by).toBe('user-1');
+  expect(await runStatus()).toBe('running');
+  expect((await resolvedEvents())[0]?.data).toEqual({
+    node_id: 'review',
+    tool_use_id: 'toolu_perm_1',
+    kind: 'permission',
+    resumed: true,
+  });
+  expect(JSON.stringify(await resolvedEvents())).not.toContain(SENTINEL_INTENT);
+  expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_INTENT);
+});
+
+test('preserves the first intent when a second confirmation loses the CAS', async () => {
+  await insertPausedPermission();
+  await confirmPendingPermission(permissionInput());
+
+  await expect(
+    confirmPendingPermission(permissionInput({ answer: { intent: 'second-intent' } }))
+  ).rejects.toBeInstanceOf(PendingInteractionAlreadyResolvedError);
+
+  const [row] = await listPendingInteractions('run-1');
+  expect(row?.answer).toEqual({ intent: ` ${SENTINEL_INTENT} ` });
+});
+
+test('leaves the run paused while a sibling Ask remains pending', async () => {
+  await insertPendingInteraction({
+    ...baseInput,
+    tool_use_id: 'toolu_perm_1',
+    kind: 'permission',
+    envelope: {},
+  });
+  await insertPendingInteraction({ ...baseInput, tool_use_id: 'toolu_ask_1', envelope: mixedEnvelope });
+  await pauseRun();
+
+  const result = await confirmPendingPermission(permissionInput());
+
+  expect(result.resumed).toBe(false);
+  expect(result.remaining_pending).toBe(1);
+  expect(await runStatus()).toBe('paused');
+});
+
+test('resumes when an answered Ask leaves Permission as the final pending row', async () => {
+  await insertPendingInteraction({
+    ...baseInput,
+    tool_use_id: 'toolu_perm_1',
+    kind: 'permission',
+    envelope: {},
+  });
+  await insertPendingInteraction({ ...baseInput, tool_use_id: 'toolu_ask_1', envelope: mixedEnvelope });
+  await pauseRun();
+  const askResult = await resolvePendingInteraction(
+    resolveInput({ tool_use_id: 'toolu_ask_1' })
+  );
+  expect(askResult.resumed).toBe(false);
+
+  const result = await confirmPendingPermission(permissionInput());
+
+  expect(result.resumed).toBe(true);
+  expect(result.remaining_pending).toBe(0);
+  expect(await runStatus()).toBe('running');
+});
+
+test('rolls back the confirmation when the resolved event insert fails', async () => {
+  await insertPausedPermission();
+  await db.query(`
+    CREATE TRIGGER abort_permission_event BEFORE INSERT ON remote_agent_workflow_events
+    BEGIN
+      SELECT RAISE(ABORT, 'event insert blocked');
+    END
+  `);
+  try {
+    await expect(confirmPendingPermission(permissionInput())).rejects.toThrow();
+    const [row] = await listPendingInteractions('run-1');
+    expect(row?.status).toBe('pending');
+    expect(row?.answer).toBeNull();
+    expect(await runStatus()).toBe('paused');
+  } finally {
+    await db.query('DROP TRIGGER IF EXISTS abort_permission_event');
+  }
+});
+
+test('rolls back the confirmation when the paused-run resume CAS loses', async () => {
+  await insertPausedPermission();
+  await db.query(`
+    CREATE TRIGGER skip_permission_resume BEFORE UPDATE ON remote_agent_workflow_runs
+    WHEN NEW.status = 'running' AND OLD.status = 'paused'
+    BEGIN
+      SELECT RAISE(IGNORE);
+    END
+  `);
+  try {
+    await expect(confirmPendingPermission(permissionInput())).rejects.toBeInstanceOf(
+      PendingInteractionRunNotPausedError
+    );
+    const [row] = await listPendingInteractions('run-1');
+    expect(row?.status).toBe('pending');
+    expect(row?.answer).toBeNull();
+  } finally {
+    await db.query('DROP TRIGGER IF EXISTS skip_permission_resume');
+  }
+});
+
+test('rejects a confirmation before the run reaches paused', async () => {
+  await insertPendingInteraction({
+    ...baseInput,
+    tool_use_id: 'toolu_perm_1',
+    kind: 'permission',
+    envelope: {},
+  });
+  await expect(confirmPendingPermission(permissionInput())).rejects.toBeInstanceOf(
+    PendingInteractionRunNotPausedError
+  );
+  expect((await listPendingInteractions('run-1'))[0]?.status).toBe('pending');
+});
+
+test('rejects a pending Ask without consuming it', async () => {
+  await insertPendingInteraction({ ...baseInput, tool_use_id: 'toolu_perm_1', envelope: mixedEnvelope });
+  await pauseRun();
+  const error = await confirmPendingPermission(permissionInput()).then(
+    () => null,
+    (caught: unknown) => caught
+  );
+  expect(error).toBeInstanceOf(PendingInteractionValidationError);
+  expect((error as PendingInteractionValidationError).code).toBe('kind_not_permission');
+  expect((await listPendingInteractions('run-1'))[0]?.status).toBe('pending');
+});
+
+test('rejects a whitespace-only intent before opening the transaction', async () => {
+  await insertPausedPermission();
+  const error = await confirmPendingPermission(
+    permissionInput({ answer: { intent: '   ' } })
+  ).then(
+    () => null,
+    (caught: unknown) => caught
+  );
+  expect(error).toBeInstanceOf(PendingInteractionValidationError);
+  expect((error as PendingInteractionValidationError).code).toBe('invalid_body');
+  expect((await listPendingInteractions('run-1'))[0]?.status).toBe('pending');
+});
+
+test('reports a missing run and a missing call id without exposing intent', async () => {
+  const missingRun = await confirmPendingPermission(
+    permissionInput({ workflow_run_id: 'missing-run' })
+  ).then(
+    () => null,
+    (caught: unknown) => caught
+  );
+  expect(missingRun).toBeInstanceOf(PendingInteractionNotFoundError);
+
+  await pauseRun();
+  const missingCall = await confirmPendingPermission(permissionInput()).then(
+    () => null,
+    (caught: unknown) => caught
+  );
+  expect(missingCall).toBeInstanceOf(PendingInteractionNotFoundError);
+  expect(JSON.stringify([missingRun, missingCall, errorLogs])).not.toContain(SENTINEL_INTENT);
+});
+```
+
+- [ ] **Step 2: Run the persistence test and observe RED.**
+
+Run:
+
+```bash
+(cd packages/core && bun test src/db/workflow-pending-interactions.test.ts)
+```
+
+Expected result: the new Permission tests fail because `confirmPendingPermission` and `kind_not_permission` are absent, while the existing Ask tests still execute normally.
+
+- [ ] **Step 3: Implement the minimal Permission transaction.**
+
+Add the two schema imports, add `'kind_not_permission'` to `PendingInteractionValidationCode`, update the module docblock to cover Ask and Permission resolution, and add this function immediately after `resolvePendingInteraction`.
+
+```ts
+export async function confirmPendingPermission(
+  input: ConfirmPendingPermissionInput
+): Promise<ResolvePendingInteractionResult> {
+  const parsedInput = confirmPendingPermissionInputSchema.safeParse(input);
+  if (!parsedInput.success) throwValidation('invalid_body');
+
+  const workflowRunId = parsedInput.data.workflow_run_id;
+  const toolUseId = parsedInput.data.tool_use_id;
+  const answer = parsedInput.data.answer;
+  const resolvedBy = parsedInput.data.resolved_by;
+  const db = getDatabase();
+  const dialect = getDialect();
+  const lockSuffix = workflowRunLockClause();
+
+  return db.withTransaction(async query => {
+    const runResult = await query<{ status: string }>(
+      `SELECT status FROM remote_agent_workflow_runs WHERE id = $1${lockSuffix}`,
+      [workflowRunId]
+    );
+    const run = runResult.rows[0];
+    if (!run) {
+      throw new PendingInteractionNotFoundError(workflowRunId, toolUseId);
+    }
+
+    const interactionResult = await query<Record<string, unknown>>(
+      `SELECT ${COLUMNS}
+       FROM remote_agent_pending_interactions
+       WHERE workflow_run_id = $1 AND tool_use_id = $2${lockSuffix}`,
+      [workflowRunId, toolUseId]
+    );
+    const rawInteraction = interactionResult.rows[0];
+    if (!rawInteraction) {
+      throw new PendingInteractionNotFoundError(workflowRunId, toolUseId);
+    }
+    const current = parsePendingInteractionRow(rawInteraction);
+    if (current.status !== 'pending') {
+      throw new PendingInteractionAlreadyResolvedError(workflowRunId, toolUseId, current.status);
+    }
+    if (run.status !== 'paused') {
+      throw new PendingInteractionRunNotPausedError(workflowRunId, run.status);
+    }
+    if (current.kind !== 'permission') throwValidation('kind_not_permission');
+
+    const cas = await query(
+      `UPDATE remote_agent_pending_interactions
+       SET status = 'answered',
+           answer = $2,
+           resolved_at = ${dialect.now()},
+           resolved_by = $3
+       WHERE id = $1 AND status = 'pending'`,
+      [current.id, JSON.stringify(answer), resolvedBy]
+    );
+    if (cas.rowCount === 0) {
+      throw new PendingInteractionAlreadyResolvedError(workflowRunId, toolUseId, current.status);
+    }
+
+    const remainingResult = await query<{ remaining: number | string }>(
+      `SELECT COUNT(*) AS remaining
+       FROM remote_agent_pending_interactions
+       WHERE workflow_run_id = $1 AND status = 'pending'`,
+      [workflowRunId]
+    );
+    const remainingPending = Number(remainingResult.rows[0]?.remaining ?? 0);
+    let resumed = false;
+    if (remainingPending === 0) {
+      const resumeResult = await resumeWorkflowRunInTransaction(
+        query,
+        workflowRunId,
+        dialect,
+        'paused-ask'
+      );
+      if (!resumeResult.resumed) {
+        throw new PendingInteractionRunNotPausedError(workflowRunId, run.status);
+      }
+      resumed = true;
+    }
+
+    await insertWorkflowEvent(query, {
+      workflow_run_id: workflowRunId,
+      event_type: 'interaction_resolved',
+      step_name: current.node_id,
+      data: {
+        node_id: current.node_id,
+        tool_use_id: toolUseId,
+        kind: 'permission',
+        resumed,
+      },
+    });
+
+    const resolvedRows = await query<Record<string, unknown>>(
+      `SELECT ${COLUMNS} FROM remote_agent_pending_interactions WHERE id = $1`,
+      [current.id]
+    );
+    const resolvedRow = resolvedRows.rows[0];
+    if (!resolvedRow) {
+      throw new Error(`Pending interaction vanished after resolve: ${current.id}`);
+    }
+    return {
+      interaction: parsePendingInteractionRow(resolvedRow),
+      resumed,
+      remaining_pending: remainingPending,
+    };
+  });
+}
+```
+
+Keep the Permission and Ask transaction bodies explicit.
+Do not extract a two-caller generic resolver because the repository rule of three favors local duplication here and the kind-specific validation and event payloads differ.
+
+- [ ] **Step 4: Run GREEN for persistence and its existing resume regression.**
+
+Run:
+
+```bash
+(cd packages/core && bun test src/db/workflow-pending-interactions.test.ts)
+(cd packages/core && bun test src/db/workflows.resume-cas.integration.test.ts)
+```
+
+Expected result: both commands exit zero, all existing Ask behavior stays green, and every Permission test passes.
+
+- [ ] **Step 5: Perform the persistence REFACTOR check and rerun GREEN.**
+
+Remove repeated local variable names or comments only when doing so keeps the Ask and Permission branches explicit.
+Confirm that no body, answer, envelope, or raw input was added to an error or logger call.
+Rerun the two commands from Step 4 after any cleanup.
+
+- [ ] **Step 6: Commit the persistence slice.**
+
+```bash
+git add packages/core/src/db/workflow-pending-interactions.ts packages/core/src/db/workflow-pending-interactions.test.ts
+git commit -m "feat(core): confirm permission interactions atomically"
+```
+
+### Task 3: Add starter-authorized Permission operations
+
+**Files:**
+
+- Modify: `packages/core/src/operations/workflow-operations.test.ts:1-1464`
+- Modify: `packages/core/src/operations/workflow-operations.ts:1-340`
+- Modify: `packages/server/src/routes/api.workflow-runs.test.ts:603-644`
+- Modify: `packages/cli/src/commands/workflow.test.ts:235-251`
+- Modify: `packages/cli/src/commands/workflow-command-contract.test.ts:107-123`
+
+**Interfaces:**
+
+- Consumes: `PermissionConfirmBody`, `PendingInteraction`, `confirmPendingPermission`, and `workflowDb.getWorkflowRun`.
+- Produces: the three Permission error classes, `ConfirmPermissionInput`, `ConfirmPermissionResult`, and `confirmPermission(input)` from Authoritative Contracts.
+
+- [ ] **Step 1: Add the RED operation tests and the configurable DB double.**
+
+In `workflow-operations.test.ts`, define `mockConfirmPendingPermission` beside `mockResolvePendingInteraction`.
+Replace the existing pending-interaction mock factory with the shown three-export factory, extend the existing dynamic import destructuring with the four shown names, and add this describe beside `answerAskHuman`.
+
+```ts
+const INTENT_SENTINEL = 'DO_NOT_LOG_PERMISSION_INTENT';
+const mockConfirmPendingPermission = mock(() =>
+  Promise.resolve({
+    interaction: makePendingInteraction({
+      kind: 'permission',
+      status: 'answered',
+      envelope: {},
+      answer: { intent: INTENT_SENTINEL },
+      resolved_at: new Date(),
+      resolved_by: 'starter-1',
+    }),
+    resumed: false,
+    remaining_pending: 1,
+  })
+);
+
+mock.module('../db/workflow-pending-interactions', () => ({
+  listPendingInteractions: mockListPendingInteractions,
+  resolvePendingInteraction: mockResolvePendingInteraction,
+  confirmPendingPermission: mockConfirmPendingPermission,
+}));
+
+const {
+  confirmPermission,
+  PermissionAuthenticationRequiredError,
+  PermissionForbiddenError,
+  PermissionRunNotFoundError,
+} = await import('./workflow-operations');
+
+describe('confirmPermission', () => {
+  const starterId = 'starter-1';
+  const body = { intent: INTENT_SENTINEL } as const;
+
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockConfirmPendingPermission.mockReset();
+    mockConfirmPendingPermission.mockResolvedValue({
+      interaction: makePendingInteraction({
+        kind: 'permission',
+        status: 'answered',
+        envelope: {},
+        answer: body,
+        resolved_at: new Date(),
+        resolved_by: starterId,
+      }),
+      resumed: false,
+      remaining_pending: 1,
+    });
+    mockEmit.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.info.mockClear();
+  });
+
+  test('requires an authenticated actor before persistence', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+    await expect(
+      confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: undefined })
+    ).rejects.toBeInstanceOf(PermissionAuthenticationRequiredError);
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test.each([null, 'different-user'])('rejects a run not owned by the actor: %s', async owner => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: owner }));
+    await expect(
+      confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: starterId })
+    ).rejects.toBeInstanceOf(PermissionForbiddenError);
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test('throws the Permission not-found error when the run is missing', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(null);
+    await expect(
+      confirmPermission({ runId: 'missing', callId: 'tool-1', body, actorUserId: starterId })
+    ).rejects.toBeInstanceOf(PermissionRunNotFoundError);
+  });
+
+  test('redacts the database lookup error message', async () => {
+    mockGetWorkflowRun.mockRejectedValueOnce(new Error(INTENT_SENTINEL));
+    await expect(
+      confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: starterId })
+    ).rejects.toThrow('Failed to look up workflow run run-1');
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      { errorName: 'Error', runId: 'run-1' },
+      'operations.workflow_permission_lookup_failed'
+    );
+    expect(loggerAndEmitPayloads()).not.toContain(INTENT_SENTINEL);
+  });
+
+  test('passes the call id and starter id to persistence exactly once', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+    await confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: starterId });
+    expect(mockConfirmPendingPermission).toHaveBeenCalledTimes(1);
+    expect(mockConfirmPendingPermission).toHaveBeenCalledWith({
+      workflow_run_id: 'run-1',
+      tool_use_id: 'tool-1',
+      answer: body,
+      resolved_by: starterId,
+    });
+  });
+
+  test('logs and emits only after the persistence promise commits', async () => {
+    const run = makePausedRun({ user_id: starterId });
+    const interaction = makePendingInteraction({
+      kind: 'permission',
+      status: 'answered',
+      envelope: {},
+      answer: body,
+      resolved_at: new Date(),
+      resolved_by: starterId,
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+    let finish!: (value: {
+      interaction: PendingInteraction;
+      resumed: boolean;
+      remaining_pending: number;
+    }) => void;
+    mockConfirmPendingPermission.mockReturnValueOnce(
+      new Promise(resolve => {
+        finish = resolve;
+      })
+    );
+    const pending = confirmPermission({
+      runId: 'run-1',
+      callId: 'tool-1',
+      body,
+      actorUserId: starterId,
+    });
+    await Promise.resolve();
+    expect(mockLogger.info).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+
+    finish({ interaction, resumed: true, remaining_pending: 0 });
+    const result = await pending;
+
+    expect(result).toEqual({ run, interaction, resumed: true, remainingPending: 0 });
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      {
+        workflowRunId: 'run-1',
+        nodeId: 'ask-node',
+        toolUseId: 'tool-1',
+        resumed: true,
+      },
+      'workflow.permission_resolved'
+    );
+    expect(mockEmit).toHaveBeenCalledWith({
+      type: 'interaction_resolved',
+      runId: 'run-1',
+      nodeId: 'ask-node',
+      resumed: true,
+    });
+    expect(loggerAndEmitPayloads()).not.toContain(INTENT_SENTINEL);
+  });
+
+  test('propagates a persistence error without logging or emitting', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
+    const error = new Error('persistence failed');
+    mockConfirmPendingPermission.mockRejectedValueOnce(error);
+    await expect(
+      confirmPermission({ runId: 'run-1', callId: 'tool-1', body, actorUserId: starterId })
+    ).rejects.toBe(error);
+    expect(mockLogger.info).not.toHaveBeenCalled();
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+});
+```
+
+- [ ] **Step 2: Run the operation test and observe RED.**
+
+Run:
+
+```bash
+(cd packages/core && bun test src/operations/workflow-operations.test.ts)
+```
+
+Expected result: the Permission operation and error imports are absent, while the existing Ask operation tests remain intact.
+
+- [ ] **Step 3: Implement the minimal operation and Permission-specific errors.**
+
+Add `PermissionConfirmBody` to the type import, import `confirmPendingPermission`, add the contracts from Authoritative Contracts beside the Ask contracts, and add the following implementation beside `answerAskHuman`.
+
+```ts
+export class PermissionRunNotFoundError extends Error {
+  constructor(readonly runId: string) {
+    super(`Workflow run not found: ${runId}`);
+    this.name = 'PermissionRunNotFoundError';
+  }
+}
+
+export class PermissionAuthenticationRequiredError extends Error {
+  constructor() {
+    super('Authentication required');
+    this.name = 'PermissionAuthenticationRequiredError';
+  }
+}
+
+export class PermissionForbiddenError extends Error {
+  constructor(readonly runId: string) {
+    super(`Not allowed to confirm permission for run ${runId}`);
+    this.name = 'PermissionForbiddenError';
+  }
+}
+
+export interface ConfirmPermissionInput {
+  runId: string;
+  callId: string;
+  body: PermissionConfirmBody;
+  actorUserId: string | undefined;
+}
+
+export interface ConfirmPermissionResult {
+  run: WorkflowRun;
+  interaction: PendingInteraction;
+  resumed: boolean;
+  remainingPending: number;
+}
+
+export async function confirmPermission(
+  input: ConfirmPermissionInput
+): Promise<ConfirmPermissionResult> {
+  const run = await loadPermissionRun(input.runId);
+  const actorUserId = assertPermissionActor(run, input.actorUserId);
+  const resolved = await confirmPendingPermission({
+    workflow_run_id: input.runId,
+    tool_use_id: input.callId,
+    answer: input.body,
+    resolved_by: actorUserId,
+  });
+  getLog().info(
+    {
+      workflowRunId: input.runId,
+      nodeId: resolved.interaction.node_id,
+      toolUseId: resolved.interaction.tool_use_id,
+      resumed: resolved.resumed,
+    },
+    'workflow.permission_resolved'
+  );
+  getWorkflowEventEmitter().emit({
+    type: 'interaction_resolved',
+    runId: input.runId,
+    nodeId: resolved.interaction.node_id,
+    resumed: resolved.resumed,
+  });
+  return {
+    run,
+    interaction: resolved.interaction,
+    resumed: resolved.resumed,
+    remainingPending: resolved.remaining_pending,
+  };
+}
+
+async function loadPermissionRun(runId: string): Promise<WorkflowRun> {
+  let run: WorkflowRun | null;
+  try {
+    run = await workflowDb.getWorkflowRun(runId);
+  } catch (error) {
+    const errorName = error instanceof Error ? error.name : 'UnknownError';
+    getLog().error(
+      { errorName, runId },
+      'operations.workflow_permission_lookup_failed'
+    );
+    throw new Error(`Failed to look up workflow run ${runId}`);
+  }
+  if (!run) throw new PermissionRunNotFoundError(runId);
+  return run;
+}
+
+function assertPermissionActor(run: WorkflowRun, actorUserId: string | undefined): string {
+  if (actorUserId === undefined || actorUserId === '') {
+    throw new PermissionAuthenticationRequiredError();
+  }
+  if (run.user_id === null || run.user_id !== actorUserId) {
+    throw new PermissionForbiddenError(run.id);
+  }
+  return actorUserId;
+}
+```
+
+Use these exact constructor messages: `Authentication required`, `Not allowed to confirm permission for run ${runId}`, and `Workflow run not found: ${runId}`.
+Do not reuse the Ask error classes or change Ask messages.
+
+- [ ] **Step 4: Add the new DB export to the three remaining import-graph mocks before running their tests.**
+
+In `packages/server/src/routes/api.workflow-runs.test.ts`, define a configurable `mockConfirmPendingPermission` next to `mockResolvePendingInteraction` and expose it from the existing factory.
+
+```ts
+const mockConfirmPendingPermission = mock(
+  async (
+    _input: unknown
+  ): Promise<{
+    interaction: MockPendingInteractionRow;
+    resumed: boolean;
+    remaining_pending: number;
+  }> => ({
+    interaction: {
+      id: 'pending-permission',
+      workflow_run_id: 'run-permission',
+      node_id: 'permission-node',
+      tool_use_id: 'tool-permission',
+      kind: 'permission',
+      status: 'answered',
+      envelope: {},
+      answer: { intent: 'allow-once' },
+      provider_session_id: 'session-permission',
+      created_at: new Date('2026-09-07T00:00:00.000Z'),
+      resolved_at: new Date('2026-09-07T00:00:01.000Z'),
+      resolved_by: 'user-permission',
+    },
+    resumed: false,
+    remaining_pending: 1,
+  })
+);
+
+mock.module('@archon/core/db/workflow-pending-interactions', () => ({
+  listPendingInteractions: mockListPendingInteractions,
+  resolvePendingInteraction: mockResolvePendingInteraction,
+  confirmPendingPermission: mockConfirmPendingPermission,
+  PendingInteractionNotFoundError,
+  PendingInteractionAlreadyResolvedError,
+  PendingInteractionRunNotPausedError,
+  PendingInteractionValidationError,
+}));
+```
+
+In `packages/cli/src/commands/workflow.test.ts`, add this property to the existing factory.
+
+```ts
+confirmPendingPermission: mock(() =>
+  Promise.resolve({
+    interaction: {
+      id: 'pending-permission',
+      workflow_run_id: 'run-permission',
+      node_id: 'permission-node',
+      tool_use_id: 'tool-permission',
+      kind: 'permission' as const,
+      status: 'answered' as const,
+      envelope: {},
+      answer: { intent: 'allow-once' },
+      provider_session_id: 'session-permission',
+      created_at: new Date('2026-09-07T00:00:00.000Z'),
+      resolved_at: new Date('2026-09-07T00:00:01.000Z'),
+      resolved_by: 'user-permission',
+    },
+    resumed: false,
+    remaining_pending: 1,
+  })
+),
+```
+
+In `packages/cli/src/commands/workflow-command-contract.test.ts`, add this complete property to that file's independent factory.
+
+```ts
+confirmPendingPermission: mock(() =>
+  Promise.resolve({
+    interaction: {
+      id: 'pending-permission',
+      workflow_run_id: 'run-permission',
+      node_id: 'permission-node',
+      tool_use_id: 'tool-permission',
+      kind: 'permission' as const,
+      status: 'answered' as const,
+      envelope: {},
+      answer: { intent: 'allow-once' },
+      provider_session_id: 'session-permission',
+      created_at: new Date('2026-09-07T00:00:00.000Z'),
+      resolved_at: new Date('2026-09-07T00:00:01.000Z'),
+      resolved_by: 'user-permission',
+    },
+    resumed: false,
+    remaining_pending: 1,
+  })
+),
+```
+
+Do not touch the store-adapter mock because its module under test does not import the new operation.
+
+- [ ] **Step 5: Run GREEN for the operation and every affected mock consumer.**
+
+Run:
+
+```bash
+(cd packages/core && bun test src/operations/workflow-operations.test.ts)
+(cd packages/server && bun test src/routes/api.workflow-runs.test.ts)
+(cd packages/cli && bun test src/commands/workflow.test.ts)
+(cd packages/cli && bun test src/commands/workflow-command-contract.test.ts)
+```
+
+Expected result: all four commands exit zero.
+
+- [ ] **Step 6: Perform the operation REFACTOR check and rerun GREEN.**
+
+Keep Permission-specific lookup and authorization helpers explicit because their error names and safe logging differ from Ask.
+Update the file docblock to mention Permission, verify no intent-bearing value reaches a logger or emitter, and rerun Step 5.
+
+- [ ] **Step 7: Commit the operation and mock-contract slice.**
+
+```bash
+git add packages/core/src/operations/workflow-operations.ts packages/core/src/operations/workflow-operations.test.ts packages/server/src/routes/api.workflow-runs.test.ts packages/cli/src/commands/workflow.test.ts packages/cli/src/commands/workflow-command-contract.test.ts
+git commit -m "feat(core): authorize permission confirmation"
+```
+
+### Task 4: Register the authenticated Permission route
+
+**Files:**
+
+- Modify: `packages/server/src/routes/schemas/workflow.schemas.ts:13-20,307-308`
+- Modify: `packages/server/src/routes/api.ts:417-459,1457-1488,4861-4923`
+- Modify: `packages/server/src/routes/api.workflow-runs.test.ts:555-644,4134-4510`
+
+**Interfaces:**
+
+- Consumes: `permissionConfirmBodySchema`, `confirmPermission`, the three Permission operation errors, the four existing pending-interaction DB errors, and `workflowRunActionResponseSchema`.
+- Produces: `permissionConfirmRequestSchema` and the registered POST route with the HTTP status contract in Authoritative Contracts.
+
+- [ ] **Step 1: Write the RED HTTP tests against the real registered route.**
+
+Extend the local `PendingInteractionValidationCode` union with `'kind_not_permission'`.
+Add these fixtures and request helper beside the Ask route fixtures.
+
+```ts
+const PERMISSION_STARTER_ID = 'permission-starter';
+const PERMISSION_CALL_ID = 'toolu_permission_1';
+const PERMISSION_INTENT_SENTINEL = 'DO_NOT_LOG_PERMISSION_INTENT';
+
+function mockPermissionRun(overrides: Partial<MockWorkflowRun> = {}): MockWorkflowRun {
+  return {
+    ...MOCK_PAUSED_RUN,
+    id: 'run-permission-1',
+    workflow_name: 'permission-flow',
+    user_id: PERMISSION_STARTER_ID,
+    metadata: {},
+    ...overrides,
+  };
+}
+
+async function postPermission(body: string, userId?: string): Promise<Response> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (userId !== undefined) headers['X-Archon-User'] = userId;
+  const { app } = makeApp();
+  return app.request(
+    `/api/workflows/runs/run-permission-1/permissions/${PERMISSION_CALL_ID}/confirm`,
+    { method: 'POST', headers, body }
+  );
+}
+```
+
+Add this describe immediately after the Ask answer describe.
+
+```ts
+describe('POST /api/workflows/runs/:runId/permissions/:callId/confirm', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockConfirmPendingPermission.mockReset();
+    mockHandleMessage.mockReset();
+    mockApiLogError.mockClear();
+    mockConfirmPendingPermission.mockResolvedValue({
+      interaction: {
+        id: 'pi-permission-1',
+        workflow_run_id: 'run-permission-1',
+        node_id: 'permission-node',
+        tool_use_id: PERMISSION_CALL_ID,
+        kind: 'permission',
+        status: 'answered',
+        envelope: {},
+        answer: { intent: PERMISSION_INTENT_SENTINEL },
+        provider_session_id: 'permission-session',
+        created_at: NOW,
+        resolved_at: NOW,
+        resolved_by: PERMISSION_STARTER_ID,
+      },
+      resumed: true,
+      remaining_pending: 0,
+    });
+  });
+
+  test('returns 200 and confirms by call id with the authenticated starter', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(mockPermissionRun());
+    const response = await postPermission(
+      JSON.stringify({ intent: PERMISSION_INTENT_SENTINEL }),
+      PERMISSION_STARTER_ID
+    );
+    expect(response.status).toBe(200);
+    expect(mockConfirmPendingPermission).toHaveBeenCalledWith({
+      workflow_run_id: 'run-permission-1',
+      tool_use_id: PERMISSION_CALL_ID,
+      answer: { intent: PERMISSION_INTENT_SENTINEL },
+      resolved_by: PERMISSION_STARTER_ID,
+    });
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 before body validation and run lookup', async () => {
+    const response = await postPermission('{"intent":', undefined);
+    expect(response.status).toBe(401);
+    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    '{}',
+    '{"intent":""}',
+    '{"intent":"   "}',
+    '{"intent":1}',
+    '{"intent":"allow-once","extra":true}',
+    '{"intent":"allow-once","decline":true}',
+    '{"answers":[{"questionId":"q1","value":"yes"}]}',
+    '{"intent":',
+  ])('returns 400 for a body outside the exact intent contract: %s', async body => {
+    const response = await postPermission(body, PERMISSION_STARTER_ID);
+    expect(response.status).toBe(400);
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test('returns 403 for a non-starter even when identity resolution marks users as admin', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(mockPermissionRun());
+    const response = await postPermission('{"intent":"allow-once"}', 'other-admin');
+    expect(response.status).toBe(403);
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 when the run is missing', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(null);
+    const response = await postPermission('{"intent":"allow-once"}', PERMISSION_STARTER_ID);
+    expect(response.status).toBe(404);
+  });
+
+  test.each([
+    [new PendingInteractionNotFoundError('run-permission-1', PERMISSION_CALL_ID), 404],
+    [new PendingInteractionAlreadyResolvedError('run-permission-1', PERMISSION_CALL_ID, 'answered'), 409],
+    [new PendingInteractionRunNotPausedError('run-permission-1', 'running'), 409],
+    [new PendingInteractionValidationError('kind_not_permission'), 400],
+  ] as const)('maps a typed persistence error to HTTP %i', async (error, status) => {
+    mockGetWorkflowRun.mockResolvedValueOnce(mockPermissionRun());
+    mockConfirmPendingPermission.mockRejectedValueOnce(error);
+    const response = await postPermission('{"intent":"allow-once"}', PERMISSION_STARTER_ID);
+    expect(response.status).toBe(status);
+  });
+
+  test('returns a safe 500 and never logs the intent or raw error message', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(mockPermissionRun());
+    mockConfirmPendingPermission.mockRejectedValueOnce(new Error(PERMISSION_INTENT_SENTINEL));
+    const response = await postPermission(
+      JSON.stringify({ intent: PERMISSION_INTENT_SENTINEL }),
+      PERMISSION_STARTER_ID
+    );
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Failed to confirm permission' });
+    expect(JSON.stringify(mockApiLogError.mock.calls)).not.toContain(PERMISSION_INTENT_SENTINEL);
+  });
+
+  test('publishes the Permission request component and route in OpenAPI', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/openapi.json');
+    const document = (await response.json()) as {
+      paths: Record<string, unknown>;
+      components?: { schemas?: Record<string, unknown> };
+    };
+    expect(
+      document.paths['/api/workflows/runs/{runId}/permissions/{callId}/confirm']
+    ).toBeDefined();
+    expect(document.components?.schemas?.PermissionConfirmBody).toMatchObject({
+      type: 'object',
+      required: ['intent'],
+      additionalProperties: false,
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run the route test and observe RED.**
+
+Run:
+
+```bash
+(cd packages/server && bun test src/routes/api.workflow-runs.test.ts)
+```
+
+Expected result: the new requests receive `404` because no Permission route is registered, while the mock graph loads cleanly and existing Ask tests remain green.
+
+- [ ] **Step 3: Add the OpenAPI request schema and route declaration.**
+
+In `workflow.schemas.ts`, import `permissionConfirmBodySchema` and add:
+
+```ts
+/** POST /api/workflows/runs/:runId/permissions/:callId/confirm request body. */
+export const permissionConfirmRequestSchema =
+  permissionConfirmBodySchema.openapi('PermissionConfirmBody');
+```
+
+In `api.ts`, import the new request schema, `confirmPermission`, and the three Permission operation errors.
+Declare this route next to `answerAskHumanRoute`.
 
 ```ts
 const confirmPermissionRoute = createRoute({
@@ -288,9 +1263,9 @@ const confirmPermissionRoute = createRoute({
       content: {
         'application/json': { schema: workflowRunActionResponseSchema },
       },
-      description: 'Permission confirm accepted',
+      description: 'Permission confirmation accepted',
     },
-    400: jsonError('Invalid permission confirm'),
+    400: jsonError('Invalid permission confirmation'),
     401: jsonError('Authentication required'),
     403: jsonError('Forbidden'),
     404: jsonError('Not found'),
@@ -300,9 +1275,9 @@ const confirmPermissionRoute = createRoute({
 });
 ```
 
-`permissionConfirmRequestSchema` is `permissionConfirmBodySchema.openapi('PermissionConfirmBody')` in `packages/server/src/routes/schemas/workflow.schemas.ts`.
+- [ ] **Step 4: Register pre-validation auth and the minimal handler.**
 
-Enforce auth before OpenAPI body validation:
+Place the middleware and handler immediately after the Ask route so the two split POST contracts remain discoverable together.
 
 ```ts
 app.use('/api/workflows/runs/:runId/permissions/:callId/confirm', async (c, next) => {
@@ -311,384 +1286,160 @@ app.use('/api/workflows/runs/:runId/permissions/:callId/confirm', async (c, next
   if (!requester) return apiError(c, 401, 'Authentication required');
   return next();
 });
+
+registerOpenApiRoute(confirmPermissionRoute, async c => {
+  const runId = c.req.param('runId') ?? '';
+  const callId = c.req.param('callId') ?? '';
+  try {
+    const requester = await resolveAuthContext(c);
+    if (!requester) return apiError(c, 401, 'Authentication required');
+    const body = getValidatedBody(c, permissionConfirmRequestSchema);
+    const result = await confirmPermission({
+      runId,
+      callId,
+      body,
+      actorUserId: requester.userId,
+    });
+    return c.json({
+      success: true,
+      message:
+        result.remainingPending > 0
+          ? `Permission confirmation accepted: ${result.run.workflow_name}. Other interactions remain.`
+          : `Permission confirmation accepted: ${result.run.workflow_name}.`,
+    });
+  } catch (error) {
+    if (error instanceof PermissionAuthenticationRequiredError) {
+      return apiError(c, 401, error.message);
+    }
+    if (error instanceof PermissionForbiddenError) {
+      return apiError(c, 403, error.message);
+    }
+    if (
+      error instanceof PermissionRunNotFoundError ||
+      error instanceof workflowPendingInteractionDb.PendingInteractionNotFoundError
+    ) {
+      return apiError(c, 404, error.message);
+    }
+    if (
+      error instanceof workflowPendingInteractionDb.PendingInteractionAlreadyResolvedError ||
+      error instanceof workflowPendingInteractionDb.PendingInteractionRunNotPausedError
+    ) {
+      return apiError(c, 409, error.message);
+    }
+    if (error instanceof workflowPendingInteractionDb.PendingInteractionValidationError) {
+      return apiError(c, 400, error.message);
+    }
+    const errorName = error instanceof Error ? error.name : 'UnknownError';
+    getLog().error(
+      { errorName, runId, callId },
+      'api.workflow_permission_confirm_failed'
+    );
+    return apiError(c, 500, 'Failed to confirm permission');
+  }
+});
 ```
 
-Map errors exactly as the Ask route does, substituting Permission operation errors and `Failed to confirm permission` for the unexpected `500`.
+Do not call `tryAutoResumeAfterGate`, `dispatchToOrchestrator`, or `resumeWorkflowRun` from this handler.
+The persistence transaction may move the run to `running`, but the dormant Permission contract has no provider payload injection to dispatch in Story 6.7.
 
-When `resumed` is false, return `{ success: true, message: \`Permission confirm accepted: ${result.run.workflow_name}. Other interactions remain.\` }` and do not dispatch.
+- [ ] **Step 5: Run GREEN, perform the route REFACTOR check, and rerun.**
 
-When `resumed` is true, call `tryAutoResumeAfterGate(result.run, 'permission-confirm', requester.userId)`.
-
-When auto-resume succeeds, the message is `Permission confirm accepted: ${workflow_name}. Resuming workflow.`
-
-When auto-resume is skipped, the message includes `archon workflow resume ${runId}`.
-
-Unexpected handler failures log `{ err, runId, callId }` as `api.workflow_permission_confirm_failed` and must not log `intent`.
-
-### Auto-continue after the POST
-
-Widen `tryAutoResumeAfterGate` `action` to `'approve' | 'reject' | 'review-open' | 'ask-answer' | 'permission-confirm'`.
-
-Replace the current Ask `else` branch with an explicit `action === 'ask-answer'` branch so Permission cannot inherit Ask log names.
-
-The Permission log names are `api.workflow_permission_confirm_auto_resume_dispatched`, `api.workflow_permission_confirm_auto_resume_failed`, `api.workflow_permission_confirm_auto_resume_skipped_non_web_parent`, and `api.workflow_permission_confirm_auto_resume_skipped_no_platform_conv`.
-
-A non-web or absent parent returns `200` after logging the skip.
-
-Do not change executor hydrate or `mapAnsweredAskResume` in this story.
-A permission-only first-node run may therefore fail auto-dispatch after the row is already answered; HTTP still returns `200` and the failure is logged.
-
-## Implementation Order
-
-Execute Tasks 1 through 5 in numeric order.
-Do not start Task 3 before Task 2 is green, because operations call the new db helper.
-Do not start Task 4 before Task 3 is green, because the route calls `confirmPermission`.
-Do not start Task 5 before Task 4 is green.
-Update sprint status only after every Task 5 gate passes.
-
-### Task 1: Add the Permission confirm schemas
-
-**Files:**
-
-- Modify `packages/workflows/src/schemas/pending-interaction.test.ts`.
-- Modify `packages/workflows/src/schemas/pending-interaction.ts`.
-
-- [ ] **Step 1: Write the RED schema tests.**
-
-Add tests named `accepts a non-empty intent object`, `rejects empty intent and unknown keys`, `rejects mixed Ask fields on a permission body`, and `derives a strict confirm input that reuses the resolve result schema`.
-
-Use `{ intent: 'allow-once' }` as the valid sample.
-
-Assert `permissionConfirmBodySchema.safeParse({ intent: '' }).success` is false.
-
-Assert `permissionConfirmBodySchema.safeParse({ intent: 'allow-once', extra: true }).success` is false.
-
-Assert `permissionConfirmBodySchema.safeParse({ intent: 'allow-once', decline: true }).success` is false.
-
-Assert `permissionConfirmBodySchema.safeParse({ answers: [{ questionId: 'q1', value: 'yes' }] }).success` is false.
-
-Assert `confirmPendingPermissionInputSchema.parse({ workflow_run_id: 'run-1', tool_use_id: 'tool-1', answer: { intent: 'allow-once' }, resolved_by: 'user-1' })` succeeds.
-
-Assert an extra key on that input fails.
-
-- [ ] **Step 2: Run the schema test and observe RED.**
+Run:
 
 ```bash
-cd packages/workflows
-bun test src/schemas/pending-interaction.test.ts
+(cd packages/server && bun test src/routes/api.workflow-runs.test.ts)
 ```
 
-Expected failure: `permissionConfirmBodySchema` and `confirmPendingPermissionInputSchema` are absent, rather than a fixture, syntax, or test-harness failure.
-
-- [ ] **Step 3: Add the minimal schemas and inferred types.**
-
-Import `z` only from `@hono/zod-openapi`.
-
-Use `z.infer` for every schema type.
-
-Keep `askAnswerBodySchema` and `resolvePendingInteractionInputSchema` byte-for-byte.
-
-Do not add an intent enum.
-
-Do not add a permission envelope schema.
-
-- [ ] **Step 4: Run GREEN and then refactor names and comments without changing behavior.**
-
-```bash
-cd packages/workflows
-bun test src/schemas/pending-interaction.test.ts
-```
-
-Expected result: the file passes.
-
-- [ ] **Step 5: Commit the contract slice.**
-
-```bash
-git add packages/workflows/src/schemas/pending-interaction.ts packages/workflows/src/schemas/pending-interaction.test.ts
-git commit -m "feat(workflows): define permission confirm envelope contract"
-```
-
-### Task 2: Implement the atomic Permission confirm CAS
-
-**Files:**
-
-- Modify `packages/core/src/db/workflow-pending-interactions.test.ts`.
-- Modify `packages/core/src/db/workflow-pending-interactions.ts`.
-- Modify `packages/core/src/operations/workflow-operations.test.ts`.
-- Modify `packages/core/src/workflows/store-adapter.test.ts`.
-- Modify `packages/server/src/routes/api.workflow-runs.test.ts`.
-- Modify `packages/cli/src/commands/workflow.test.ts`.
-- Modify `packages/cli/src/commands/workflow-command-contract.test.ts`.
-
-- [ ] **Step 1: Write the first RED real-SQLite confirm test.**
-
-Add helper `insertPausedPermission` that inserts `kind: 'permission'`, `envelope: {}`, `tool_use_id: 'toolu_perm_1'`, then pauses the run.
-
-Name the test `resolves one pending Permission, writes an id-only event, and resumes the last pending row atomically`.
-
-Confirm with `{ intent: SENTINEL_INTENT }` where `SENTINEL_INTENT` is `DO_NOT_LOG_INTENT`.
-
-Assert the resolved row status is `answered`, `answer` equals `{ intent: SENTINEL_INTENT }`, `resolved_by` is `user-1`, `remaining_pending` is `0`, `resumed` is `true`, and the run status is `running`.
-
-Assert the `interaction_resolved` event equals `{ node_id: 'review', tool_use_id: 'toolu_perm_1', kind: 'permission', resumed: true }`.
-
-Assert the event and `errorLogs` do not contain `SENTINEL_INTENT`.
-
-- [ ] **Step 2: Run the pending-interaction test and observe RED.**
-
-```bash
-cd packages/core
-bun test src/db/workflow-pending-interactions.test.ts
-```
-
-Expected failure: `confirmPendingPermission` is absent.
-
-- [ ] **Step 3: Implement the minimal winning confirm path and stub the new export in every mock factory.**
-
-Add `confirmPendingPermission` with the transaction order in Authoritative Contracts.
-
-Add `'kind_not_permission' | 'blank_intent'` to `PendingInteractionValidationCode`.
-
-In every listed `mock.module('...workflow-pending-interactions')` factory, add `confirmPendingPermission: mockConfirmPendingPermission` that resolves `{ interaction: { id: 'pi-perm-1' }, resumed: false, remaining_pending: 1 }` unless a test overrides it.
-
-Do not add the helper to `IWorkflowStore`.
-
-Do not change `resolvePendingInteraction` behavior.
-
-- [ ] **Step 4: Run GREEN for the first slice.**
-
-```bash
-cd packages/core
-bun test src/db/workflow-pending-interactions.test.ts
-```
-
-Expected result: the new test passes and every existing Ask resolve test still passes.
-
-- [ ] **Step 5: Add RED edge-case tests one at a time.**
-
-Add tests named `keeps the first intent and reports already-resolved on a second write`, `does not resume while a sibling Ask is pending`, `resumes when the last remaining row is a Permission and an Ask is already answered`, `rolls back the confirm when the interaction-resolved event insert fails`, `rolls back the confirm when the paused-run resume CAS cannot win`, `rejects a confirm before the run reaches paused`, `rejects an Ask row on the Permission helper`, `rejects whitespace-only intent as blank_intent`, `redacts a confirm sentinel from errors and logs`, and `purges a pending Permission row without writing intent`.
-
-After adding each named test, run the same test file, confirm the intended assertion fails, add the smallest behavior, and rerun before adding the next test.
-
-`does not resume while a sibling Ask is pending` must insert one permission and one Ask, confirm the permission, and leave the run `paused` with `remaining_pending === 1`.
-
-`resumes when the last remaining row is a Permission and an Ask is already answered` must answer the Ask first, then confirm the permission, then assert `resumed === true` and run status `running`.
-
-`rejects an Ask row on the Permission helper` must call `confirmPendingPermission` against an Ask row and expect `kind_not_permission` without consuming the row.
-
-`rejects whitespace-only intent as blank_intent` must use `{ intent: '   ' }` and leave the row pending.
-
-`purges a pending Permission row without writing intent` must insert a paused permission, call `purgePendingInteractionsInTransaction(..., 'cancelled')`, and assert status `purged`, null `answer`, and a purge event with `kind: 'permission'` and no intent.
-
-Keep the existing Ask test `rejects a permission row on the Ask endpoint` unchanged and green.
-
-- [ ] **Step 6: Refactor the shared lock, CAS, remaining-count, resume, and event-insert body into a file-private helper while all tests remain green.**
-
-The helper must stay in `workflow-pending-interactions.ts` and must not be exported.
-
-`resolvePendingInteraction` and `confirmPendingPermission` must both call it.
-
-Ask event payloads must still include `declined`.
-
-Permission event payloads must still omit `declined`.
-
-- [ ] **Step 7: Run the complete focused persistence gate and the mock-factory consumers.**
-
-```bash
-cd packages/core
-bun test src/db/workflow-pending-interactions.test.ts
-bun test src/db/workflows.resume-cas.integration.test.ts
-bun test src/workflows/store-adapter.test.ts
-bun test src/operations/workflow-operations.test.ts
-cd ../cli
-bun test src/commands/workflow.test.ts
-bun test src/commands/workflow-command-contract.test.ts
-```
-
-Expected result: every command exits zero.
-
-- [ ] **Step 8: Commit the atomic confirm slice.**
-
-```bash
-git add packages/core/src/db/workflow-pending-interactions.ts packages/core/src/db/workflow-pending-interactions.test.ts packages/core/src/operations/workflow-operations.test.ts packages/core/src/workflows/store-adapter.test.ts packages/server/src/routes/api.workflow-runs.test.ts packages/cli/src/commands/workflow.test.ts packages/cli/src/commands/workflow-command-contract.test.ts
-git commit -m "feat(core): confirm permission rows with atomic resume"
-```
-
-### Task 3: Own Permission confirm in workflow operations
-
-**Files:**
-
-- Modify `packages/core/src/operations/workflow-operations.test.ts`.
-- Modify `packages/core/src/operations/workflow-operations.ts`.
-
-- [ ] **Step 1: Write the RED operation tests.**
-
-Add `describe('confirmPermission')` beside `describe('answerAskHuman')`.
-
-Add tests named `requires an authenticated actor`, `rejects a different starter even when that actor is admin upstream`, `rejects an unowned run`, `passes the matching starter as resolved_by`, `throws PermissionRunNotFoundError when the run is missing`, `logs and emits only after persistence resolves and omits intent sentinels`, and `propagates typed persistence errors without remapping`.
-
-The confirm body is `{ intent: INTENT_SENTINEL }` with `INTENT_SENTINEL` equal to `DO_NOT_LOG_INTENT`.
-
-`passes the matching starter as resolved_by` must assert `mockConfirmPendingPermission` was called with `{ workflow_run_id: 'run-1', tool_use_id: 'tool-1', answer: { intent: INTENT_SENTINEL }, resolved_by: starterId }`.
-
-The success log assertion is `workflow.permission_resolved` with `{ workflowRunId, nodeId, toolUseId, resumed }` and without `intent` or `declined`.
-
-The emit assertion is `{ type: 'interaction_resolved', runId: 'run-1', nodeId: 'ask-node', resumed: true }`.
-
-Auth failures must not call `mockConfirmPendingPermission`.
-
-- [ ] **Step 2: Run the operations test and observe RED.**
-
-```bash
-cd packages/core
-bun test src/operations/workflow-operations.test.ts
-```
-
-Expected failure: `confirmPermission` is absent.
-
-- [ ] **Step 3: Add the minimal operation, error classes, and import.**
-
-Import `PermissionConfirmBody` from `@archon/workflows/schemas/pending-interaction`.
-
-Call `confirmPendingPermission` exactly once after starter authorization.
-
-Log and emit only after that call resolves.
-
-Do not call `resumeWorkflowRun`.
-
-Do not change `answerAskHuman` messages or log names.
-
-- [ ] **Step 4: Run GREEN and then refactor duplicated lookup if both loaders share the same getWorkflowRun plus typed not-found mapping.**
-
-```bash
-cd packages/core
-bun test src/operations/workflow-operations.test.ts
-```
-
-Expected result: Ask and Permission describes both pass.
-
-If extracting a shared run loader, keep Ask error class names and messages unchanged.
-
-- [ ] **Step 5: Commit the operation slice.**
-
-```bash
-git add packages/core/src/operations/workflow-operations.ts packages/core/src/operations/workflow-operations.test.ts
-git commit -m "feat(core): authorize starter-only permission confirm"
-```
-
-### Task 4: Register the Permission confirm HTTP route
-
-**Files:**
-
-- Modify `packages/server/src/routes/schemas/workflow.schemas.ts`.
-- Modify `packages/server/src/routes/api.ts`.
-- Modify `packages/server/src/routes/api.workflow-runs.test.ts`.
-
-- [ ] **Step 1: Write the RED HTTP tests.**
-
-Add `describe('POST /api/workflows/runs/:runId/permissions/:callId/confirm')` immediately after the Ask answer describe.
-
-Reuse the Ask fixtures' style with `PERM_STARTER_USER_ID = 'user-starter-1'`, `PERM_CALL_ID = 'toolu_perm_1'`, and `PERM_CONFIRM_BODY = { intent: 'allow-once' }`.
-
-Add tests named `returns 200 and confirms the pending Permission with the authenticated starter id`, `returns 401 when no authenticated requester is present`, `returns 401 before body validation when no authenticated requester is present`, `returns 401 before run lookup when no authenticated requester is present`, `returns 403 when the requester is not the run starter, including admins`, `returns 404 when the run is missing`, `returns 404 when the call id is missing`, `returns 409 when the interaction is already resolved`, `returns 409 when the run is not paused`, `returns 400 for an empty intent`, `returns 400 for a mixed intent-and-decline body`, `returns 400 when the row kind is ask`, `returns 500 for an unexpected operation error`, `dispatches /workflow resume once with the actor id for a last-pending web run`, `does not auto-dispatch an intermediate confirm`, and `returns 200 and skips dispatch for a non-web parent`.
-
-`returns 401 before body validation when no authenticated requester is present` must POST `{ intent: '' }` without `X-Archon-User` and expect `401` without calling persist.
-
-`returns 400 when the row kind is ask` must make `mockConfirmPendingPermission` reject `new PendingInteractionValidationError('kind_not_permission')` and expect `400`.
-
-Widen the local `PendingInteractionValidationCode` union in this test file with `'kind_not_permission' | 'blank_intent'`.
-
-`dispatches /workflow resume once with the actor id for a last-pending web run` must assert `mockHandleMessage` received `'/workflow resume run-perm-1'` and `extraContext.userId === PERM_STARTER_USER_ID`.
-
-- [ ] **Step 2: Run the workflow-runs test and observe RED.**
-
-```bash
-cd packages/server
-bun test src/routes/api.workflow-runs.test.ts
-```
-
-Expected failure: the new describe cannot hit a registered Permission confirm route, rather than a mock-factory or import error.
-
-- [ ] **Step 3: Add the OpenAPI schema, route, auth middleware, error mapping, and Permission auto-resume action.**
-
-Import `permissionConfirmBodySchema` in `workflow.schemas.ts`.
-
-Import `confirmPermission` and the three Permission error classes in `api.ts`.
-
-Import `permissionConfirmRequestSchema`.
-
-Extend `tryAutoResumeAfterGate` as specified in Authoritative Contracts.
-
-Keep Ask auto-resume log names unchanged.
-
-- [ ] **Step 4: Run GREEN for the HTTP file, including the existing Ask describe.**
-
-```bash
-cd packages/server
-bun test src/routes/api.workflow-runs.test.ts
-```
-
-Expected result: Ask answer tests and Permission confirm tests both pass.
-
-- [ ] **Step 5: Refactor duplicated 401 middleware and error mapping only if both routes can share helpers without changing Ask status codes or messages.**
-
-Rerun the same test file after any refactor.
+Expected result: the Permission and existing Ask describes pass, the OpenAPI document contains the new route, and no Permission success path dispatches a message.
+For REFACTOR, keep the split handlers explicit unless a helper removes duplication without changing status precedence, messages, or safe logging, then rerun the same command.
 
 - [ ] **Step 6: Commit the HTTP slice.**
 
 ```bash
 git add packages/server/src/routes/schemas/workflow.schemas.ts packages/server/src/routes/api.ts packages/server/src/routes/api.workflow-runs.test.ts
-git commit -m "feat(server): add permission confirm envelope route"
+git commit -m "feat(server): add permission confirmation route"
 ```
 
-### Task 5: Regenerate types, prove non-goals, validate, and mark Story 6.7 done
+### Task 5: Regenerate types, prove non-goals, validate, and complete Story 6.7
 
 **Files:**
 
-- Regenerate `packages/web/src/lib/api.generated.d.ts`.
-- Modify `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml`.
+- Regenerate: `packages/web/src/lib/api.generated.d.ts`
+- Modify: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml:1-81`
 
-- [ ] **Step 1: Run the characterization tests that prove this story does not activate Permission resume injection or UI cards.**
+**Interfaces:**
 
-```bash
-cd packages/workflows
-bun test src/schemas/pending-interaction.test.ts
-bun test src/dag-executor.test.ts
-bun test src/executor.test.ts
-cd ../core
-bun test src/db/workflow-pending-interactions.test.ts
-bun test src/operations/workflow-operations.test.ts
-cd ../server
-bun test src/routes/api.workflow-runs.test.ts
-```
+- Consumes: the live `/api/openapi.json` document and all focused test contracts from Tasks 1 through 4.
+- Produces: current generated web types, a clean Story 6.7 tracker entry, and recorded validation evidence.
 
-Expected result: `ignores answered Permission rows when mapping Ask resume` still passes, `rejects a still-pending Permission without claiming the run` still passes, and the new confirm tests pass.
-
-- [ ] **Step 2: Prove no live activation source or permission card shipped.**
+- [ ] **Step 1: Run every focused behavior and characterization test.**
 
 ```bash
-git diff --name-only origin/dev
+(cd packages/workflows && bun test src/schemas/pending-interaction.test.ts)
+(cd packages/core && bun test src/db/workflow-pending-interactions.test.ts)
+(cd packages/core && bun test src/db/workflows.resume-cas.integration.test.ts)
+(cd packages/core && bun test src/operations/workflow-operations.test.ts)
+(cd packages/server && bun test src/routes/api.workflow-runs.test.ts)
+(cd packages/cli && bun test src/commands/workflow.test.ts)
+(cd packages/cli && bun test src/commands/workflow-command-contract.test.ts)
+(cd packages/workflows && bun test src/dag-executor.test.ts -t "ignores answered Permission rows when mapping Ask resume")
+(cd packages/workflows && bun test src/executor.test.ts -t "rejects a still-pending Permission")
 ```
 
-Expected result: the diff does not include `packages/web/src/components/workflows/WorkflowExecution.tsx`, any `packages/web/src/experiments/console/` file except `packages/web/src/lib/api.generated.d.ts`, `packages/workflows/src/ask-human.ts`, `packages/providers/src/claude/provider.ts`, or `packages/providers/src/community/pi/provider.ts`.
+Expected result: every command exits zero.
+The two characterization commands prove this story neither injects Permission answers nor bypasses a still-pending Permission row.
 
-- [ ] **Step 3: Regenerate OpenAPI types from a live server.**
-
-`packages/web/package.json` `generate:types` reads `http://localhost:3090/api/openapi.json`.
-
-If port 3090 is free, start the server with `PORT=3090 bun run dev:server` from the repository root, wait until it listens, then run:
+- [ ] **Step 2: Prove the change set contains only the approved files and no migrations, providers, engine resume logic, or UI cards.**
 
 ```bash
-bun --filter @archon/web generate:types
+PLAN_BASE_SHA="$(tr -d '\n' < /Users/agent/.archon/workspaces/anhle128/Archon/artifacts/runs/a1c068923453f3040c321b27b9615e95/superpowers/base-sha.txt)"
+git diff --name-only "$PLAN_BASE_SHA" -- | sort
+FORBIDDEN_PATHS="$(git diff --name-only "$PLAN_BASE_SHA" -- | rg '^(migrations/|bun\.lock$|(^|.*/)package\.json$|packages/providers/|packages/workflows/src/(ask-human|dag-executor|executor)\.ts$|packages/web/src/components/workflows/WorkflowExecution\.tsx$|packages/web/src/experiments/console/)' || true)"
+test -z "$FORBIDDEN_PATHS"
 ```
 
-If port 3090 is occupied, start the worktree server as usual, read the logged port, and run `bunx openapi-typescript http://127.0.0.1:<port>/api/openapi.json -o packages/web/src/lib/api.generated.d.ts`.
+Expected result: `FORBIDDEN_PATHS` is empty.
+The intended changed set is the plan plus the thirteen implementation, test, generated, and tracker files named in this plan.
 
-Inspect the generated file for `PermissionConfirmBody` and `/api/workflows/runs/{runId}/permissions/{callId}/confirm`.
+- [ ] **Step 3: Regenerate the OpenAPI declaration from a supervised worktree server.**
 
-Stop the server started for generation.
+Run this from the repository root.
 
-Do not hand-edit `api.generated.d.ts`.
+```bash
+PLAN_API_PORT=3090
+while lsof -nP -iTCP:"$PLAN_API_PORT" -sTCP:LISTEN >/dev/null 2>&1; do
+  PLAN_API_PORT=$((PLAN_API_PORT + 1))
+done
+PLAN_TMP_DIR="$(mktemp -d)"
+PLAN_SERVER_LOG="$PLAN_TMP_DIR/server.log"
+ARCHON_HOME="$PLAN_TMP_DIR/archon-home" DATABASE_URL= SLACK_BOT_TOKEN= TELEGRAM_BOT_TOKEN= DISCORD_BOT_TOKEN= GITHUB_WEBHOOK_SECRET= NODE_ENV=development WEB_UI_DEV=1 HOST=127.0.0.1 PORT="$PLAN_API_PORT" bun --cwd packages/server src/index.ts >"$PLAN_SERVER_LOG" 2>&1 &
+PLAN_SERVER_PID=$!
+cleanup_plan_server() {
+  kill "$PLAN_SERVER_PID" 2>/dev/null || true
+  wait "$PLAN_SERVER_PID" 2>/dev/null || true
+}
+trap cleanup_plan_server EXIT INT TERM
+PLAN_SERVER_READY=0
+for PLAN_WAIT_ATTEMPT in $(seq 1 30); do
+  if curl -fsS "http://127.0.0.1:$PLAN_API_PORT/api/openapi.json" >/dev/null; then
+    PLAN_SERVER_READY=1
+    break
+  fi
+  kill -0 "$PLAN_SERVER_PID" 2>/dev/null || break
+  sleep 2
+done
+if [ "$PLAN_SERVER_READY" -ne 1 ]; then
+  tail -80 "$PLAN_SERVER_LOG"
+  exit 1
+fi
+(cd packages/web && bun x openapi-typescript "http://127.0.0.1:$PLAN_API_PORT/api/openapi.json" -o src/lib/api.generated.d.ts)
+cleanup_plan_server
+trap - EXIT INT TERM
+rg -n "PermissionConfirmBody|/api/workflows/runs/\{runId\}/permissions/\{callId\}/confirm" packages/web/src/lib/api.generated.d.ts
+```
+
+Expected result: both generated symbols are present, and only the recorded server PID is stopped.
+Do not hand-edit the declaration if generation differs from an expected shape; fix the OpenAPI source and regenerate.
 
 - [ ] **Step 4: Run repository validation from the repository root.**
 
@@ -696,120 +1447,79 @@ Do not hand-edit `api.generated.d.ts`.
 bun run validate
 ```
 
-Expected result: every command exits zero with no ESLint warnings.
+Expected result: the full package-isolated validation exits zero with no lint warnings or generated-file drift.
 
-- [ ] **Step 5: Confirm no migration files or dependency versions changed.**
+- [ ] **Step 5: Repair the tracker artifact and mark only Story 6.7 done.**
+
+Delete the entire literal conflict-registry report beginning with `⚠ 2 unresolved conflicts detected` from `sprint-status.yaml`.
+Set `development_status.6-7-confirm-a-permission-by-envelope-only` to `done`.
+Leave `epic-6` as `in-progress` because Stories 6.4 through 6.6 remain backlog.
+Leave every other story key unchanged.
+Run `date '+%Y-%m-%d %H:%M:%S %z'` and use that one value for both the top commented `last_updated` line and the active `last_updated` field.
+
+- [ ] **Step 6: Validate the tracker-only edit and inspect the final diff.**
 
 ```bash
-git diff --name-only origin/dev | rg "^(migrations/|packages/core/src/db/adapters/sqlite.ts|package.json|bun.lock)$" && exit 1 || true
+bun x prettier --check _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
+git diff --check
+if rg -n "unresolved conflicts detected|conflict://|<<< ours|>>> theirs" _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml; then exit 1; fi
+git diff --stat
+git diff -- _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
 ```
 
-Expected result: no matching changed path.
+Expected result: formatting and whitespace checks pass, no conflict-registry text remains, and only the timestamp, Story 6.7 status, and invalid appended report are changed in the tracker.
 
-- [ ] **Step 6: Mark only Story 6.7 done after validation passes.**
-
-Set `6-7-confirm-a-permission-by-envelope-only: done`.
-
-If `sprint-status.yaml` still has merge-conflict markers on `last_updated`, keep a single current timestamp and delete the conflict markers.
-
-Leave Stories 6.4 through 6.6 unchanged.
-
-- [ ] **Step 7: Commit generated types and story status.**
+- [ ] **Step 7: Commit generated types and the completed tracker.**
 
 ```bash
 git add packages/web/src/lib/api.generated.d.ts _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
-git commit -m "chore: mark permission confirm story 6.7 done"
+git commit -m "chore: complete permission confirmation story"
 ```
 
-- [ ] **Step 8: Record the final evidence before closing issue 92.**
+- [ ] **Step 8: Record final evidence without closing issue 92 from this plan.**
 
 ```bash
 git status --short
 git log --oneline --max-count=12
 ```
 
-The worktree must be clean, the focused test commands and `bun run validate` must be recorded in the implementation handoff, and issue 92 must remain open until those results are available.
-
-## Testing Strategy
-
-| Layer | Test file | Required evidence |
-| --- | --- | --- |
-| Contract | `packages/workflows/src/schemas/pending-interaction.test.ts` | Strict `{ intent }`, rejected extras, confirm input shape |
-| Persistence | `packages/core/src/db/workflow-pending-interactions.test.ts` | Real-SQLite CAS, first-write, last-pending resume, rollback, kind mismatch, blank intent, purge, safe logs |
-| Resume regression | `packages/core/src/db/workflows.resume-cas.integration.test.ts` | Public resume semantics unchanged |
-| Store mocks | `packages/core/src/workflows/store-adapter.test.ts` | New db export is stubbed and adapter tests still pass |
-| Operation | `packages/core/src/operations/workflow-operations.test.ts` | Starter-only ownership, safe logging, event emission |
-| HTTP | `packages/server/src/routes/api.workflow-runs.test.ts` | `200/400/401/403/404/409/500` and auto-dispatch gating |
-| DAG characterization | `packages/workflows/src/dag-executor.test.ts` | Answered permission is omitted from `resumeInteractions` |
-| Hydrate characterization | `packages/workflows/src/executor.test.ts` | Pending permission still blocks inspect |
-| CLI mocks | `packages/cli/src/commands/workflow.test.ts` and `workflow-command-contract.test.ts` | New db export does not open a real database |
+Expected result: the worktree is clean and the implementation handoff records every focused test plus `bun run validate`.
+Issue 92 remains open until the normal PR and issue-closing workflow consumes that evidence.
 
 ## Acceptance Criteria
 
-- [ ] `POST /api/workflows/runs/{runId}/permissions/{callId}/confirm` accepts exactly `{ intent: string }` with `callId` equal to `tool_use_id`.
-- [ ] Only the authenticated `workflow_runs.user_id` can confirm.
-- [ ] Missing identity returns `401` and a different identity returns `403`.
-- [ ] A second confirm returns `409` and preserves the first `{ intent }`.
-- [ ] A request received before the run reaches `paused` returns `409` without consuming the confirm.
+- [ ] The exact registered endpoint is `POST /api/workflows/runs/{runId}/permissions/{callId}/confirm`.
+- [ ] `callId` selects the row by `tool_use_id` under the supplied `runId`.
+- [ ] The request accepts only `{ intent: string }`, rejects unknown or Ask-only keys, rejects empty and whitespace-only values, and preserves a valid submitted string without trimming.
+- [ ] Only the authenticated `workflow_runs.user_id` can confirm, with missing identity returning `401` before validation and every non-starter returning `403`.
+- [ ] A missing run or interaction returns `404`.
+- [ ] A second confirmation returns `409` and preserves the first answer.
+- [ ] Confirmation before the run reaches `paused` returns `409` without consuming the row.
 - [ ] Confirming an Ask row returns `400` with `kind_not_permission` and leaves the Ask pending.
-- [ ] Answering a permission row through the Ask helper still returns `kind_not_ask`.
-- [ ] Empty and whitespace-only `intent` values return `400`.
-- [ ] The confirm row, audit event, and last-pending resume commit atomically.
-- [ ] An intermediate confirm leaves the run paused and does not auto-dispatch.
-- [ ] The last confirm moves the run to running exactly once and auto-dispatches only for a web parent.
-- [ ] `interaction_resolved` is persisted with `kind: 'permission'` and no intent.
-- [ ] Logs, events, SSE, and errors never include `intent`.
-- [ ] No variant permission card ships.
-- [ ] No live permission-activation source ships.
-- [ ] UIs are not required to render a permission card.
-- [ ] No database migration, dependency bump, YAML field, CLI confirm path, or chat confirm path is added.
-- [ ] The generated OpenAPI types contain the new route and `PermissionConfirmBody`.
-- [ ] `bun run validate` passes.
-- [ ] The Story 6.7 sprint key is `done` only after validation passes.
-
-## Not Building
-
-- Variant permission cards and teammate chrome belong to a later story after a live activation source exists.
-- A live permission-activation source, PreToolUse defer, Claude `canUseTool` prompts, and `AskUserQuestion` wrapping are out of scope.
-- Ask cards, Submit controls, and composer HITL belong to Stories 6.5 and 6.6.
-- Per-node independent scheduling belongs to Story 6.4.
-- CLI, Slack, Telegram, Discord, GitHub, and `manage_run` confirm UX are out of scope.
-- Executor permission resume injection is out of scope.
-- Assistant-prose detection is prohibited.
-- A new workflow authoring field is prohibited.
-- A new run status is prohibited.
-- An SDK upgrade is out of scope.
+- [ ] Resolving a Permission row through the Ask helper still returns `kind_not_ask`.
+- [ ] The row update, last-pending resume CAS, and `interaction_resolved` audit event commit or roll back together.
+- [ ] A sibling pending interaction keeps the run paused, while confirmation of the final pending interaction moves it to running once.
+- [ ] Persisted event data contains only `node_id`, `tool_use_id`, `kind: 'permission'`, and `resumed`.
+- [ ] Structured logs, live events, HTTP errors, and generated API types do not expose `intent`, `answer`, or `envelope` values.
+- [ ] The operation logs `workflow.permission_resolved` and emits the existing identifier-only `interaction_resolved` live signal only after persistence resolves.
+- [ ] The HTTP route does not auto-dispatch or add a Permission answer to Ask resume injection.
+- [ ] No live Permission producer, Permission variant card, UI rendering requirement, provider change, YAML field, CLI/chat confirm command, migration, or dependency change ships.
+- [ ] Generated OpenAPI types contain `PermissionConfirmBody` and the new route.
+- [ ] Every focused test and `bun run validate` pass.
+- [ ] The tracker contains valid YAML without conflict-registry prose, and Story 6.7 changes to `done` only after validation.
 
 ## Open Questions
 
-1. The approved HITL contract types `intent` as `string` and does not name allow/deny variants.
-Safe provisional default: treat `intent` as an opaque non-empty string and do not introduce an enum, because variant cards are explicitly out of scope.
+1. The approved HITL contract says `intent: string` but does not define whitespace-only input.
+Safe provisional default: reject strings whose trimmed length is zero while preserving every accepted string exactly as submitted.
 
-2. The approved HITL contract does not say whether whitespace-only `intent` is valid.
-Safe provisional default: reject trimmed-empty intent as `blank_intent` mapped to HTTP `400`, matching Ask Other text.
+2. The approved contract does not prescribe the success response status or body.
+Safe provisional default: return `200` with the existing `workflowRunActionResponseSchema`, matching the neighboring Ask route.
 
-3. AD-1 says engine writes go through `IWorkflowStore`, but `answerAskHuman` already calls the db helper directly and the engine never confirms a permission.
-Safe provisional default: do not add `confirmPendingPermission` to `IWorkflowStore`; operations call the core db helper directly.
-
-4. A permission-only first-node pause has no answered Ask, so existing hydrate still returns null and auto-dispatch can fail after the CAS has already moved the run to `running`.
-Safe provisional default: keep executor hydrate unchanged, log the failed auto-dispatch, and still return HTTP `200`, because this story has no live producer of permission-only pauses.
-
-5. The approved contract does not name success HTTP status or body.
-Safe provisional default: return `200` with `workflowRunActionResponseSchema`, matching the Ask answer route.
-
-## Risks
-
-| Risk | Impact | Mitigation |
-| --- | --- | --- |
-| Confirm accidentally uses the Ask resolve helper | Permission rows stay pending or Ask validation runs against `{}` | Separate `confirmPendingPermission` and keep `kind_not_ask` / `kind_not_permission` tests |
-| A new db export is omitted from a `mock.module` factory | CLI or HTTP tests open a real SQLite file and time out | Update all five factories in the same Task 2 commit |
-| Permission inherits Ask auto-resume log names | Ops cannot grep the confirm path | Replace the `else` Ask branch with an explicit action match |
-| Intent leaks into events or logs | Sensitive tool input reaches audit trails | Identifier-only event payload and sentinel assertions |
-| Last-pending confirm double-resumes | Public `resumeWorkflowRun` fights the in-transaction CAS | Route must not call `resumeWorkflowRun`; only auto-dispatch `/workflow resume` after commit |
-| UI or provider files change while shipping the envelope | Scope expands into deferred variant cards | Task 5 name-only diff gate |
+3. The approved story is dormant envelope/type-contract work and does not define continuation after a Permission confirm.
+Safe provisional default: preserve the existing all-pending transaction invariant so the final row moves the run to `running`, but do not dispatch the orchestrator or inject Permission data until a later accepted story adds a live activation and provider resume contract.
 
 ## Completion Gate
 
-Story 6.7 is complete only when every acceptance criterion is satisfied, every focused test passes in its isolated package process, `bun run validate` exits zero, generated API types are current, and the sprint key is `done`.
-
-If any gate fails, leave the sprint key unchanged and do not close issue 92.
+Story 6.7 is complete only when every acceptance criterion is satisfied, the focused commands pass in their package-isolated processes, the generated API declaration is current, `bun run validate` exits zero, the tracker is valid and updated, and the final worktree is clean.
+If any gate fails, leave Story 6.7 as backlog and do not close issue 92.
