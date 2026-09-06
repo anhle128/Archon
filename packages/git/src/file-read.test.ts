@@ -97,11 +97,14 @@ describe('fileAt and fileDiff', () => {
     await exec.execFileAsync('git', ['-C', repoPath, 'config', 'user.name', 'Test User']);
 
     await writeFile(join(repoPath, 'tracked.ts'), 'old line\n');
-    await writeFile(join(repoPath, ':colon.ts'), 'colon-head\n');
-    await writeFile(join(repoPath, 'foo*.ts'), 'glob-head\n');
     await writeFile(join(repoPath, '-dash.ts'), 'dash-head\n');
     await writeFile(join(repoPath, 'path with space.ts'), 'space-head\n');
-    await writeFile(join(repoPath, 'line\nbreak.ts'), 'nl-head\n');
+    // `: *` and newline are reserved/illegal in Windows filenames.
+    if (process.platform !== 'win32') {
+      await writeFile(join(repoPath, ':colon.ts'), 'colon-head\n');
+      await writeFile(join(repoPath, 'foo*.ts'), 'glob-head\n');
+      await writeFile(join(repoPath, 'line\nbreak.ts'), 'nl-head\n');
+    }
     await writeFile(join(repoPath, 'inside.ts'), 'target-contents\n');
     await writeFile(join(repoPath, 'textconv.ts'), 'textconv-head\n');
     await symlink('inside.ts', join(repoPath, 'in-link.ts'));
@@ -116,8 +119,10 @@ describe('fileAt and fileDiff', () => {
     await exec.execFileAsync('git', ['-C', repoPath, 'commit', '-m', 'initial']);
 
     await writeFile(join(repoPath, 'tracked.ts'), 'new line\n');
-    await writeFile(join(repoPath, ':colon.ts'), 'colon-work\n');
-    await writeFile(join(repoPath, 'foo*.ts'), 'glob-work\n');
+    if (process.platform !== 'win32') {
+      await writeFile(join(repoPath, ':colon.ts'), 'colon-work\n');
+      await writeFile(join(repoPath, 'foo*.ts'), 'glob-work\n');
+    }
     await writeFile(join(repoPath, 'added.ts'), 'added-body\n');
     await writeFile(join(repoPath, 'textconv.ts'), 'textconv-worktree\n');
     await writeFile(join(repoPath, 'nul-new.bin'), new Uint8Array([0, 2, 3]));
@@ -155,35 +160,47 @@ describe('fileAt and fileDiff', () => {
     expect(Buffer.from(result.bytes).toString()).toBe('dash-head\n');
   });
 
-  test('colon, leading-dash, glob, spaces, and newlines remain literal pathspecs', async () => {
+  test('leading-dash and spaces remain literal pathspecs', async () => {
     const workingPath = toWorktreePath(repoPath);
     expect(
       Buffer.from(
-        (await fileAt(workingPath, ':colon.ts', { kind: 'tree', treeIsh: 'HEAD' })).bytes
+        (await fileAt(workingPath, '-dash.ts', { kind: 'tree', treeIsh: 'HEAD' })).bytes
       ).toString()
-    ).toBe('colon-head\n');
-    expect(
-      Buffer.from((await fileAt(workingPath, ':colon.ts', { kind: 'worktree' })).bytes).toString()
-    ).toBe('colon-work\n');
-    expect(
-      Buffer.from(
-        (await fileAt(workingPath, 'foo*.ts', { kind: 'tree', treeIsh: 'HEAD' })).bytes
-      ).toString()
-    ).toBe('glob-head\n');
-    expect(
-      Buffer.from((await fileAt(workingPath, 'foo*.ts', { kind: 'worktree' })).bytes).toString()
-    ).toBe('glob-work\n');
+    ).toBe('dash-head\n');
     expect(
       Buffer.from(
         (await fileAt(workingPath, 'path with space.ts', { kind: 'tree', treeIsh: 'HEAD' })).bytes
       ).toString()
     ).toBe('space-head\n');
-    expect(
-      Buffer.from(
-        (await fileAt(workingPath, 'line\nbreak.ts', { kind: 'tree', treeIsh: 'HEAD' })).bytes
-      ).toString()
-    ).toBe('nl-head\n');
   });
+
+  test.skipIf(process.platform === 'win32')(
+    'colon, glob, and newline names remain literal pathspecs',
+    async () => {
+      const workingPath = toWorktreePath(repoPath);
+      expect(
+        Buffer.from(
+          (await fileAt(workingPath, ':colon.ts', { kind: 'tree', treeIsh: 'HEAD' })).bytes
+        ).toString()
+      ).toBe('colon-head\n');
+      expect(
+        Buffer.from((await fileAt(workingPath, ':colon.ts', { kind: 'worktree' })).bytes).toString()
+      ).toBe('colon-work\n');
+      expect(
+        Buffer.from(
+          (await fileAt(workingPath, 'foo*.ts', { kind: 'tree', treeIsh: 'HEAD' })).bytes
+        ).toString()
+      ).toBe('glob-head\n');
+      expect(
+        Buffer.from((await fileAt(workingPath, 'foo*.ts', { kind: 'worktree' })).bytes).toString()
+      ).toBe('glob-work\n');
+      expect(
+        Buffer.from(
+          (await fileAt(workingPath, 'line\nbreak.ts', { kind: 'tree', treeIsh: 'HEAD' })).bytes
+        ).toString()
+      ).toBe('nl-head\n');
+    }
+  );
 
   test.skipIf(process.platform === 'win32')(
     'in-checkout symlink returns the git blob target string',

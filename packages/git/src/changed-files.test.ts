@@ -89,19 +89,32 @@ describe('changedFiles and isGitWorkTree', () => {
   });
 
   test('lists special filenames and changes the revision when porcelain changes', async () => {
-    await writeFile(join(repoPath, ':colon.ts'), 'x\n');
-    await writeFile(join(repoPath, '-dash.ts'), 'x\n');
-    await writeFile(join(repoPath, 'foo*.ts'), 'x\n');
-    await writeFile(join(repoPath, 'line\nbreak.ts'), 'x\n');
+    // `: *` and newline are reserved/illegal in Windows filenames. Path
+    // parsing still covers those names in git-path.test.ts without touching disk.
+    const portableSpecials = [
+      { name: '-dash.ts', path: '-dash.ts' },
+      { name: 'path with space.ts', path: 'path with space.ts' },
+    ];
+    const posixOnlySpecials =
+      process.platform === 'win32'
+        ? []
+        : [
+            { name: ':colon.ts', path: ':colon.ts' },
+            { name: 'foo*.ts', path: 'foo*.ts' },
+            { name: 'line\nbreak.ts', path: 'line\nbreak.ts' },
+          ];
+
+    for (const file of [...portableSpecials, ...posixOnlySpecials]) {
+      await writeFile(join(repoPath, file.name), 'x\n');
+    }
 
     const first = await changedFiles(toWorktreePath(repoPath));
 
-    expect(first.files).toEqual([
-      { path: '-dash.ts', status: 'A' },
-      { path: ':colon.ts', status: 'A' },
-      { path: 'foo*.ts', status: 'A' },
-      { path: 'line\nbreak.ts', status: 'A' },
-    ]);
+    expect(first.files).toEqual(
+      [...portableSpecials, ...posixOnlySpecials]
+        .map(file => ({ path: file.path, status: 'A' as const }))
+        .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    );
     expect(first.revision).toMatch(/^[a-f0-9]{64}$/);
 
     await writeFile(join(repoPath, 'z-new.ts'), 'x\n');

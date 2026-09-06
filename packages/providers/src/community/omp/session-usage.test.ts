@@ -1340,9 +1340,12 @@ describe('US-026 OMP hidden-session ownership and bounded streaming', () => {
       afterCandidatesListed: async candidates => {
         expect(candidates.length).toBe(1);
         const target = candidates[0]!.absolutePath;
-        // Replace the inode with a different regular in-root file (same path).
-        await fs.rm(target);
-        await writeTranscript(target, [
+        const original = await fs.lstat(target);
+        // Unlink+recreate can reuse the inode on tmpfs/overlay. Write a sibling
+        // first, then rename over the discovered path so the identity check
+        // sees a different ino (same pattern as the prefix-swap test).
+        const replacement = `${target}.replacement`;
+        await writeTranscript(replacement, [
           sessionHeader('replaced', fx.cwd),
           assistantLine({
             model: 'replaced-model',
@@ -1353,6 +1356,9 @@ describe('US-026 OMP hidden-session ownership and bounded streaming', () => {
             cacheWrite: 0,
           }),
         ]);
+        expect((await fs.lstat(replacement)).ino).not.toBe(original.ino);
+        await fs.rm(target);
+        await fs.rename(replacement, target);
       },
     });
     // Fail closed: replacement inode is not billed.
