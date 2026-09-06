@@ -22,6 +22,7 @@ const MARKER_HUNK_DIFF: GitReadyDiffResponse = {
   cursor: '',
   truncated: false,
   binary: false,
+  fileFallback: false,
   hunks: [
     {
       header: '@@ -1,3 +1,3 @@',
@@ -47,6 +48,7 @@ const LINE_TRAP_DIFF: GitReadyDiffResponse = {
   cursor: '',
   truncated: false,
   binary: false,
+  fileFallback: false,
   hunks: [
     {
       header: '@@ -4,1 +9,1 @@',

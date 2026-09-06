@@ -24,6 +24,7 @@ const READY_DIFF = {
   cursor: '',
   truncated: false,
   binary: false,
+  fileFallback: false,
 };
 
 function jsonResponse(body: unknown, status = 200): Response {

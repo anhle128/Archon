@@ -133,6 +133,7 @@ function readyDiff(path: string, before: string, after: string): GitReadyDiffRes
     cursor: '',
     truncated: false,
     binary: false,
+    fileFallback: false,
     hunks: [
       {
         header: '@@ -1,1 +1,1 @@',
@@ -158,6 +159,7 @@ function binaryDiff(path: string): GitReadyDiffResponse {
     cursor: '',
     truncated: false,
     binary: true,
+    fileFallback: true,
     hunks: [],
   };
 }
