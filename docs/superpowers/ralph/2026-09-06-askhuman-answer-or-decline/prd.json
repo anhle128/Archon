@@ -226,8 +226,8 @@
         "US-009"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/providers/src/community/pi/session-resolver.ts, session-resolver.test.ts, event-bridge.ts, event-bridge.test.ts, provider.ts, provider.test.ts."
     },
     {
       "id": "US-012",

@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Pi Ask resume requires the existing session and continues the agent
+- **Where**: `packages/providers/src/community/pi/{session-resolver,event-bridge,provider}.ts`
+- **Pattern**: Non-empty `resumeInteractions` sets `requireExisting: true` (throws `PiSessionResumeRequiredError` instead of `SessionManager.create`), appends matching `ToolResultMessage` rows (or verifies identical existing ones), checks the transcript tail, then `bridgeSession(..., 'continue')` so `session.agent.continue()` runs and `session.prompt` never does. Failures log `{ errorClass }` as `pi.ask_resume_failed` and replace isError `errors` with `Could not resume the AskHuman session`. Continue-mode event-bridge logs must not include raw `err` or `errorMessage`.
+- **Example**: `bridgeSession(session, effectivePrompt, abortSignal, schema, uiBridge, askResume ? 'continue' : 'prompt')`
+
 ### Claude Ask resume uses a provider-owned prompt and never forks
 - **Where**: `packages/providers/src/claude/provider.ts`
 - **Pattern**: `buildClaudeAskResumePrompt` formats answer/decline blocks and a continuation instruction. Non-empty `resumeInteractions` requires `resumeSessionId`, forces `forkSession: false`, skips subprocess retries, logs only `{ errorClass }` on `claude.ask_resume_failed`, and replaces isError `errors` with `Could not resume the AskHuman session`.
@@ -297,5 +302,30 @@
 - Override `options.stderr` on the Ask-resume path so subprocess stderr never logs answer sentinels before the catch.
 - Do not pass the raw SDK error as `cause`; Pino may serialize it later.
 - Empty `resumeInteractions` is non-Ask; only a non-empty array takes the resume branch.
+
+---
+
+## 2026-09-07 — US-011: Continue Pi after AskHuman answers
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/pi/session-resolver.ts` — `requireExisting` option and `PiSessionResumeRequiredError` (no `SessionManager.create` on missing/ENOENT/ENOTDIR)
+- `packages/providers/src/community/pi/session-resolver.test.ts` — required-session throw coverage plus existing fallback tests unchanged
+- `packages/providers/src/community/pi/event-bridge.ts` — `startMode: 'prompt' | 'continue'`; continue calls `session.agent.continue()` and redacts continue-mode error logs
+- `packages/providers/src/community/pi/event-bridge.test.ts` — continue vs default prompt spies and dispose
+- `packages/providers/src/community/pi/provider.ts` — required resolve, ordered AskHuman tool results, tail checks, continue-mode bridge, sanitized throws and isError errors
+- `packages/providers/src/community/pi/provider.test.ts` — ordered injection, missing session, idempotent reuse, conflicts, tail mismatch, sentinel sanitization, non-Ask regression
+
+**Acceptance criteria verified**:
+- [x] session-resolver.ts adds `{ requireExisting?: boolean }`; when true and session missing/ENOENT/ENOTDIR, throws `PiSessionResumeRequiredError` without `SessionManager.create`
+- [x] event-bridge.ts adds `startMode: 'prompt' | 'continue'` (default `'prompt'`); `'continue'` executes `session.agent.continue()` and never `session.prompt`
+- [x] provider.ts sets `requireExisting: true` when `resumeInteractions` is non-empty; appends ToolResultMessage in order or verifies identical existing result; verifies transcript tail
+- [x] Invokes `bridgeSession` with `startMode: 'continue'`; sanitizes thrown errors and replaces isError terminal errors with `['Could not resume the AskHuman session']` without raw payload leakage
+- [x] bun test session-resolver.test.ts, event-bridge.test.ts, provider.test.ts, and askhuman-resume.characterization.test.ts in packages/providers
+
+**Learnings**:
+- Do not destructure PascalCase class names from dynamic imports (`PiSessionResumeRequiredError`); access them as `sessionResolver.PiSessionResumeRequiredError` to satisfy naming-convention.
+- Continue-mode event-bridge must not log raw `err` or `errorMessage` — both leak answer sentinels into the mock logger payload.
+- Run `askhuman-resume.characterization.test.ts` in its own `bun test` process; `provider.test.ts` `mock.module` of `@earendil-works/pi-coding-agent` poisons AuthStorage.inMemory in the same process.
 
 ---
