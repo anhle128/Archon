@@ -635,7 +635,7 @@ nodes:
       - ralph-native-preflight
     effort: max
     provider: omp
-    model: alibaba-token-plan/deepseek-v4-pro
+    model: "alibaba-token-plan/deepseek-v4-pro"
 
   - id: ralph-sync-back
     prompt: |
