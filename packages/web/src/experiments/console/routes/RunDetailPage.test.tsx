@@ -1,50 +1,18 @@
-import { createElement, Fragment } from 'react';
-import { describe, expect, test } from 'bun:test';
+process.env.NODE_ENV = 'development';
+
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { act, createElement, Fragment, type ReactElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
 import { toRun, type Run } from '../primitives/run';
-import { hasRunEnvOverlayUi } from './RunDetailPage';
-import type { UsageReport } from '../skills/usage';
-
-function emptyMetrics(): UsageReport['totals'] {
-  return {
-    tokensInput: null,
-    tokensOutput: null,
-    tokensReasoning: null,
-    tokensCacheRead: null,
-    tokensCacheWrite: null,
-    requests: null,
-    reportedUsd: null,
-    estimatedUsd: null,
-    recordCount: 0,
-    missingTokensInput: 0,
-    missingTokensOutput: 0,
-    missingTokensReasoning: 0,
-    missingTokensCacheRead: 0,
-    missingTokensCacheWrite: 0,
-    missingRequests: 0,
-    rowsMissingUsd: 0,
-  };
-}
-
-function usage(): UsageReport {
-  return {
-    scope: { from: null, to: null, includesChildRollup: false },
-    groupBy: 'node',
-    totals: emptyMetrics(),
-    groups: [],
-    coverage: {
-      usageEventCount: 0,
-      ledgeredEventCount: 0,
-      unledgeredEventCount: 0,
-      hasRecordedUsage: false,
-      historicalBackfill: false,
-      filterScope: 'date-project-run-node',
-    },
-  };
-}
+import type { RunDetailResponse, WorkflowEvent, WorkflowNodeState } from '../skills/runs';
+import type { DagNode } from '../skills/workflows';
+import { invalidate } from '../store/cache';
+import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
+import { hasRunEnvOverlayUi, RunDetailPage } from './RunDetailPage';
 
 /**
  * Mirrors RunDetailPage's ENV surfaces (header chip + resolved table gate)
@@ -60,9 +28,9 @@ function renderRunDetailEnvSurfaces(run: Run): string {
         null,
         createElement(RunDetailHeader, {
           run,
-          projectName: 'demo',
           projectId: 'proj-1',
-          usage: usage(),
+          projectName: 'demo',
+          usage: null,
         }),
         hasRunEnvOverlayUi(run)
           ? createElement(WorkflowEnvResolvedTable, { overlay: run.envOverlay })
@@ -177,5 +145,589 @@ describe('RunDetailPage ENV surfaces', () => {
     expect(html).toContain('ship it');
     expect(html).toContain('data-testid="run-detail-rest"');
     expect(html).toContain('workflow:archon-dev status:completed');
+  });
+});
+
+type FetchSpy = ReturnType<typeof spyOn<typeof globalThis, 'fetch'>>;
+
+const CREATED_AT = '2026-09-07T10:00:00.000Z';
+const REVIEW_TEXT = 'review-transcript';
+const BUILD_TEXT = 'build-transcript';
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function requestPath(input: RequestInfo | URL): string {
+  const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  if (raw.startsWith('http://') || raw.startsWith('https://')) {
+    const parsed = new URL(raw);
+    return `${parsed.pathname}${parsed.search}`;
+  }
+  return raw;
+}
+
+function workflowEvent(overrides: {
+  id: string;
+  workflow_run_id: string;
+  event_type: string;
+  step_name: string;
+  created_at?: string;
+  data?: Record<string, unknown>;
+}): WorkflowEvent {
+  return {
+    id: overrides.id,
+    workflow_run_id: overrides.workflow_run_id,
+    event_type: overrides.event_type,
+    step_index: null,
+    step_name: overrides.step_name,
+    data: overrides.data ?? {},
+    created_at: overrides.created_at ?? CREATED_AT,
+  };
+}
+
+function nodeState(
+  overrides: Pick<WorkflowNodeState, 'nodeId' | 'name' | 'status'>
+): WorkflowNodeState {
+  return { retryEpoch: 0, ...overrides };
+}
+
+function SearchProbe(): ReactElement {
+  const location = useLocation();
+  return createElement('span', { 'data-testid': 'location-search' }, location.search);
+}
+
+describe('RunDetailPage inspect selection', () => {
+  let win: ReturnType<typeof installHappyDom>;
+  let host: Element;
+  let root: Root;
+  let fetchSpy: FetchSpy | undefined;
+  let seq = 0;
+  let projectId = '';
+  let runId = '';
+  let cwd = '';
+  let workflow = '';
+
+  beforeEach(() => {
+    seq += 1;
+    projectId = `proj-us010-${String(seq)}`;
+    runId = `run-us010-${String(seq)}`;
+    cwd = `/repo us010 ${String(seq)}`;
+    workflow = `inspect-us010-${String(seq)}`;
+    win = installHappyDom();
+    win.localStorage.clear();
+    const el = win.document.createElement('div');
+    win.document.body.appendChild(el);
+    host = el as unknown as Element;
+    root = createRoot(host);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    invalidate('project');
+    invalidate('run');
+    invalidate('artifacts');
+    invalidate('workflow-dag-nodes');
+    invalidate('run-node-messages');
+    invalidate('console-node-room:idle');
+    invalidate('health');
+    invalidate('messages');
+    invalidate('noop:no-conversation-id');
+    invalidate('noop:no-project-id');
+    invalidate('noop:no-run-id');
+    fetchSpy?.mockRestore();
+    fetchSpy = undefined;
+    win.localStorage.clear();
+    win.close();
+    restoreHappyDom();
+  });
+
+  async function flush(): Promise<void> {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  async function flushUntil(label: string, predicate: () => boolean): Promise<void> {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await flush();
+      if (predicate()) return;
+    }
+    throw new Error(`${label}: ${host.textContent ?? ''}`);
+  }
+
+  function requireHtmlElement(value: Element | null, label: string): HTMLElement {
+    if (!(value instanceof HTMLElement)) {
+      throw new Error(label);
+    }
+    return value;
+  }
+
+  function requireButton(value: Element | null, label: string): HTMLButtonElement {
+    if (!(value instanceof HTMLButtonElement)) {
+      throw new Error(label);
+    }
+    return value;
+  }
+
+  function requireSelect(value: Element | null, label: string): HTMLSelectElement {
+    if (!(value instanceof HTMLSelectElement)) {
+      throw new Error(label);
+    }
+    return value;
+  }
+
+  function tabButton(label: string): HTMLButtonElement {
+    const buttons = [...host.querySelectorAll('button')];
+    const found = buttons.find(button => (button.textContent ?? '').includes(label));
+    if (found === undefined || !(found instanceof HTMLButtonElement)) {
+      throw new Error(`missing tab ${label}`);
+    }
+    return found;
+  }
+
+  function locationSearch(): string {
+    return host.querySelector('[data-testid="location-search"]')?.textContent ?? '';
+  }
+
+  function runPayload(
+    status: RunDetailResponse['run']['status'],
+    metadata: Record<string, unknown> = {}
+  ): RunDetailResponse['run'] {
+    return {
+      id: runId,
+      workflow_name: workflow,
+      conversation_id: 'c1',
+      parent_conversation_id: null,
+      codebase_id: projectId,
+      status,
+      user_message: 'inspect this run',
+      metadata,
+      started_at: CREATED_AT,
+      completed_at: status === 'running' || status === 'paused' ? null : '2026-09-07T10:02:00.000Z',
+      last_activity_at: CREATED_AT,
+      working_path: cwd,
+      user_id: null,
+      parent_run_id: null,
+      output_root: null,
+      conversation_platform_id: null,
+    };
+  }
+
+  function eventsFor(id: string): WorkflowEvent[] {
+    return [
+      workflowEvent({
+        id: 'review-start',
+        workflow_run_id: id,
+        event_type: 'node_started',
+        step_name: 'review',
+        created_at: '2026-09-07T10:00:01.000Z',
+        data: { name: 'Review' },
+      }),
+      workflowEvent({
+        id: 'review-done',
+        workflow_run_id: id,
+        event_type: 'node_completed',
+        step_name: 'review',
+        created_at: '2026-09-07T10:00:02.000Z',
+        data: { name: 'Review', duration_ms: 1000, num_turns: 1, stop_reason: 'end_turn' },
+      }),
+      workflowEvent({
+        id: 'build-start',
+        workflow_run_id: id,
+        event_type: 'node_started',
+        step_name: 'build',
+        created_at: '2026-09-07T10:00:03.000Z',
+        data: { name: 'Build' },
+      }),
+    ];
+  }
+
+  const NODE_STATES: WorkflowNodeState[] = [
+    nodeState({ nodeId: 'review', name: 'Review', status: 'completed' }),
+    nodeState({ nodeId: 'build', name: 'Build', status: 'running' }),
+  ];
+
+  function stubPageFetch(
+    options: {
+      status?: RunDetailResponse['run']['status'];
+      runError?: boolean;
+      metadata?: Record<string, unknown>;
+      nodeStates?: WorkflowNodeState[];
+      events?: WorkflowEvent[];
+      workflowNodes?: DagNode[];
+    } = {}
+  ): void {
+    const detailStatus = options.status ?? 'running';
+    const cwdQuery = `/api/workflows?cwd=${encodeURIComponent(cwd)}`;
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(((input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      if (path === `/api/codebases/${encodeURIComponent(projectId)}`) {
+        return Promise.resolve(
+          jsonResponse({
+            id: projectId,
+            name: 'inspect-project',
+            default_cwd: cwd,
+            default_branch: 'main',
+            repository_url: null,
+            kind: 'repo',
+            updated_at: CREATED_AT,
+            created_at: CREATED_AT,
+          })
+        );
+      }
+      if (path === `/api/workflows/runs/${encodeURIComponent(runId)}`) {
+        if (options.runError === true) {
+          return Promise.resolve(jsonResponse({ error: 'missing run' }, 404));
+        }
+        return Promise.resolve(
+          jsonResponse({
+            run: runPayload(detailStatus, options.metadata),
+            events: options.events ?? eventsFor(runId),
+            nodeStates: options.nodeStates ?? NODE_STATES,
+            pending_interactions: [],
+            usage: null,
+          } satisfies RunDetailResponse)
+        );
+      }
+      if (path === `/api/runs/${encodeURIComponent(runId)}/artifacts`) {
+        return Promise.resolve(jsonResponse({ files: [] }));
+      }
+      if (path === cwdQuery) {
+        return Promise.resolve(
+          jsonResponse({
+            workflows: [
+              {
+                workflow: {
+                  name: workflow,
+                  description: 'inspect',
+                  nodes: options.workflowNodes ?? [
+                    { id: 'review', prompt: 'Review the change.' },
+                    { id: 'build', prompt: 'Build the change.', depends_on: ['review'] },
+                  ],
+                },
+                source: 'project',
+              },
+            ],
+            recommended: [],
+          })
+        );
+      }
+      if (
+        path ===
+        `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent('review')}/messages`
+      ) {
+        return Promise.resolve(
+          jsonResponse({
+            messages: [
+              {
+                id: 'm-review',
+                seq: 1,
+                kind: 'text',
+                payload: { text: REVIEW_TEXT },
+                created_at: CREATED_AT,
+              },
+            ],
+          })
+        );
+      }
+      if (
+        path ===
+        `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent('build')}/messages`
+      ) {
+        return Promise.resolve(
+          jsonResponse({
+            messages: [
+              {
+                id: 'm-build',
+                seq: 1,
+                kind: 'text',
+                payload: { text: BUILD_TEXT },
+                created_at: CREATED_AT,
+              },
+            ],
+          })
+        );
+      }
+      if (path === '/api/health') {
+        return Promise.resolve(jsonResponse({ ok: true, is_docker: true }));
+      }
+      return Promise.resolve(jsonResponse({ error: `unmocked ${path}` }, 404));
+    }) as typeof fetch);
+  }
+
+  function renderPage(search = ''): void {
+    const suffix = search === '' || search.startsWith('?') ? search : `?${search}`;
+    root.render(
+      createElement(
+        MemoryRouter,
+        {
+          initialEntries: [`/console/p/${projectId}/r/${runId}${suffix}`],
+        },
+        createElement(
+          Routes,
+          null,
+          createElement(Route, {
+            path: '/console/p/:projectId/r/:runId',
+            element: createElement(
+              Fragment,
+              null,
+              createElement(SearchProbe),
+              createElement(RunDetailPage)
+            ),
+          })
+        )
+      )
+    );
+  }
+
+  test('?node=review deep-links into the review room after detail and definition resolve', async () => {
+    stubPageFetch();
+    await act(async () => {
+      renderPage('?keep=1&node=review');
+    });
+    await flushUntil('review room', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="console-inspect-pane"]')).not.toBeNull();
+    expect(host.textContent).toContain('Workflow');
+    expect(host.textContent).toContain('inspect this run');
+    expect(locationSearch()).toContain('node=review');
+    expect(locationSearch()).toContain('keep=1');
+  });
+
+  test('paused Plannotator detail forwards raw approval review metadata to the room', async () => {
+    stubPageFetch({
+      status: 'paused',
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Review the generated plan',
+          type: 'plannotator_gate',
+          document: 'Review session document',
+          reviewUrl: 'https://plannotator.example/review',
+        },
+      },
+      nodeStates: [nodeState({ nodeId: 'review', name: 'Review', status: 'running' })],
+      workflowNodes: [
+        {
+          id: 'review',
+          plannotator_gate: {
+            message: 'Review plan in Plannotator',
+            document: 'plan.md',
+            rework: { prompt: 'Apply review feedback.' },
+          },
+        },
+      ],
+    });
+    await act(async () => {
+      renderPage('?node=review');
+    });
+    await flushUntil('plannotator link', () =>
+      (host.textContent ?? '').includes('Open Plannotator')
+    );
+
+    expect(host.textContent).toContain('Review plan in Plannotator');
+    expect(host.textContent).toContain('Review session document');
+    expect(host.querySelector('a[href="https://plannotator.example/review"]')).not.toBeNull();
+    expect(host.textContent).not.toContain(REVIEW_TEXT);
+  });
+
+  test('an invalid ?node= query falls back to the inspect-running node', async () => {
+    stubPageFetch();
+    await act(async () => {
+      renderPage('?node=ghost');
+    });
+    await flushUntil('build fallback', () => (host.textContent ?? '').includes(BUILD_TEXT));
+    expect(host.querySelector('[aria-label="build room"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="review room"]')).toBeNull();
+  });
+
+  test('switching Log to Graph retains the mounted room and selecting a graph node updates ?node=', async () => {
+    stubPageFetch();
+    await act(async () => {
+      renderPage('?node=review');
+    });
+    await flushUntil('review room', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+    const roomBefore = host.querySelector('[aria-label="review room"]');
+    expect(roomBefore).not.toBeNull();
+
+    await act(async () => {
+      tabButton('Graph').click();
+    });
+    await flushUntil(
+      'graph scroller',
+      () => host.querySelector('[data-testid="console-run-graph-scroller"]') !== null
+    );
+    expect(host.querySelector('[aria-label="review room"]')).toBe(roomBefore);
+    expect(host.querySelector('[data-testid="console-inspect-pane"]')).not.toBeNull();
+    expect(host.textContent).toContain(REVIEW_TEXT);
+
+    await act(async () => {
+      requireButton(host.querySelector('[data-node-id="build"]'), 'build card').click();
+    });
+    await flushUntil('build selected', () => (host.textContent ?? '').includes(BUILD_TEXT));
+    expect(locationSearch()).toBe('?node=build');
+    expect(host.querySelector('[aria-label="build room"]')).not.toBeNull();
+  });
+
+  test('closing the room removes only the node query parameter', async () => {
+    stubPageFetch();
+    await act(async () => {
+      renderPage('?keep=1&node=review');
+    });
+    await flushUntil('review room', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+
+    await act(async () => {
+      requireButton(
+        host.querySelector('[data-testid="console-inspect-room"] header button'),
+        'close room'
+      ).click();
+    });
+    await flushUntil('room closed', () => (host.textContent ?? '').includes('Select a node'));
+    expect(host.querySelector('[aria-label="review room"]')).toBeNull();
+    expect(locationSearch()).toBe('?keep=1');
+    expect(locationSearch()).not.toContain('node=');
+  });
+
+  test('StreamToolbar All nodes filtering does not close or change the selected room', async () => {
+    stubPageFetch();
+    await act(async () => {
+      renderPage('?node=review');
+    });
+    await flushUntil('review room', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+    const roomBefore = host.querySelector('[aria-label="review room"]');
+    expect(host.querySelector('#node-transition-review-start')).not.toBeNull();
+    expect(host.querySelector('#node-transition-build-start')).not.toBeNull();
+
+    const filter = requireSelect(
+      host.querySelector('[aria-label="Filter stream by node"]'),
+      'node filter'
+    );
+    expect([...filter.options].some(option => option.textContent === 'All nodes')).toBe(true);
+
+    await act(async () => {
+      filter.value = 'review';
+      filter.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flushUntil(
+      'filtered to review',
+      () => host.querySelector('#node-transition-build-start') === null
+    );
+    expect(host.querySelector('#node-transition-review-start')).not.toBeNull();
+    expect(host.querySelector('[aria-label="review room"]')).toBe(roomBefore);
+    expect(host.textContent).toContain(REVIEW_TEXT);
+    expect(filter.value).toBe('review');
+
+    await act(async () => {
+      filter.value = 'all';
+      filter.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flushUntil(
+      'all nodes restored',
+      () => host.querySelector('#node-transition-build-start') !== null
+    );
+    expect(host.querySelector('[aria-label="review room"]')).toBe(roomBefore);
+  });
+
+  test('Artifacts stays full width and returning to Log restores the selected room', async () => {
+    stubPageFetch();
+    await act(async () => {
+      renderPage('?node=review');
+    });
+    await flushUntil('review room', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+
+    await act(async () => {
+      tabButton('Artifacts').click();
+    });
+    await flushUntil('artifacts view', () =>
+      (host.textContent ?? '').includes('No artifacts written to disk for this run.')
+    );
+    expect(host.querySelector('[data-testid="console-inspect-pane"]')).toBeNull();
+    expect(host.querySelector('[aria-label="review room"]')).toBeNull();
+    expect(host.querySelector('[data-testid="console-run-graph-scroller"]')).toBeNull();
+
+    await act(async () => {
+      tabButton('Log').click();
+    });
+    await flushUntil('log restored', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+    expect(host.querySelector('[data-testid="console-inspect-pane"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expect(locationSearch()).toContain('node=review');
+  });
+
+  test('a missing run shows the load error without mounting the inspect pane', async () => {
+    stubPageFetch({ runError: true });
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil('run error', () => (host.textContent ?? '').includes('Could not load run.'));
+    expect(host.querySelector('[data-testid="console-inspect-pane"]')).toBeNull();
+  });
+
+  test('running runs expose Cancel and completed runs expose Re-run', async () => {
+    stubPageFetch({ status: 'running' });
+    await act(async () => {
+      renderPage('?node=review');
+    });
+    await flushUntil('running cancel', () => (host.textContent ?? '').includes('Cancel'));
+    expect(host.textContent).not.toContain('Re-run');
+
+    await act(async () => {
+      root.unmount();
+    });
+    invalidate('project');
+    invalidate('run');
+    invalidate('artifacts');
+    invalidate('workflow-dag-nodes');
+    invalidate('run-node-messages');
+    invalidate('console-node-room:idle');
+    seq += 1;
+    projectId = `proj-us010-${String(seq)}`;
+    runId = `run-us010-${String(seq)}`;
+    cwd = `/repo us010 ${String(seq)}`;
+    workflow = `inspect-us010-${String(seq)}`;
+    const el = win.document.createElement('div');
+    win.document.body.appendChild(el);
+    host = el as unknown as Element;
+    root = createRoot(host);
+    fetchSpy?.mockRestore();
+    stubPageFetch({ status: 'completed' });
+    await act(async () => {
+      renderPage('?node=review');
+    });
+    await flushUntil('completed rerun', () => (host.textContent ?? '').includes('Re-run'));
+    expect(host.textContent).not.toContain('Cancel');
+  });
+
+  test('a log-row click stores the node query without changing the All nodes filter', async () => {
+    stubPageFetch();
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil('build fallback', () => (host.textContent ?? '').includes(BUILD_TEXT));
+    const filter = requireSelect(
+      host.querySelector('[aria-label="Filter stream by node"]'),
+      'node filter'
+    );
+    expect(filter.value).toBe('all');
+
+    const reviewRow = requireHtmlElement(
+      host.querySelector('#node-transition-review-start'),
+      'review row'
+    );
+    await act(async () => {
+      requireButton(reviewRow.querySelector('button'), 'review identity').click();
+    });
+    await flushUntil('review selected', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+    expect(locationSearch()).toBe('?node=review');
+    expect(filter.value).toBe('all');
+    expect(host.querySelector('#node-transition-build-start')).not.toBeNull();
   });
 });

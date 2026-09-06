@@ -10,6 +10,7 @@ import type { Run } from '../primitives/run';
 import type { RunCounts } from '../skills/runs';
 import { statusDotClass, statusLabel } from '../lib/run-status';
 import { shortRunId, formatElapsed, elapsedSince } from '../lib/format';
+import { consoleRunHref } from './console-run-href';
 
 interface FeedData {
   runs: Run[];
@@ -124,7 +125,15 @@ function ApprovalDockCard({ run }: { run: Run }): ReactElement {
         <button
           type="button"
           onClick={() => {
-            if (run.projectId !== null) navigate(`/console/p/${run.projectId}/r/${run.id}`);
+            if (run.projectId !== null) {
+              navigate(
+                consoleRunHref(
+                  run.projectId,
+                  run.id,
+                  run.approval?.nodeId ?? run.currentNode ?? null
+                )
+              );
+            }
           }}
           className="ml-auto shrink-0 font-mono text-[11px] text-text-tertiary transition-colors hover:text-text-primary"
         >
@@ -147,7 +156,9 @@ function DockCard({ run }: { run: Run }): ReactElement {
     <button
       type="button"
       onClick={() => {
-        if (run.projectId !== null) navigate(`/console/p/${run.projectId}/r/${run.id}`);
+        if (run.projectId !== null) {
+          navigate(consoleRunHref(run.projectId, run.id, run.currentNode ?? null));
+        }
       }}
       title="Open run logs"
       className="flex items-center gap-3 rounded border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-border-bright hover:bg-surface-hover"

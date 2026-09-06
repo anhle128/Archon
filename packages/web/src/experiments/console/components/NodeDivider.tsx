@@ -10,11 +10,15 @@ import type { UsageMetrics, UsageReport, UsageReportGroup } from '../skills/usag
 import { UsageBreakdownTable } from './UsageBreakdownTable';
 
 interface NodeDividerProps {
-  /** `step_name` — the scroll-anchor target for the graph panel. */
+  /** Selectable log-row identity — also the scroll-anchor suffix. */
+  rowId: string;
+  /** `step_name` — the inspect node this row belongs to. */
   nodeId: string;
   nodeName: string;
+  selected: boolean;
+  onSelect: (rowId: string, nodeId: string) => void;
   /** Folded lifecycle status; `running` = the node is still in-flight. */
-  status: 'running' | 'completed' | 'failed' | 'skipped';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
   durationMs: number | null;
   timestamp: string;
   /** From `node_completed` — legacy per-node spend when ledger has no row. */
@@ -85,6 +89,7 @@ export function buildNodeLedgerUsageReport(args: {
 }
 
 const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
+  pending: 'pending',
   running: 'running',
   completed: 'completed',
   failed: 'failed',
@@ -92,6 +97,7 @@ const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
 };
 
 const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
+  pending: 'text-text-tertiary',
   running: 'text-[color:var(--running)]',
   completed: 'text-success',
   failed: 'text-error',
@@ -109,8 +115,11 @@ const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
  * `node_usage_recorded`, not `node_completed`.
  */
 export function NodeDivider({
+  rowId,
   nodeId,
   nodeName,
+  selected,
+  onSelect,
   status,
   durationMs,
   timestamp,
@@ -189,48 +198,58 @@ export function NodeDivider({
 
   return (
     <div
-      id={`node-transition-${nodeId}`}
+      id={`node-transition-${rowId}`}
       className="flex flex-col gap-1 border-b border-border/60 py-[11px]"
     >
-      <div className="flex items-center gap-4">
-        <time
-          dateTime={timestamp}
-          title={wallClock}
-          className="w-14 shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary"
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            onSelect(rowId, nodeId);
+          }}
+          aria-current={selected ? 'true' : undefined}
+          className="flex min-w-0 flex-1 items-center gap-4 text-left"
         >
-          {displayed}
-        </time>
+          <time
+            dateTime={timestamp}
+            title={wallClock}
+            className="w-14 shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary"
+          >
+            {displayed}
+          </time>
+          <span className="font-mono text-[13px] font-semibold text-text-primary">{nodeName}</span>
+          {/* Dashed leader line (design v3 .log-line). */}
+          <div
+            className="h-px flex-1"
+            style={{
+              background:
+                'repeating-linear-gradient(90deg, var(--border) 0 4px, transparent 4px 8px)',
+            }}
+            aria-hidden
+          />
+          <span className={`font-mono text-[11.5px] ${STATUS_COLOR[status]}`}>
+            {STATUS_LABEL[status]}
+            {dur}
+            {cost}
+            {turns}
+          </span>
+        </button>
         {canExpand ? (
           <button
             type="button"
             onClick={() => {
               setExpanded(v => !v);
             }}
-            className="font-mono text-[13px] font-semibold text-text-primary transition-colors hover:text-accent-bright"
+            className="shrink-0 px-1 font-mono text-[10px] text-text-tertiary transition-colors hover:text-accent-bright"
             aria-expanded={expanded}
+            aria-label={
+              expanded ? 'Hide usage breakdown for this node' : 'Show usage breakdown for this node'
+            }
             title="Show usage breakdown for this node"
           >
-            {nodeName}
-            <span className="ml-1 text-[10px] text-text-tertiary">{expanded ? '▾' : '▸'}</span>
+            {expanded ? '▾' : '▸'}
           </button>
-        ) : (
-          <span className="font-mono text-[13px] font-semibold text-text-primary">{nodeName}</span>
-        )}
-        {/* Dashed leader line (design v3 .log-line). */}
-        <div
-          className="h-px flex-1"
-          style={{
-            background:
-              'repeating-linear-gradient(90deg, var(--border) 0 4px, transparent 4px 8px)',
-          }}
-          aria-hidden
-        />
-        <span className={`font-mono text-[11.5px] ${STATUS_COLOR[status]}`}>
-          {STATUS_LABEL[status]}
-          {dur}
-          {cost}
-          {turns}
-        </span>
+        ) : null}
       </div>
       {hasStopDetail ? (
         <div className="ml-[68px] flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-text-tertiary">

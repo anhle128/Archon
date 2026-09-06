@@ -1,0 +1,574 @@
+/**
+ * Console-owned inspect room: one persistent surface for every Story 5.5
+ * node body, without Epic 6 interaction chrome.
+ */
+import { useEffect, useRef, type ReactElement, type ReactNode } from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import rehypeHighlight from 'rehype-highlight';
+import remarkBreaks from 'remark-breaks';
+import remarkGfm from 'remark-gfm';
+
+import type { Run } from '../primitives/run';
+import type {
+  WorkflowEvent,
+  WorkflowNodeMessage,
+  WorkflowNodeMessagesResponse,
+  WorkflowNodeState,
+} from '../skills/runs';
+import type { DagNode } from '../skills/workflows';
+import { useEntity } from '../store/cache';
+import { K } from '../store/keys';
+import { ApprovalPanel } from './ApprovalPanel';
+import type { LogRow } from './inspect/build-log-rows';
+import { inspectStatusLabel } from './inspect/inspect-status';
+import { resolveRoomKind, type RoomKind, type RoomResolution } from './inspect/resolve-room-kind';
+import { selectNodeRoomMessages } from './inspect/select-node-room-messages';
+import {
+  selectChildRun,
+  selectGateChrome,
+  selectLoopGroupChrome,
+  selectNodeStdout,
+  selectRouteDecision,
+  type GateChrome,
+  type LoopGroupChrome,
+  type RouteDecisionView,
+  type StdoutView,
+} from './inspect/select-room-data';
+
+export interface ConsoleNodeRoomProps {
+  run: Run;
+  projectId: string;
+  nodeId: string | null;
+  selectedRow: LogRow | null;
+  definitionNodes: readonly DagNode[];
+  definitionPending: boolean;
+  nodeStates: readonly WorkflowNodeState[];
+  events: readonly WorkflowEvent[];
+  approval: unknown;
+  isLive: boolean;
+  loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+  onClose: () => void;
+}
+
+const IDLE_NODE_MESSAGES_KEY = 'console-node-room:idle';
+
+const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
+const REHYPE_PLUGINS = [rehypeHighlight];
+
+const MARKDOWN_COMPONENTS: Components = {
+  pre: ({ children, ...props }) => (
+    <pre
+      className="overflow-x-auto rounded-lg border border-border bg-surface-inset p-3 font-mono text-[12px]"
+      {...props}
+    >
+      {children}
+    </pre>
+  ),
+  code: ({ children, className, ...props }) => {
+    const isBlock = className?.startsWith('language-') || className?.startsWith('hljs');
+    if (isBlock) {
+      return (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      );
+    }
+    return (
+      <code
+        className="rounded bg-surface-inset px-1 py-[1px] font-mono text-[12px] text-text-primary"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+  a: ({ children, ...props }) => (
+    <a
+      className="text-primary underline decoration-primary/40 hover:decoration-primary"
+      target="_blank"
+      rel="noopener noreferrer"
+      {...props}
+    >
+      {children}
+    </a>
+  ),
+};
+
+const ROUTE_FIELDS = [
+  ['Outcome', 'outcome'],
+  ['Target', 'to'],
+  ['Condition', 'condition'],
+  ['Condition result', 'conditionResult'],
+  ['Attempt', 'attempt'],
+  ['Execution', 'executionSeq'],
+  ['Negative count', 'negativeCount'],
+  ['Maximum iterations', 'maxIterations'],
+] as const;
+
+function assertNever(value: never): never {
+  void value;
+  throw new Error('Unsupported workflow node message kind');
+}
+
+function inspectRow(
+  nodeId: string,
+  selectedRow: LogRow | null,
+  nodeStates: readonly WorkflowNodeState[]
+): LogRow {
+  if (selectedRow !== null && selectedRow.nodeId === nodeId) return selectedRow;
+  const state = nodeStates.find(item => item.nodeId === nodeId);
+  return {
+    id: nodeId,
+    nodeId,
+    label: state?.name ?? nodeId,
+    status: state?.status ?? 'pending',
+    order: 0,
+    sourceIndex: 0,
+    selection: { kind: 'node' },
+  };
+}
+
+function selectionExtra(row: LogRow): string | null {
+  if (row.selection.kind === 'loop_iteration') return `×${String(row.selection.iteration)}`;
+  if (row.selection.kind === 'route_iteration') return `#${String(row.selection.executionSeq)}`;
+  return null;
+}
+
+function RoomPlaceholder({ children }: { children: string }): ReactElement {
+  return (
+    <div className="flex flex-1 items-center justify-center px-4 text-center text-[13px] text-text-secondary">
+      {children}
+    </div>
+  );
+}
+
+function RoomRegion({ nodeId, children }: { nodeId: string; children: ReactNode }): ReactElement {
+  return (
+    <section
+      role="region"
+      aria-label={nodeId + ' room'}
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+    >
+      {children}
+    </section>
+  );
+}
+
+function RoomHeader({
+  nodeId,
+  label,
+  status,
+  extra,
+  onClose,
+}: {
+  nodeId: string | null;
+  label: string;
+  status: string;
+  extra: string | null;
+  onClose: () => void;
+}): ReactElement {
+  return (
+    <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+      <div className="min-w-0">
+        <p className="truncate text-[13px] font-medium text-text-primary">{label}</p>
+        {nodeId !== null ? (
+          <p className="truncate font-mono text-[11px] text-text-tertiary">{nodeId}</p>
+        ) : null}
+        {status !== '' ? <p className="text-[11px] text-text-secondary">{status}</p> : null}
+        {extra !== null ? <p className="text-[11px] text-text-secondary">{extra}</p> : null}
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        className="shrink-0 rounded px-2 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+      >
+        Close
+      </button>
+    </header>
+  );
+}
+
+function formattedJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+function AgentTranscript({ messages }: { messages: readonly WorkflowNodeMessage[] }): ReactElement {
+  if (messages.length === 0) {
+    return <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>;
+  }
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+      {messages.map(message => (
+        <div key={message.id}>{renderTranscriptItem(message)}</div>
+      ))}
+    </div>
+  );
+}
+
+function renderTranscriptItem(message: WorkflowNodeMessage): ReactElement {
+  switch (message.kind) {
+    case 'text':
+      return (
+        <div className="max-w-none text-[13px] text-text-primary">
+          <ReactMarkdown
+            remarkPlugins={REMARK_PLUGINS}
+            rehypePlugins={REHYPE_PLUGINS}
+            components={MARKDOWN_COMPONENTS}
+          >
+            {message.payload.text}
+          </ReactMarkdown>
+        </div>
+      );
+    case 'tool': {
+      const { name, input, output } = message.payload;
+      return (
+        <div className="flex flex-col gap-1">
+          <span className="w-fit rounded-full bg-surface-elevated px-2 py-0.5 font-mono text-[11px] text-text-secondary">
+            {name}
+          </span>
+          {input !== undefined ? (
+            <details>
+              <summary className="cursor-pointer text-[11px] text-text-secondary">Input</summary>
+              <pre className="mt-1 overflow-x-auto rounded-md bg-background p-2 font-mono text-[11px] text-text-secondary">
+                {formattedJson(input)}
+              </pre>
+            </details>
+          ) : null}
+          {output !== undefined ? (
+            <details>
+              <summary className="cursor-pointer text-[11px] text-text-secondary">Output</summary>
+              <pre className="mt-1 overflow-x-auto rounded-md bg-background p-2 font-mono text-[11px] text-text-secondary">
+                {formattedJson(output)}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      );
+    }
+    case 'status': {
+      const { state, detail } = message.payload;
+      return (
+        <p className="text-[11px] text-text-secondary">
+          {inspectStatusLabel(state)}
+          {detail ? ` ${detail}` : ''}
+        </p>
+      );
+    }
+    default:
+      return assertNever(message);
+  }
+}
+
+function StdoutBody({ stdout }: { stdout: StdoutView }): ReactElement {
+  return (
+    <div className="space-y-3 p-4">
+      <p className="text-[11px] text-text-secondary">Status: {inspectStatusLabel(stdout.status)}</p>
+      {stdout.truncated ? (
+        <p className="text-[11px] text-warning">
+          {stdout.originalBytes === null
+            ? 'Output truncated'
+            : `Output truncated from ${String(stdout.originalBytes)} bytes`}
+        </p>
+      ) : null}
+      {stdout.failedDetail ? <p className="text-[13px] text-error">{stdout.failedDetail}</p> : null}
+      {stdout.text === null ? (
+        <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>
+      ) : (
+        <pre className="overflow-x-auto whitespace-pre-wrap bg-surface-inset p-3 font-mono text-[13px] text-text-primary">
+          {stdout.text}
+        </pre>
+      )}
+      {stdout.exitCode === 0 ? (
+        <p className="text-[11px] text-text-secondary">Exit status: 0</p>
+      ) : null}
+    </div>
+  );
+}
+
+function GateBody({ chrome, run }: { chrome: GateChrome; run: Run }): ReactElement {
+  return (
+    <div className="space-y-3 p-4">
+      {chrome.showInactiveNotice ? (
+        <div className="rounded-md border border-warning/20 bg-warning/5 px-3 py-2">
+          <p className="text-[13px] text-text-secondary">Gate is not the active pause</p>
+        </div>
+      ) : null}
+      {chrome.decision !== null ? (
+        <p className="text-[13px] text-text-primary">
+          {chrome.decision === 'approved' ? 'Approved' : 'Rejected'}
+        </p>
+      ) : null}
+      {chrome.canDecide && chrome.decision === null ? (
+        <p className="text-[13px] text-text-secondary">Waiting for approval</p>
+      ) : null}
+      <p className="text-[13px] text-text-primary">{chrome.message}</p>
+      {chrome.document !== null ? (
+        <pre className="overflow-x-auto whitespace-pre-wrap bg-surface-inset p-3 font-mono text-[13px] text-text-primary">
+          {chrome.document}
+        </pre>
+      ) : null}
+      {chrome.reviewUrl !== null ? (
+        <a
+          href={chrome.reviewUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center text-[13px] text-primary underline decoration-primary/40 hover:decoration-primary"
+        >
+          Open Plannotator
+        </a>
+      ) : null}
+      {chrome.canDecide ? <ApprovalPanel run={run} /> : null}
+    </div>
+  );
+}
+
+function WorkflowBody({
+  projectId,
+  childRunId,
+  fanOut,
+  output,
+  paused,
+  message,
+}: {
+  projectId: string;
+  childRunId: string | null;
+  fanOut: boolean;
+  output: string | null;
+  paused: boolean;
+  message: string | null;
+}): ReactElement {
+  const hasContent = childRunId !== null || fanOut || output !== null || paused;
+  return (
+    <div className="space-y-3 p-4">
+      <h3 className="text-[13px] font-medium text-text-primary">Child run</h3>
+      {paused ? (
+        <p className="rounded border border-warning/20 bg-warning/5 p-3 text-[13px] text-warning">
+          {message ?? 'Sub-run is paused pending review'}
+        </p>
+      ) : null}
+      {fanOut ? (
+        <p className="text-[13px] text-text-secondary">This node spawned multiple child runs</p>
+      ) : null}
+      {childRunId !== null ? (
+        <a
+          href={`/console/p/${encodeURIComponent(projectId)}/r/${encodeURIComponent(childRunId)}`}
+          className="text-[13px] text-primary hover:underline"
+        >
+          Open child run
+        </a>
+      ) : null}
+      {output !== null ? (
+        <pre className="overflow-x-auto whitespace-pre-wrap bg-surface-inset p-3 font-mono text-[13px] text-text-primary">
+          {output}
+        </pre>
+      ) : null}
+      {!hasContent ? <RoomPlaceholder>Child run has not started</RoomPlaceholder> : null}
+    </div>
+  );
+}
+
+function RouteBody({ decision }: { decision: RouteDecisionView | null }): ReactElement {
+  return (
+    <div className="space-y-3 p-4">
+      <h3 className="text-[13px] font-medium text-text-primary">Routing decision</h3>
+      {decision === null ? (
+        <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>
+      ) : (
+        <dl className="space-y-2">
+          {ROUTE_FIELDS.map(([label, key]) =>
+            decision[key] === null ? null : (
+              <div key={key} className="grid grid-cols-[9rem_1fr] gap-2 text-[13px]">
+                <dt className="text-text-secondary">{label}</dt>
+                <dd className="font-mono text-text-primary">{decision[key]}</dd>
+              </div>
+            )
+          )}
+        </dl>
+      )}
+    </div>
+  );
+}
+
+function LoopGroupBody({ chrome }: { chrome: LoopGroupChrome }): ReactElement {
+  return (
+    <div className="space-y-4 p-4">
+      <h3 className="text-[13px] font-medium text-text-primary">Loop group</h3>
+      <div className="space-y-2">
+        <h4 className="text-[11px] font-medium uppercase text-text-secondary">Body nodes</h4>
+        {chrome.body.map(node => (
+          <div key={node.qualifiedId} className="text-[13px] text-text-primary">
+            <span className="font-mono">{node.id}</span>
+            <span className="ml-2 text-text-secondary">
+              {node.dependsOn.length === 0 ? 'Start' : `After ${node.dependsOn.join(', ')}`}
+            </span>
+          </div>
+        ))}
+      </div>
+      {chrome.iterations.length === 0 ? (
+        <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>
+      ) : (
+        chrome.iterations.map(iteration => {
+          const selected = iteration.iteration === chrome.selectedIteration;
+          return (
+            <details
+              key={iteration.iteration}
+              open={selected}
+              aria-current={selected ? 'true' : undefined}
+              className="rounded border border-border bg-surface-elevated p-3"
+            >
+              <summary className="cursor-pointer text-[13px] text-text-primary">
+                {'×' + String(iteration.iteration) + ' ' + iteration.status}
+              </summary>
+              <div className="mt-2 space-y-1">
+                {iteration.body.map(node => (
+                  <p key={node.qualifiedId} className="text-[13px] text-text-secondary">
+                    <span className="font-mono text-text-primary">{node.qualifiedId}</span>{' '}
+                    {node.status}
+                  </p>
+                ))}
+              </div>
+            </details>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function isUnknownAgentFallback(resolution: RoomResolution | null): boolean {
+  return resolution !== null && resolution.kind === 'agent' && resolution.nodeType === 'unknown';
+}
+
+function isAgentKind(kind: RoomKind | undefined): boolean {
+  return kind === 'agent';
+}
+
+export function ConsoleNodeRoom({
+  run,
+  projectId,
+  nodeId,
+  selectedRow,
+  definitionNodes,
+  definitionPending,
+  nodeStates,
+  events,
+  approval,
+  isLive,
+  loadMessages,
+  onClose,
+}: ConsoleNodeRoomProps): ReactElement {
+  const resolution =
+    nodeId === null ? null : resolveRoomKind(nodeId, definitionNodes, events, approval);
+  const waitingOnDefinition = definitionPending && isUnknownAgentFallback(resolution);
+  const agentActive = nodeId !== null && isAgentKind(resolution?.kind) && !waitingOnDefinition;
+  const messagesKey =
+    agentActive && nodeId !== null ? K.nodeMessages(run.id, nodeId) : IDLE_NODE_MESSAGES_KEY;
+  const messagesQuery = useEntity<WorkflowNodeMessagesResponse>(messagesKey, () => {
+    if (agentActive && nodeId !== null) return loadMessages(run.id, nodeId);
+    return Promise.resolve({ messages: [] });
+  });
+  const refetchRef = useRef(messagesQuery.refetch);
+  refetchRef.current = messagesQuery.refetch;
+
+  useEffect(() => {
+    if (!isLive || !agentActive) return undefined;
+    const handle = globalThis.setInterval(() => {
+      refetchRef.current();
+    }, 1000);
+    return (): void => {
+      globalThis.clearInterval(handle);
+    };
+  }, [isLive, agentActive, messagesKey]);
+
+  const row = nodeId === null ? null : inspectRow(nodeId, selectedRow, nodeStates);
+  const headerLabel = row?.label ?? (nodeId === null ? 'Select a node' : nodeId);
+  const headerStatus = row === null ? '' : inspectStatusLabel(row.status);
+  const headerExtra = row === null ? null : selectionExtra(row);
+
+  let body: ReactNode;
+  if (nodeId === null || resolution === null || row === null) {
+    body = <RoomPlaceholder>Select a node</RoomPlaceholder>;
+  } else if (waitingOnDefinition) {
+    body = <RoomPlaceholder>Loading workflow definition</RoomPlaceholder>;
+  } else if (resolution.kind === 'agent') {
+    if (messagesQuery.error !== undefined) {
+      body = (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-[13px] text-text-secondary">
+          <p>Failed to load node transcript</p>
+          <button
+            type="button"
+            className="text-[12px] text-primary transition-colors hover:text-accent-bright"
+            onClick={(): void => {
+              messagesQuery.refetch();
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      );
+    } else if (messagesQuery.loading || messagesQuery.data === undefined) {
+      body = <RoomPlaceholder>Loading node transcript</RoomPlaceholder>;
+    } else {
+      body = (
+        <AgentTranscript
+          messages={selectNodeRoomMessages(messagesQuery.data.messages, row.selection)}
+        />
+      );
+    }
+  } else if (resolution.kind === 'stdout') {
+    body = <StdoutBody stdout={selectNodeStdout(events, row)} />;
+  } else if (resolution.kind === 'gate') {
+    body = (
+      <GateBody
+        run={run}
+        chrome={selectGateChrome({
+          definitionNode: resolution.definitionNode,
+          events,
+          row,
+          approval,
+          runStatus: run.status,
+          gateType: resolution.nodeType === 'plannotator_gate' ? 'plannotator_gate' : 'approval',
+        })}
+      />
+    );
+  } else if (resolution.kind === 'workflow') {
+    const child = selectChildRun({ events, approval, row, runStatus: run.status });
+    body = (
+      <WorkflowBody
+        projectId={projectId}
+        childRunId={child.childRunId}
+        fanOut={child.fanOut}
+        output={child.output}
+        paused={child.paused}
+        message={child.message}
+      />
+    );
+  } else if (resolution.kind === 'route_loop') {
+    body = <RouteBody decision={selectRouteDecision(events, row)} />;
+  } else if (resolution.kind === 'loop_group') {
+    body = (
+      <LoopGroupBody
+        chrome={selectLoopGroupChrome({
+          definitionNode: resolution.definitionNode,
+          events,
+          row,
+        })}
+      />
+    );
+  } else {
+    body = assertNever(resolution.kind);
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col bg-surface">
+      <RoomHeader
+        nodeId={nodeId}
+        label={headerLabel}
+        status={headerStatus}
+        extra={headerExtra}
+        onClose={onClose}
+      />
+      {nodeId === null ? body : <RoomRegion nodeId={nodeId}>{body}</RoomRegion>}
+    </div>
+  );
+}
