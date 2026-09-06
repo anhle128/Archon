@@ -1,0 +1,220 @@
+{
+  "feature": "Answer the Ask in the Legacy Node Room",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Extend GET run with viewer and starter presentation",
+      "description": "As a web client, I want GET /api/workflows/runs/:runId to return viewer_is_starter and starter_display_name, so that the UI can accurately present starter actions vs named teammate read-only states.",
+      "acceptanceCriteria": [
+        "workflowRunDetailSchema in packages/server/src/routes/schemas/workflow.schemas.ts adds required viewer_is_starter: z.boolean() and starter_display_name: z.string().nullable().",
+        "GET /api/workflows/runs/:runId route handler in packages/server/src/routes/api.ts resolves requester with resolveAuthContext(c) and sets viewer_is_starter to true only when authenticated requester.userId === run.user_id.",
+        "The handler fetches starter display name via userDb.getUserById(run.user_id), trimming non-empty display_name with fallback to run.user_id; a run with user_id === null returns viewer_is_starter: false and starter_display_name: null without DB lookup.",
+        "Unit tests in packages/server/src/routes/api.workflow-runs.test.ts cover signed-in starter, teammate, unsigned viewer, starter with no display name, and starter-less run.",
+        "OpenAPI schema assertions in api.workflow-runs.test.ts pass and packages/web/src/lib/api.generated.d.ts is regenerated to export the updated WorkflowRunDetail definition."
+      ],
+      "technicalNotes": "Follow plan Task 1 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:71-97, 438-517). Modify packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts, and regenerate packages/web/src/lib/api.generated.d.ts.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Add typed Ask answer client",
+      "description": "As a web developer, I want a typed answerAskHuman client and error-status helper in packages/web/src/lib/api.ts, so that the frontend can submit Ask answers and inspect HTTP error statuses consistently.",
+      "acceptanceCriteria": [
+        "packages/web/src/lib/api.ts exports types PendingInteraction, AskAnswerBody, and WorkflowRunActionResponse from generated schema components.",
+        "answerAskHuman(runId, requestId, body) issues a single POST request to /api/workflows/runs/:runId/ask/:requestId/answer with encodeURIComponent on runId and requestId, JSON content type, and stringified body.",
+        "getApiErrorStatus(error: unknown): number | null extracts numeric own or inherited status from an object error without using any assertions, returning null for non-objects, null, or non-numeric status.",
+        "Unit tests in packages/web/src/lib/api.ask.test.ts verify URL encoding, headers, payload forwarding, and getApiErrorStatus matrix, passing via bun test src/lib/api.ask.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 2 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:98-118, 518-577). Modify packages/web/src/lib/api.ts and create packages/web/src/lib/api.ask.test.ts.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Parse Ask envelopes, answers, and valid drafts",
+      "description": "As a frontend developer, I want pure parser, draft-validation, and payload-builder functions for AskHuman envelopes, so that user inputs are validated strictly before submission without runtime Zod imports.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/parse-ask-envelope.ts exporting AskQuestion, AskDraftValue, AskDraft, parseAskEnvelope, parseAskAnswer, isQuestionValid, isAskDraftValid, and draftToAnswerBody.",
+        "parseAskEnvelope returns AskQuestion[] in original envelope order for valid envelopes; returns null for non-objects, missing/empty questions, invalid types, missing prompt/selection/options, non-boolean allowOther, or duplicate question IDs.",
+        "isQuestionValid and isAskDraftValid enforce single-select (valid option or non-empty trimmed other if allowOther) and multi-select (non-empty array of valid options/trimmed other) rules, requiring all questions in the draft to be valid.",
+        "draftToAnswerBody converts a complete valid draft into { answers: Array<{ questionId: string; value: string | string[] }> } in envelope order.",
+        "parseAskAnswer decodes strictly either { decline: true } or valid answers array with non-empty questionId and string/string[] values, returning null for invalid or extra-keyed objects.",
+        "Unit tests in packages/web/src/components/workflows/parse-ask-envelope.test.ts cover happy paths, malformed envelopes, validity matrix, and answer decoding, passing via bun test src/components/workflows/parse-ask-envelope.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 3 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:119-159, 578-654). Create parse-ask-envelope.ts and parse-ask-envelope.test.ts. Pure TypeScript, no Zod or @archon/workflows imports.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Add loop-safe placement and generic transcript slots",
+      "description": "As a UI architect, I want loop-safe Ask selection and generic transcript extension slots on NodeRoom, so that Ask cards anchor cleanly at matching tool messages without leaking across loop slices or teaching NodeRoom about HITL.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/merge-agent-room-items.ts exporting AgentRoomItem, selectVisibleNodeAskInteractions, and mergeAgentRoomItems.",
+        "selectVisibleNodeAskInteractions filters for kind === 'ask', selected nodeId, and status pending|answered in GET order; excludes purged and permission rows.",
+        "An Ask matching a tool row in the full transcript is included only when that tool row is in visibleMessages; an unanchored Ask is included only when visibleMessages reaches the end of the full transcript.",
+        "mergeAgentRoomItems sorts visible messages by seq, places matching Ask cards immediately after their tool message, and appends remaining unanchored cards at the end.",
+        "NodeRoomProps in packages/web/src/components/workflows/NodeRoom.tsx is extended with renderAfterMessage?: (message: WorkflowNodeMessageResponse) => React.ReactNode and renderAtEnd?: React.ReactNode.",
+        "NodeRoom renders renderAfterMessage(msg) immediately after msg, renders renderAtEnd after the transcript slice or in place of empty output placeholder, and renders renderAtEnd after the retry button on error.",
+        "Tests in packages/web/src/components/workflows/merge-agent-room-items.test.ts and NodeRoom.test.tsx pass with bun test."
+      ],
+      "technicalNotes": "Follow plan Task 4 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:160-202, 655-750). Create merge-agent-room-items.ts and merge-agent-room-items.test.ts; modify NodeRoom.tsx and NodeRoom.test.tsx.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Implement independent Ask mutation and presentation state",
+      "description": "As a state architect, I want a per-request mutation controller and card presentation resolver, so that multiple Ask cards maintain independent lifecycles, duplicate submissions are deduplicated, and terminal resume errors are classified.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/ask-answer-controller.ts exporting AskActionState, AskActionStateByRequest, AskAnswerController, and createAskAnswerController.",
+        "createAskAnswerController maintains a private in-flight Set<string>; duplicate calls for the same in-flight requestId return immediately without a second POST, while different request IDs can run concurrently.",
+        "The controller transitions state to sending before POST, accepted with submitted answer and resolvedAt ISO timestamp upon success, rejected-late for HTTP 409, and error for other exceptions. Success and 409 trigger invalidation, catching and warning on failure without reverting final state.",
+        "Create packages/web/src/components/workflows/ask-card-presentation.ts exporting AskCardViewState, AskCardPresentation, and resolveAskCardPresentation.",
+        "resolveAskCardPresentation derives viewState (pending, sending, answered, declined, rejected-late, failed-resume), preferring canonical interaction answer over local accepted answer, and retaining rejected-late even after refetch.",
+        "failed-resume is selected only when an accepted/canonical answer exists, nodeStatus is 'failed', and nodeError starts with 'Could not resume the AskHuman session'; unrelated node failures remain answered or declined.",
+        "Unit tests in packages/web/src/components/workflows/ask-answer-controller.test.ts and ask-card-presentation.test.ts pass with bun test."
+      ],
+      "technicalNotes": "Follow plan Task 5 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:203-277, 751-840). Create ask-answer-controller.ts, ask-answer-controller.test.ts, ask-card-presentation.ts, and ask-card-presentation.test.ts.",
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Render the accessible Ask card",
+      "description": "As an operator, I want accessible, stateful AskCard and InvalidAskCard components, so that I can answer or decline questions inline with clear validation, focus management, named teammate read-only states, and payload disclosure.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/AskCard.tsx exporting AskCard and InvalidAskCard matching the locked component interfaces.",
+        "The card renders an accessible form with aria-label='question from agent, N questions', agent header, node ID, elapsed waiting duration, and fieldset legends with radio (single) or checkbox (multi) controls.",
+        "When allowOther is true, selecting Other reveals a text input labelled 'Other answer for <prompt>' with aria-required='true'; custom text equal to a listed option does not jump the selected option.",
+        "Only the first actionable card with autoFocus=true focuses its first input; non-starter view renders disabled controls, omits Submit/Decline, and displays 'Waiting for <starter> to answer'.",
+        "Submit is disabled until the draft is fully valid; submitting calls onSubmit with the ordered answer body; Decline triggers AlertDialog ('Decline this ask?' / 'The agent will be told you declined') and calls onDecline.",
+        "Resolved states display question-labelled summaries: Answered ('Answered · by you' for starter, 'Answered' for teammate), Declined, Already answered, or Resume failed stamp with error text.",
+        "All valid card states render a 'View payload' disclosure with pretty-printed JSON; InvalidAskCard renders non-interactive role='alert' with 'Invalid Ask payload' and disclosure without form actions.",
+        "Unit tests in packages/web/src/components/workflows/AskCard.test.tsx pass with bun test under NODE_ENV=development."
+      ],
+      "technicalNotes": "Follow plan Task 6 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:278-333, 841-945). Create AskCard.tsx and AskCard.test.tsx. Use existing shadcn AlertDialog/Card/Button/Textarea and native inputs.",
+      "dependsOn": [
+        "US-003",
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Add awaiting and CAP-7 presentation chrome",
+      "description": "As an operator, I want clear awaiting indicators and CAP-7 failure banners, so that runs awaiting input are visually distinct from rejected unsupported-provider runs.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/awaiting-chrome.ts exporting countPendingAsks, isAskAwaitingRun (paused + pending > 0), firstAwaitingNodeId, isAskHumanUnsupportedError (prefix 'AskHuman is not supported by provider'), and nodeStatusLabel('awaiting') returning 'waiting on you'.",
+        "Create packages/web/src/components/workflows/WorkflowAskChrome.tsx rendering warning button 'Awaiting input (n)' when run is paused with pending Asks; clicking it calls onRequestGraphView then onSelectAwaitingNode(firstAwaitingId).",
+        "When run status is failed and error matches isAskHumanUnsupportedError, WorkflowAskChrome renders an error banner with the full persisted message and no awaiting pill.",
+        "StatusIcon.tsx adds an awaiting glyph with text-warning and accessible label 'waiting on you'.",
+        "ExecutionDagNode.tsx renders awaiting border, background, visible 'waiting on you' label, optional pulse, and motion-reduce:animate-none.",
+        "NodeRunList.tsx and LegacyNodeRoom.tsx render awaiting status with text-warning and nodeStatusLabel(status).",
+        "Tests in packages/web/src/components/workflows/awaiting-chrome.test.ts, WorkflowAskChrome.test.tsx, StatusIcon.test.tsx, ExecutionDagNode.test.tsx, NodeRunList.test.tsx, and LegacyNodeRoom.test.tsx pass with bun test."
+      ],
+      "technicalNotes": "Follow plan Task 7 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:334-382, 946-1050). Create awaiting-chrome.ts, awaiting-chrome.test.ts, WorkflowAskChrome.tsx, WorkflowAskChrome.test.tsx, StatusIcon.test.tsx; modify StatusIcon.tsx, ExecutionDagNode.tsx, NodeRunList.tsx, LegacyNodeRoom.tsx, and their tests.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Invalidate Ask data on paused SSE",
+      "description": "As a frontend developer, I want workflow-store to invalidate GET run detail when an SSE paused event is received, so that pending interactions are fetched immediately when an Ask occurs.",
+      "acceptanceCriteria": [
+        "packages/web/src/stores/workflow-store.ts adds event.status === 'paused' to the query invalidation predicate in handleWorkflowStatus.",
+        "When a paused status event arrives, queryClient.invalidateQueries is called for queryKey: ['workflowRun'].",
+        "Existing invalidations for running and terminal statuses remain intact.",
+        "Unit tests in packages/web/src/stores/workflow-store.test.ts prove invalidation on paused status via the real query client and pass with bun test."
+      ],
+      "technicalNotes": "Follow plan Task 8 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:1051-1090). Modify packages/web/src/stores/workflow-store.ts and packages/web/src/stores/workflow-store.test.ts.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Integrate Ask cards through the complete legacy run surface",
+      "description": "As an operator, I want Ask cards displayed and actionable across Logs, Graph, and Chat doors in the legacy run view, while maintaining isolation for non-agent rooms and the Chat composer.",
+      "acceptanceCriteria": [
+        "WorkflowExecution.tsx exports WorkflowRunQueryData, mapWorkflowRunDetail, and emptyAskActionStates; maps pendingInteractions, viewerIsStarter, starterDisplayName, and runError (string only) from GET run.",
+        "WorkflowExecution manages AskActionStateByRequest (reset per run ID), instantiates memoized controller with answerAskHuman and invalidation, renders WorkflowAskChrome beside StatusBadge, and passes mapped props and merged workflow.status.",
+        "NodeTranscriptPane.tsx updates refetch interval to poll every 1000ms for pending, running, and paused statuses, stopping only on terminal statuses.",
+        "NodeTranscriptPane composes anchored cards via renderAfterMessage and unanchored cards via renderAtEnd; on transcript query error, renders all cards after the Retry UI.",
+        "LegacyGraphLogsPane and LegacyNodeRoom thread Ask props only to agent rooms, removing stale isLive props and selecting nodeState from visibleNodeStates.",
+        "Integration tests in NodeTranscriptPane.test.tsx, LegacyNodeRoom.test.tsx, LegacyGraphLogsPane.test.tsx, and WorkflowExecution.test.tsx verify three-door room access, loop isolation, named read-only state, transcript error resilience, non-agent room isolation, and composer isolation."
+      ],
+      "technicalNotes": "Follow plan Task 9 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:1091-1310). Modify NodeTranscriptPane.tsx, NodeTranscriptPane.test.tsx, LegacyNodeRoom.tsx, LegacyNodeRoom.test.tsx, LegacyGraphLogsPane.tsx, LegacyGraphLogsPane.test.tsx, WorkflowExecution.tsx, WorkflowExecution.test.tsx, WorkflowAskChrome.tsx, and WorkflowAskChrome.test.tsx.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Run regressions, validate, and close sprint tracking",
+      "description": "As a release engineer, I want full regression tests, type-checks, linters, and scope guards validated, and sprint status cleanly updated, so that Story 6.5 is verified done.",
+      "acceptanceCriteria": [
+        "Focused web logic, store, and legacy component tests all pass without warnings or unhandled rejections.",
+        "packages/server route tests in api.workflow-runs.test.ts pass completely.",
+        "bun run type-check, bun run lint, and bun run format:check pass from repository root with zero errors or warnings.",
+        "bun run validate passes from repository root.",
+        "Scope guards confirm no Ask components are imported by packages/web/src/experiments/console or packages/web/src/lib/run-graph, and no diffs exist in workflows, providers, migrations, RunChatComposer.tsx, or ChatTimeline.tsx.",
+        "_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml removes the conflict-diagnostic block, updates timestamps, and marks 6-5-answer-the-ask-in-the-legacy-node-room as done."
+      ],
+      "technicalNotes": "Follow plan Task 10 (docs/superpowers/plans/2026-09-07-answer-ask-legacy-node-room.md:1311-1430). Validate all suites and modify _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008",
+        "US-009"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
