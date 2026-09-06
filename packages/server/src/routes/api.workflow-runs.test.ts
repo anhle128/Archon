@@ -601,6 +601,7 @@ class PendingInteractionRunNotPausedError extends Error {
 type PendingInteractionValidationCode =
   | 'invalid_body'
   | 'kind_not_ask'
+  | 'kind_not_permission'
   | 'missing_question'
   | 'unknown_question'
   | 'duplicate_question'
@@ -4526,6 +4527,188 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('archon workflow resume run-ask-1');
     expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+});
+
+const PERMISSION_STARTER_ID = 'permission-starter';
+const PERMISSION_CALL_ID = 'toolu_permission_1';
+const PERMISSION_INTENT_SENTINEL = 'DO_NOT_LOG_PERMISSION_INTENT';
+
+function mockPermissionRun(overrides: Partial<MockWorkflowRun> = {}): MockWorkflowRun {
+  return {
+    ...MOCK_PAUSED_RUN,
+    id: 'run-permission-1',
+    workflow_name: 'permission-flow',
+    user_id: PERMISSION_STARTER_ID,
+    metadata: {},
+    ...overrides,
+  };
+}
+
+async function postPermission(body: string, userId?: string): Promise<Response> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (userId !== undefined) headers['X-Archon-User'] = userId;
+  const { app } = makeApp();
+  return app.request(
+    `/api/workflows/runs/run-permission-1/permissions/${PERMISSION_CALL_ID}/confirm`,
+    { method: 'POST', headers, body }
+  );
+}
+
+describe('POST /api/workflows/runs/:runId/permissions/:callId/confirm', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockConfirmPendingPermission.mockReset();
+    mockHandleMessage.mockReset();
+    mockApiLogError.mockClear();
+    mockConfirmPendingPermission.mockResolvedValue({
+      interaction: {
+        id: 'pi-permission-1',
+        workflow_run_id: 'run-permission-1',
+        node_id: 'permission-node',
+        tool_use_id: PERMISSION_CALL_ID,
+        kind: 'permission',
+        status: 'answered',
+        envelope: {},
+        answer: { intent: PERMISSION_INTENT_SENTINEL },
+        provider_session_id: 'permission-session',
+        created_at: NOW,
+        resolved_at: NOW,
+        resolved_by: PERMISSION_STARTER_ID,
+      },
+      resumed: true,
+      remaining_pending: 0,
+    });
+  });
+
+  test('returns 200 and confirms by call id with the authenticated starter', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(mockPermissionRun());
+    const response = await postPermission(
+      JSON.stringify({ intent: PERMISSION_INTENT_SENTINEL }),
+      PERMISSION_STARTER_ID
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toBe('Permission confirmation accepted: permission-flow.');
+    expect(mockConfirmPendingPermission).toHaveBeenCalledWith({
+      workflow_run_id: 'run-permission-1',
+      tool_use_id: PERMISSION_CALL_ID,
+      answer: { intent: PERMISSION_INTENT_SENTINEL },
+      resolved_by: PERMISSION_STARTER_ID,
+    });
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 200 and reports remaining interactions without dispatch', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(mockPermissionRun());
+    mockConfirmPendingPermission.mockResolvedValueOnce({
+      interaction: {
+        id: 'pi-permission-1',
+        workflow_run_id: 'run-permission-1',
+        node_id: 'permission-node',
+        tool_use_id: PERMISSION_CALL_ID,
+        kind: 'permission',
+        status: 'answered',
+        envelope: {},
+        answer: { intent: 'allow-once' },
+        provider_session_id: 'permission-session',
+        created_at: NOW,
+        resolved_at: NOW,
+        resolved_by: PERMISSION_STARTER_ID,
+      },
+      resumed: false,
+      remaining_pending: 1,
+    });
+    const response = await postPermission('{"intent":"allow-once"}', PERMISSION_STARTER_ID);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('Other interactions remain');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 before body validation and run lookup', async () => {
+    const response = await postPermission('{"intent":', undefined);
+    expect(response.status).toBe(401);
+    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    '{}',
+    '{"intent":""}',
+    '{"intent":"   "}',
+    '{"intent":1}',
+    '{"intent":"allow-once","extra":true}',
+    '{"intent":"allow-once","decline":true}',
+    '{"answers":[{"questionId":"q1","value":"yes"}]}',
+    '{"intent":',
+  ])('returns 400 for a body outside the exact intent contract: %s', async body => {
+    const response = await postPermission(body, PERMISSION_STARTER_ID);
+    expect(response.status).toBe(400);
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test('returns 403 for a non-starter even when identity resolution marks users as admin', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(mockPermissionRun());
+    const response = await postPermission('{"intent":"allow-once"}', 'other-admin');
+    expect(response.status).toBe(403);
+    expect(mockConfirmPendingPermission).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 when the run is missing', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(null);
+    const response = await postPermission('{"intent":"allow-once"}', PERMISSION_STARTER_ID);
+    expect(response.status).toBe(404);
+  });
+
+  test.each([
+    [new PendingInteractionNotFoundError('run-permission-1', PERMISSION_CALL_ID), 404],
+    [
+      new PendingInteractionAlreadyResolvedError(
+        'run-permission-1',
+        PERMISSION_CALL_ID,
+        'answered'
+      ),
+      409,
+    ],
+    [new PendingInteractionRunNotPausedError('run-permission-1', 'running'), 409],
+    [new PendingInteractionValidationError('kind_not_permission'), 400],
+  ] as const)('maps a typed persistence error to HTTP %i', async (error, status) => {
+    mockGetWorkflowRun.mockResolvedValueOnce(mockPermissionRun());
+    mockConfirmPendingPermission.mockRejectedValueOnce(error);
+    const response = await postPermission('{"intent":"allow-once"}', PERMISSION_STARTER_ID);
+    expect(response.status).toBe(status);
+  });
+
+  test('returns a safe 500 and never logs the intent or raw error message', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(mockPermissionRun());
+    mockConfirmPendingPermission.mockRejectedValueOnce(new Error(PERMISSION_INTENT_SENTINEL));
+    const response = await postPermission(
+      JSON.stringify({ intent: PERMISSION_INTENT_SENTINEL }),
+      PERMISSION_STARTER_ID
+    );
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'Failed to confirm permission' });
+    expect(JSON.stringify(mockApiLogError.mock.calls)).not.toContain(PERMISSION_INTENT_SENTINEL);
+  });
+
+  test('publishes the Permission request component and route in OpenAPI', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/openapi.json');
+    const document = (await response.json()) as {
+      paths: Record<string, unknown>;
+      components?: { schemas?: Record<string, unknown> };
+    };
+    expect(
+      document.paths['/api/workflows/runs/{runId}/permissions/{callId}/confirm']
+    ).toBeDefined();
+    expect(document.components?.schemas?.PermissionConfirmBody).toMatchObject({
+      type: 'object',
+      required: ['intent'],
+      additionalProperties: false,
+    });
   });
 });
 
