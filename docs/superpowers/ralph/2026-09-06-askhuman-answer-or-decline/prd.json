@@ -16,8 +16,8 @@
       "technicalNotes": "Follow plan Task 1 (docs/superpowers/plans/2026-09-06-askhuman-answer-or-decline.md:388-424) and Authoritative Contracts (lines 141-259). Modify packages/workflows/src/schemas/pending-interaction.ts, packages/workflows/src/schemas/pending-interaction.test.ts, packages/workflows/src/ask-human.ts, and packages/providers/src/types.ts.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/workflows/src/schemas/pending-interaction.ts, packages/workflows/src/schemas/pending-interaction.test.ts, packages/workflows/src/ask-human.ts, packages/providers/src/types.ts."
     },
     {
       "id": "US-002",

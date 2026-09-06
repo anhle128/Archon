@@ -1,0 +1,37 @@
+## Codebase Patterns
+
+### Canonical AskHuman contracts live in the engine schema module
+- **Where**: `packages/workflows/src/schemas/pending-interaction.ts`
+- **Pattern**: Import `z` from `@hono/zod-openapi` and derive types with `z.infer`. Answer/resolve objects use `.strict()`. `askHumanQuestionSchema` is exported without `.strict()` so AskHuman's accepted question shape stays unchanged. `@archon/providers/types` may add `ResumeInteraction` but must not import `@archon/workflows`.
+- **Example**: `askAnswerBodySchema` is a two-arm union of `{ answers: [...] }` (min 1) and `{ decline: true }`; mixed bodies fail because both arms are strict.
+
+### Providers contract types stay SDK-free
+- **Where**: `packages/providers/src/types.ts` (`SendQueryOptions`)
+- **Pattern**: Add provider-neutral resume fields on `SendQueryOptions`; do not thread answers through node prompts.
+- **Example**: `resumeInteractions?: readonly ResumeInteraction[]`
+
+---
+
+## 2026-09-06 — US-001: Define AskHuman answer and provider contracts
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/schemas/pending-interaction.ts` — added ask answer, question, and resolve schemas with `z.infer` types
+- `packages/workflows/src/schemas/pending-interaction.test.ts` — variant, multi, rejection, unknown-key, and type-inference coverage
+- `packages/workflows/src/ask-human.ts` — re-imported `askHumanQuestionSchema` without changing accepted shape
+- `packages/providers/src/types.ts` — added `ResumeInteraction` and `SendQueryOptions.resumeInteractions`
+
+**Acceptance criteria verified**:
+- [x] pending-interaction.ts defines askAnswerItemSchema, askAnswerBodySchema, resolvePendingInteractionInputSchema, and resolvePendingInteractionResultSchema using z from `@hono/zod-openapi` and z.infer
+- [x] askAnswerBodySchema accepts answers (min 1) or `{ decline: true }`, and rejects empty answers, false decline, and mixed unions
+- [x] askHumanQuestionSchema is exported from pending-interaction.ts and re-imported into ask-human.ts without altering its accepted shape
+- [x] ResumeInteraction and optional resumeInteractions added to SendQueryOptions
+- [x] pending-interaction.test.ts verifies acceptance, type inferences, and unknown-key/invalid-shape rejection
+- [x] `bun test src/schemas/pending-interaction.test.ts` and `bun test src/ask-human.test.ts` in packages/workflows, and `bun x tsc --noEmit` in packages/providers
+
+**Learnings**:
+- Fresh worktree had no node_modules; `bun install` from the lockfile is required before focused tests.
+- ESLint ignores test files when they are passed as explicit paths; lint production sources only (or use `--no-warn-ignored`).
+- `askHumanQuestionSchema` must not gain `.strict()`; that would change the existing AskHuman accepted shape.
+
+---
