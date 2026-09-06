@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### Isolate commit fileDiff fixtures and spawn spies
+- **Where**: `packages/git/src/file-read.test.ts` `commit fileDiff`
+- **Pattern**: Bun runs tests concurrently. Give each commit fileDiff case its own repo under the describe temp root. When spying `child_process.spawn`, assert the `diff-tree` argv only — flattened calls can include concurrent Now `git diff HEAD` spawns.
+- **Example**: `const diffTree = spawnedArgv.find(args => args.includes('diff-tree')); expect(diffTree).not.toContain('HEAD');`
+
+### Keep explicit root vs parent fileDiff argv
+- **Where**: `packages/git/src/file-read.ts` `fileDiff`
+- **Pattern**: Two literal `diff-tree` argv arrays like `changedFiles` (root inserts `--root` after `--no-commit-id` and omits parent; non-root is `parentOid commitOid`). Commit branch uses `acceptExitCodes: [0]`; Now keeps `git diff HEAD` with `[0, 1]`. `fileAt` only calls `resolveCommitParents` when `treeIsh` matches `FULL_GIT_OBJECT_ID_RE` so `HEAD` stays unchanged.
+- **Example**: `if (source.kind === 'tree' && FULL_GIT_OBJECT_ID_RE.test(source.treeIsh)) await resolveCommitParents(workingPath, source.treeIsh);`
+
 ### Git-oid helpers stay package-internal
 - **Where**: `packages/git/src/git-oid.ts`, `packages/git/src/index.ts`
 - **Pattern**: `parseGitObjectId`, `resolveCommitParents`, `FULL_GIT_OBJECT_ID_RE`, and `GitCommitRefError` are imported by sibling modules. Export `parseNameStatusZ` and `ChangedFilesRequest` from the package root; do not re-export git-oid symbols.
@@ -39,5 +49,28 @@
 **Learnings**:
 - `bun x eslint path/to/*.test.ts --max-warnings 0` fails because test files are ignored; lint production files only.
 - Merge listing must not share a checkout with the special-name commit test under Bun's concurrent runner.
+
+---
+
+## 2026-09-07 — US-002: Commit-scoped fileDiff and fileAt reachability check
+
+**Status**: PASSED
+**Files changed**:
+- `packages/git/src/file-read.ts` — FileDiffRequest.commit, FileDiffResult.scope/ref, fileAt HEAD-reachability gate, commit diff-tree vs first parent/--root
+- `packages/git/src/file-read.test.ts` — commit diff, colon path, binary fallback, unreachable fileAt, paged cursor identity
+
+**Acceptance criteria verified**:
+- [x] Update FileDiffRequest to accept optional commit string, and FileDiffResult to include scope: 'now' | 'commit' and ref: 'live' | string.
+- [x] In fileAt, validate any source.kind === 'tree' with a full object name treeIsh against resolveCommitParents before reading the tree; reject unreachable commits with GitCommitRefError.
+- [x] In fileDiff, when commit is provided, validate the OID and resolve its parents; for a root commit spawn git diff-tree with --root, and for a non-root commit spawn with parentOid commitOid; use -U3 context lines and acceptExitCodes: [0].
+- [x] For commit fileDiff, inspect after-side commit tree and before-side parent tree (or null for root); if either side is image, hex, or >50 MiB, return hunks: [], fileFallback: true, scope: 'commit', ref: commitOid, and binary set based on NUL detection.
+- [x] Commit text diffs feed stdout incrementally into HunkPageAccumulator, returning hunks with scope: 'commit' and ref: commitOid.
+- [x] Now fileDiff retains scope: 'now' and ref: 'live' using git diff HEAD with acceptExitCodes: [0, 1].
+- [x] Pass all tests in packages/git/src/file-read.test.ts, including commit diff, raw blob, binary fallback, pagination identity, special paths, and unreachable commit rejection.
+
+**Learnings**:
+- `'live' | string` trips `@typescript-eslint/no-redundant-type-constituents`; keep the locked union with a one-line disable.
+- Spawn spies must target the `diff-tree` argv, not every concurrent git spawn.
+- Isolate each commit fileDiff test in its own repo under the describe temp root.
 
 ---

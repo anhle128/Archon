@@ -39,8 +39,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/git/src/file-read.ts, packages/git/src/file-read.test.ts."
     },
     {
       "id": "US-003",
@@ -134,7 +134,7 @@
       "acceptanceCriteria": [
         "In source-control-tab.tsx, onLoadMore reads viewerScopeRef.current; passes ref: scope.oid for commit diffs and source: rawSourceFor(file, scope) for commit text pages; validates matching ref and contentHash before appending.",
         "Selecting any file in Changes list synchronously resets viewerScope and viewerScopeRef to { kind: 'now' } (Return-to-Now).",
-        "Implement atomic Reload: refetch Now changes, History log, and expanded commit changes (if any) concurrently; update pending snapshots and pendingViewer; do not overwrite displayed content until user clicks 'Changed on disk — Reload'.",
+        "Implement atomic Reload: refetch Now changes, History log, and expanded commit changes (if any) concurrently; update pending snapshots and pendingViewer; do not overwrite displayed content until user clicks 'Changed on disk \u2014 Reload'.",
         "Implement onAcceptPending: if the open file is no longer present in the accepted snapshot, or if any snapshot is CAP-6, close viewer; otherwise accept all pending snapshots and replace viewer with matching pendingViewer.",
         "If accepted History list no longer contains the expanded commit, collapse the inline list but keep the open commit viewer readable.",
         "Ensure keyboard navigation in nested Commit files list (Arrow keys, Enter, Space) is isolated and does not trigger parent row collapse or double activation.",
