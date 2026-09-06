@@ -295,14 +295,14 @@ export interface IWorkflowStore
   completeWorkflowRun(id: string, metadata?: Record<string, unknown>): Promise<void>;
   failWorkflowRun(id: string, error: string): Promise<void>;
   /**
-   * Pause a running run for human review, stamping the approval context. Optional
-   * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
-   * container write-back gate's `pending_writeback` marker) so there is never a
-   * paused-without-marker window.
+   * Pause a running run. When `approvalContext` is provided, stamp it (and optional
+   * `extraMetadata`) into metadata in the SAME atomic write so there is never a
+   * paused-without-marker window. When omitted (Ask pause), set status to paused
+   * without touching metadata; already-paused is idempotent success.
    */
   pauseWorkflowRun(
     id: string,
-    approvalContext: ApprovalContext,
+    approvalContext?: ApprovalContext,
     extraMetadata?: Record<string, unknown>
   ): Promise<void>;
 

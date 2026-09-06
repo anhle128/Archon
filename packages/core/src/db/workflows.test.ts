@@ -931,6 +931,51 @@ describe('workflows database', () => {
         pauseWorkflowRun('workflow-run-123', { nodeId: 'review', message: 'Please review' })
       ).rejects.toThrow('not found or not in running state');
     });
+
+    test('Ask pause sets paused and does not write metadata', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await pauseWorkflowRun('workflow-run-123', undefined, { source: 'ask' });
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain("status = 'paused'");
+      expect(query).toContain("AND status = 'running'");
+      expect(query).not.toContain('metadata');
+      expect(params).toEqual(['workflow-run-123']);
+    });
+
+    test('Ask pause succeeds when the run is already paused', async () => {
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([], 0))
+        .mockResolvedValueOnce(createQueryResult([{ status: 'paused' }], 1));
+
+      await pauseWorkflowRun('workflow-run-123');
+    });
+
+    test('Ask pause still throws when the run is completed', async () => {
+      mockQuery
+        .mockResolvedValueOnce(createQueryResult([], 0))
+        .mockResolvedValueOnce(createQueryResult([{ status: 'completed' }], 1));
+
+      await expect(pauseWorkflowRun('workflow-run-123')).rejects.toThrow(
+        'not found or not in running state'
+      );
+    });
+
+    test('gate pause still writes metadata.approval', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await pauseWorkflowRun('workflow-run-123', {
+        nodeId: 'review',
+        message: 'Please review',
+        type: 'approval',
+      });
+
+      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      const payload = JSON.parse(params[1] as string) as { approval: Record<string, unknown> };
+      expect(payload.approval.nodeId).toBe('review');
+      expect(payload.approval.resolved).toBeNull();
+    });
   });
 
   describe('completeWorkflowRun', () => {
