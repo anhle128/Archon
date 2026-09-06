@@ -1,6 +1,7 @@
 # Walk This Run's Commit History as a Lane Graph Ralph PRD
 
-Source plan: `docs/superpowers/plans/2026-09-06-source-control-lane-graph.md`  
+Source plan: `docs/superpowers/plans/2026-09-06-source-control-lane-graph.md`
+
 Derived slug: `2026-09-06-source-control-lane-graph`
 
 ## Overview
