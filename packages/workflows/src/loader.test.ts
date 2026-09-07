@@ -3844,23 +3844,23 @@ nodes:
       ];
       for (const nodeId of requiredStages) expect(nodes.has(nodeId)).toBe(true);
 
-      // Accepted dual-model contract from speckit-ralph-native-feature.yaml:
-      // first native loop = xai-oauth/grok-4.5 @ high; final Speckit loop =
-      // anthropic/claude-sonnet-5 @ xhigh.
+      // The two native loops retain their separate provider/model contracts.
       const paths = [
         {
           preflightId: 'ralph-native-preflight',
           conversionId: 'ralph-tasks-to-ralph',
           loopId: 'ralph-loop-run',
           syncId: 'ralph-sync-back',
-          model: 'xai-oauth/grok-4.5',
-          effort: 'high',
+          provider: 'codex',
+          model: 'gpt-5.6-terra',
+          effort: 'xhigh',
         },
         {
           preflightId: 'speckit-final-ralph-native-preflight',
           conversionId: 'speckit-final-ralph-tasks-to-ralph',
           loopId: 'speckit-final-ralph-loop-run',
           syncId: 'speckit-final-ralph-sync-back',
+          provider: 'omp',
           model: 'anthropic/claude-sonnet-5',
           effort: 'xhigh',
         },
@@ -3889,7 +3889,7 @@ nodes:
         if (!loop || !isLoopNode(loop)) throw new Error('native Ralph loop missing');
         expect(loop.depends_on).toEqual([path.preflightId]);
         expect(loop.effort).toBe(path.effort);
-        expect(loop.provider).toBe('omp');
+        expect(loop.provider).toBe(path.provider);
         expect(loop.model).toBe(path.model);
         expect(loop.loop).toMatchObject({
           command: 'archon-speckit-ralph-iteration',
