@@ -100,6 +100,13 @@ const CAVEATS: readonly { provider: string; key: keyof ProviderCapabilities; not
       'Config-file-based agent selection (named agents from `opencode.json`) with per-call ' +
       'model/tools overrides — not inline sub-agent definitions.',
   },
+  {
+    provider: 'deepseek',
+    key: 'mcp',
+    note:
+      'Pinned DeepSeek Harness ACP supports stdio and Streamable HTTP MCP servers; ' +
+      'SSE declarations fail fast instead of being ignored.',
+  },
 ];
 
 const SUPERSCRIPT_DIGITS = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'] as const;

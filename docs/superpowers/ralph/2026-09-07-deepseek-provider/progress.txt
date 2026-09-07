@@ -1,0 +1,388 @@
+## Codebase Patterns
+
+### scripts tsconfig DOM vs Node web streams
+- **Where**: `packages/providers/src/community/deepseek/acp-client.ts`, `scripts/tsconfig.json`
+- **Pattern**: Package type-check can pass while root `bun x tsc --noEmit -p scripts/tsconfig.json` fails. That project adds DOM lib and type-checks `@archon/providers` via `generate-capability-matrix.ts`. Cast `Readable.toWeb` / `Writable.toWeb` through `unknown` before `Uint8Array` web streams.
+- **Example**: `Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>`
+
+### Opt-in DeepSeek ACP live spike
+- **Where**: `packages/providers/src/community/deepseek/acp-handshake-spike.ts`, `packages/providers/package.json` `spike:deepseek:acp`
+- **Pattern**: Skip with exit 0 unless `DEEPSEEK_LIVE_TEST=1`. When enabled, require `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_LIVE_MODEL` without printing values. Fresh prompt `Reply with exactly pong.` then resume `Reply with exactly pong again.` and require a non-error result plus `resumed: true`. Print only skip/pass/generic-fail. Keep the script out of `test` and `validate`.
+- **Example**: `bun run spike:deepseek:acp` → `DeepSeek ACP live spike skipped (set DEEPSEEK_LIVE_TEST=1 to run).` exit 0
+
+### Large markdown surgical edits
+- **Where**: `packages/docs-web/src/content/docs/getting-started/ai-assistants.md`
+- **Pattern**: Exact-string Python replace with a post-edit length assertion. Line-anchored and some exact-replace editors truncated this 1006-line file to 302 lines. Restore from git if `wc -l` drops.
+- **Example**: `apply(path, [(old, new)], min_delta=1500)` then `git checkout --` on shrink
+
+### Community provider registration without eager ACP
+- **Where**: `packages/providers/src/community/deepseek/registration.ts`, `packages/providers/src/registry.ts`
+- **Pattern**: Idempotent `isRegisteredProvider('deepseek')` guard, `builtIn: false`, vendor `deepseek` API-key spec. One import + `registerDeepseekProvider()` in `registerCommunityProviders()` immediately before the env-gated fake. Root and community barrels re-export `DeepseekProvider`, `parseDeepseekConfig`, `registerDeepseekProvider`, `DEEPSEEK_CAPABILITIES`, and `DeepseekProviderDefaults`. Lazy-load test mocks only `@agentclientprotocol/sdk` with a factory counter (do not mock `@deepseek-ai/dsh`), then dynamically imports registration/provider and instantiates — never `sendQuery()`. `provider-lazy-load.test.ts` is its own last DeepSeek `bun test` invocation. Loader tests register in the case and restore `registerBuiltinProviders()` + `registerOmpProvider()` in `finally` after `clearRegistry()`.
+- **Example**: `registerDeepseekProvider()` / `new DeepseekProvider()` leaves ACP SDK load count at 0
+
+
+### DeepSeek provider error-as-result + lazy ACP import
+- **Where**: `packages/providers/src/community/deepseek/provider.ts`
+- **Pattern**: Store injected `DeepseekProviderDependencies` only. Check `abortSignal.aborted` before parse/env/MCP/runner. Capture the resolved API key for redaction after `buildDeepseekChildEnv`. Dynamic `import('./acp-client')` happens after preflight when `runTurn` is not injected — type-only `DeepseekProcessInput` import is erased. Wrap the runner with `withResumedOutcome(stream, resumedOutcome(resumeSessionId, true))`; resume failures throw `deepseek_resume_failed` and the outer catch yields one error result (never `session/new`). Dedup MCP `missingVars` into one system warning.
+- **Example**: `new DeepseekProvider({ runTurn, resolveNodeBinary, resolveDshEntrypoint })`
+
+### ACP connectWith plus queue streaming
+- **Where**: `packages/providers/src/community/deepseek/acp-client.ts`
+- **Pattern**: Start `client({ name: 'archon-deepseek' }).connectWith(...)` without awaiting. Pipe success to `queue.close()` and failure to `queue.fail()`, then `for await` the queue so session updates are readable before prompt settlement. Cancel with `ctx.notify(methods.agent.session.cancel)` — never `request()`. Wrap resume failures as `deepseek_resume_failed` before the outer `deepseek_protocol_error` catch. Fake `SetSessionConfigOption` handlers must return `{ configOptions: [] }`. Injected FakeChild `kill()` must emit `exit` synchronously so `terminateGraceMs: 0` does not SIGKILL a child that already honored SIGTERM.
+- **Example**: `driveDeepseekAcpTurn(agentApp, input)` / `runDeepseekAcpTurn(processInput, { spawn, terminateGraceMs: 0 })`
+
+### AsyncQueue single waiter and one terminal
+- **Where**: `packages/providers/src/community/deepseek/async-queue.ts`
+- **Pattern**: One `QueueWaiter` slot and one `closed | failed` terminal. `push` resolves a waiting reader immediately; otherwise enqueue. `close`/`fail` drain the buffer before `done: true` or reject, and are idempotent. `push` after terminal throws. Do not `Promise.reject(unknown)` — `@typescript-eslint/prefer-promise-reject-errors` fails; reject through `QueueWaiter.reject` so `fail(error: unknown)` keeps identity.
+- **Example**: `new AsyncQueue<T>()` then `push` / `close` / `fail`
+
+### Strict MCP translation (no skip, no mutation)
+- **Where**: `packages/providers/src/community/deepseek/mcp.ts`
+- **Pattern**: `import type { McpServer }` only. Omitted `type` is stdio. Bare commands resolve with `which`/`where` against the supplied `PATH`; absolute commands stay unchanged after a POSIX `X_OK` / Windows regular-file check. Stdio ACP shape has no `type` field; HTTP includes `type: 'http'`. SSE and unknown transports throw `deepseek_mcp_config_error`. Never mutate input objects; clone `args` and convert env/headers into new `{ name, value }[]`.
+- **Example**: `buildDeepseekMcpServers(servers, env)`
+
+### Stateful ACP SessionUpdate translation (no fabricated usage)
+- **Where**: `packages/providers/src/community/deepseek/event-bridge.ts`
+- **Pattern**: `mapDeepseekSessionUpdate` uses an exhaustive `switch (update.sessionUpdate)` with a `never` default. Tool start stores `{ name, input }` by `toolCallId`; in-progress updates mutate that entry; `completed`/`failed` emit `tool_result` then `delete`. `usage_update` (even with `cost`) and other housekeeping variants emit `[]` — never `tokens`/`usageBreakdown`/`cost`. Non-text message/thought content is ignored, not stringified.
+- **Example**: `mapDeepseekSessionUpdate(update, createDeepseekEventState())`
+
+### Isolated child-env records (never mutate process.env)
+- **Where**: `packages/providers/src/community/deepseek/env.ts`
+- **Pattern**: `buildDeepseekChildEnv` takes `ambient`/`request` records. Tests pass isolated objects; never mutate `process.env`. Request overlays ambient, then config `baseUrl`, then `DSH_PERMISSION_MODE`. Empty/missing `DEEPSEEK_API_KEY` throws `deepseek_missing_api_key` without trimming or logging the value. Never writes `DSH_PROVIDER_ROUTE`.
+- **Example**: `buildDeepseekChildEnv({ ambient, request, baseUrl, permissionMode })`
+
+### Injectable DeepSeek runtime facts
+- **Where**: `packages/providers/src/community/deepseek/node-resolver.ts` `DeepseekRuntimeFacts`
+- **Pattern**: Inject `isBinary`/`execPath`/`isNodeHost`/`platform`/`findNodeOnPath` so tests cover POSIX vs Windows without changing `process.platform` or spawning a shell. POSIX uses `X_OK`; Windows only requires a regular file. Binary mode throws `deepseek_runtime_unavailable` before `createRequire()`.
+- **Example**: `resolveDeepseekNodeBinary(configNodeBin, env, facts)`
+
+### Typed DeepSeek errors + redaction
+- **Where**: `packages/providers/src/community/deepseek/errors.ts`
+- **Pattern**: `DeepseekProviderError(subtype, message)`. `toDeepseekErrorResult` keeps known subtypes, maps unknown to `deepseek_acp_error`, replaces every secret occurrence with `[REDACTED]`, and never synthesizes tokens/usage/cost/sessionId.
+- **Example**: `toDeepseekErrorResult(error, [apiKey])` → `{ type: 'result', isError: true, errorSubtype, errors: [sanitized] }`
+
+### DeepSeek config parser fail-fast + applied defaults
+- **Where**: `packages/providers/src/community/deepseek/config.ts`
+- **Pattern**: `parseDeepseekConfig` always returns `profile`/`providerRoute`/`permissionMode` defaults. Explicit `providerRoute` without `model` is rejected; the default route is allowed without a model. `maxTokens !== undefined` throws `DeepseekProviderError('deepseek_unsupported_config', ...)` with the pinned-ACP message.
+- **Example**: `'assistants.deepseek.maxTokens is unsupported: pinned DSH ACP exposes only model and reasoning_effort.'`
+
+### DeepSeek effort switch (not clampEffort)
+- **Where**: `packages/providers/src/community/deepseek/config.ts` `resolveDeepseekEffort`
+- **Pattern**: Use an explicit `switch`, not `clampEffort`. Map `minimal->off`, `medium->low`, `xhigh->high`; preserve `off`/`low`/`high`/`max`; throw on blank/unknown. `off` is not on `EFFORT_LADDER`.
+- **Example**: `resolveDeepseekEffort('minimal') === 'off'`
+
+### Exact provider dependency pins
+- **Where**: `packages/providers/package.json`
+- **Pattern**: Pin runtime SDKs with exact versions (no `^` or `~`). `bun --filter @archon/providers add` failed with "No packages matched the filter"; `bun add --exact` from `packages/providers` updates both `package.json` and the root `bun.lock`.
+- **Example**: `"@agentclientprotocol/sdk": "1.4.0"`, `"@deepseek-ai/dsh": "0.1.2-rc.1"`
+
+### Community provider tests
+- **Where**: `packages/providers/src/community/<name>/`
+- **Pattern**: Tests use `bun:test`. ESLint ignores `**/*.test.ts`. Always run `bun test <file>` from `packages/providers`; never `bun test` from the repo root.
+- **Example**: `bun test src/community/deepseek/ndjson-stream.test.ts`
+
+### ACP SDK value-import isolation
+- **Where**: `packages/providers/src/community/deepseek/ndjson-stream.test.ts`
+- **Pattern**: Dynamic-import `@agentclientprotocol/sdk` in tests. Production code must keep ACP SDK *value* imports isolated to `acp-client.ts` (type-only elsewhere).
+- **Example**: `const { ndJsonStream } = await import('@agentclientprotocol/sdk');`
+
+---
+
+## 2026-09-07 — US-001: Pin ACP and DSH runtime dependencies and characterize Bun streams
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/package.json` — exact pins `@agentclientprotocol/sdk@1.4.0` and `@deepseek-ai/dsh@0.1.2-rc.1`
+- `bun.lock` — recorded the resolved ACP/DSH graph
+- `packages/providers/src/community/deepseek/ndjson-stream.test.ts` — Bun loopback characterization via PassThrough + ndJsonStream
+
+**Acceptance criteria verified**:
+- [x] packages/providers/package.json adds exact dependencies @agentclientprotocol/sdk@1.4.0 and @deepseek-ai/dsh@0.1.2-rc.1 with no ^ or ~ ranges.
+- [x] bun.lock records the exact dependency graph and bun install --frozen-lockfile exits zero.
+- [x] Installed package versions are verified: @agentclientprotocol/sdk is 1.4.0 and @deepseek-ai/dsh is 0.1.2-rc.1.
+- [x] packages/providers/src/community/deepseek/ndjson-stream.test.ts characterizes loopback streaming using PassThrough, Writable.toWeb, Readable.toWeb, and dynamic import of ndJsonStream from @agentclientprotocol/sdk.
+- [x] bun test src/community/deepseek/ndjson-stream.test.ts passes when executed from packages/providers.
+
+**Learnings**:
+- `bun --filter @archon/providers add --exact ...` failed in this worktree; `cd packages/providers && bun add --exact ...` succeeded.
+- Characterization test is allowed to pass immediately (no production source besides deps).
+- ESLint ignores `**/*.test.ts`; scoped lint of the new test file only produces ignore warnings.
+
+---
+
+## 2026-09-07 — US-002: Define DeepSeek config, effort translation, and capabilities
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/types.ts` — added `DeepseekProviderDefaults` (no `maxTokens`)
+- `packages/providers/src/community/deepseek/config.ts` — defaults, `parseDeepseekConfig`, `resolveDeepseekEffort`
+- `packages/providers/src/community/deepseek/config.test.ts` — table-driven config, effort, and capability tests
+- `packages/providers/src/community/deepseek/capabilities.ts` — `DEEPSEEK_CAPABILITIES` (`as const satisfies ProviderCapabilities`)
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/types.ts exports DeepseekProviderDefaults containing optional model, baseUrl, providerRoute, profile ('acp'), permissionMode ('workspace-write' | 'danger-full-access'), effort, and nodeBin (omitting maxTokens).
+- [x] packages/providers/src/community/deepseek/capabilities.ts exports DEEPSEEK_CAPABILITIES with sessionResume: true, mcp: true, envInjection: true, effortControl: true, structuredOutput: 'best-effort', and all other axes false.
+- [x] packages/providers/src/community/deepseek/config.ts exports DEFAULT_DEEPSEEK_PROFILE ('acp'), DEFAULT_DEEPSEEK_PROVIDER_ROUTE ('deepseek-official'), DEFAULT_DEEPSEEK_PERMISSION_MODE ('workspace-write'), parseDeepseekConfig, and resolveDeepseekEffort.
+- [x] parseDeepseekConfig trims strings, requires http: or https: for baseUrl, rejects profile other than acp, restricts permissionMode to workspace-write or danger-full-access, rejects providerRoute without model, and rejects maxTokens !== undefined with an error naming the unsupported pinned ACP surface.
+- [x] resolveDeepseekEffort maps minimal->off, medium->low, xhigh->high, preserves off, low, high, max, and rejects unknown or blank values.
+- [x] packages/providers/src/community/deepseek/config.test.ts tests all config validation and effort mapping cases and passes via bun test src/community/deepseek/config.test.ts.
+
+**Learnings**:
+- `bun test src/community/deepseek/config.test.ts` from `packages/providers`: 13 pass, 0 fail.
+- Surgical edits to `packages/providers/src/types.ts` must keep the full 900+ line file; never write back a truncated read.
+- US-003 must replace only the `maxTokens` `Error` type with `DeepseekProviderError('deepseek_unsupported_config', ...)` and keep the same message.
+
+---
+
+## 2026-09-07 — US-003: Implement runtime resolution, child environment, permission policy, and typed errors
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/errors.ts` — `DeepseekErrorSubtype`, `DeepseekProviderError`, `redactDeepseekSecrets`, `toDeepseekErrorResult`
+- `packages/providers/src/community/deepseek/errors.test.ts` — subtype preservation, unknown→`deepseek_acp_error`, full-secret redaction, no synthesized usage
+- `packages/providers/src/community/deepseek/env.ts` — `buildDeepseekChildEnv` with request/config precedence
+- `packages/providers/src/community/deepseek/env.test.ts` — isolated env records (no `process.env` mutation)
+- `packages/providers/src/community/deepseek/permission.ts` — auto-cancel ACP permission requests
+- `packages/providers/src/community/deepseek/permission.test.ts` — cancelled outcome, no option id
+- `packages/providers/src/community/deepseek/node-resolver.ts` — Node precedence + bundled DSH `createRequire` / binary fail-closed
+- `packages/providers/src/community/deepseek/node-resolver.test.ts` — injectable facts for POSIX vs Windows
+- `packages/providers/src/community/deepseek/config.ts` — `maxTokens` throws `DeepseekProviderError('deepseek_unsupported_config', ...)`
+- `packages/providers/src/community/deepseek/config.test.ts` — asserts the typed subtype
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/errors.ts defines DeepseekErrorSubtype, DeepseekProviderError, redactDeepseekSecrets, and toDeepseekErrorResult.
+- [x] toDeepseekErrorResult returns { type: 'result', isError: true, errorSubtype, errors: [sanitizedMessage] } without synthesizing tokens, usage, cost, or session id, and redacts all occurrences of secrets.
+- [x] packages/providers/src/community/deepseek/config.ts updates maxTokens rejection to throw DeepseekProviderError with subtype deepseek_unsupported_config.
+- [x] packages/providers/src/community/deepseek/env.ts implements buildDeepseekChildEnv: request key beats ambient key, config baseUrl beats request and ambient DEEPSEEK_BASE_URL, sets DSH_PERMISSION_MODE, never sets DSH_PROVIDER_ROUTE, and throws deepseek_missing_api_key when key is empty or missing.
+- [x] packages/providers/src/community/deepseek/permission.ts implements answerDeepseekPermissionRequest returning exactly { outcome: { outcome: 'cancelled' } } without selecting an option id.
+- [x] packages/providers/src/community/deepseek/node-resolver.ts implements resolveDeepseekNodeBinary with precedence DEEPSEEK_NODE_BIN -> config nodeBin -> host process.execPath -> PATH (via injectable facts.findNodeOnPath; POSIX checks X_OK, Windows checks file existence).
+- [x] resolveBundledDshEntrypoint resolves @deepseek-ai/dsh/lib/bin.js via createRequire in source mode and throws deepseek_runtime_unavailable in binary mode (isBinary: true).
+- [x] Focused test files env.test.ts, permission.test.ts, errors.test.ts, and node-resolver.test.ts pass via bun test in packages/providers.
+
+**Learnings**:
+- `permission.ts` uses `import type` from `@agentclientprotocol/sdk` so ACP SDK values stay unevaluated (US-009 lazy-load gate).
+- PATH lookup must sit behind `facts.findNodeOnPath`; tests drive POSIX vs `win32` without `process.platform` or a shell.
+- Source-mode DSH resolve: `createRequire(import.meta.url).resolve('@deepseek-ai/dsh/lib/bin.js')`. Binary mode must throw before `createRequire()`.
+
+---
+
+## 2026-09-07 — US-004: Translate ACP session updates without fabricating usage
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/event-bridge.ts` — `createDeepseekEventState`, `mapDeepseekSessionUpdate`
+- `packages/providers/src/community/deepseek/event-bridge.test.ts` — fixture-driven SessionUpdate → MessageChunk mapping
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/event-bridge.ts exports createDeepseekEventState and mapDeepseekSessionUpdate(update: SessionUpdate, state: DeepseekEventState): MessageChunk[].
+- [x] agent_message_chunk maps to assistant chunk, agent_thought_chunk maps to thinking chunk, and non-text message content is ignored.
+- [x] tool_call emits tool chunk with name ?? title, toolCallId, and object rawInput (non-object wrapped in { rawInput: value }).
+- [x] tool_call_update preserves name and input during in-progress updates, extracts content or JSON-serialized rawOutput upon completion, and deletes stored state upon terminal update.
+- [x] Completed update maps to toolOutcome: 'success'; failed update maps to toolOutcome: 'error'.
+- [x] Tool result in pinned DSH structure ({ content: [{ type: 'content', content: { type: 'text', text: '...' } }] }) extracts the text string correctly.
+- [x] usage_update, plans, modes, config updates, session info, compaction, and user message updates emit zero chunks, never generating tokens, usageBreakdown, or cost.
+- [x] packages/providers/src/community/deepseek/event-bridge.test.ts passes via bun test src/community/deepseek/event-bridge.test.ts.
+
+**Learnings**:
+- Keep ACP SDK as `import type` in `event-bridge.ts` (value imports stay isolated to later `acp-client.ts`).
+- Tests construct fixtures with `satisfies SessionUpdate`; they do not need a dynamic ACP SDK value import.
+- `rawOutput` wins over display `content`; structured values go through `JSON.stringify`.
+
+---
+
+## 2026-09-07 — US-005: Validate and convert per-node MCP declarations
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/mcp.ts` — `buildDeepseekMcpServers` converts Archon MCP maps to ACP stdio/HTTP, resolves PATH, rejects SSE
+- `packages/providers/src/community/deepseek/mcp.test.ts` — stdio defaults, PATH lookup, HTTP headers, SSE/unknown/malformed, no mutation
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/mcp.ts exports buildDeepseekMcpServers(servers: Record<string, unknown>, env: Record<string, string>): McpServer[].
+- [x] Defaults omitted type to stdio; validates non-empty command, string args, and string env.
+- [x] Resolves bare stdio commands through supplied PATH using which or where; unresolved bare command throws deepseek_mcp_config_error naming server and command.
+- [x] Formats stdio output as { name, command: absolutePath, args, env: [{ name, value }] }.
+- [x] Validates HTTP transport requiring absolute http: or https: URL and converts headers to { name, value }[].
+- [x] Rejects SSE transport with deepseek_mcp_config_error stating pinned DSH ACP supports only stdio and Streamable HTTP.
+- [x] Rejects unknown transports, malformed objects, and blank names; does not mutate input objects.
+- [x] packages/providers/src/community/deepseek/mcp.test.ts passes via bun test src/community/deepseek/mcp.test.ts.
+
+**Learnings**:
+- Stdio ACP `McpServerStdio` has no `type` field; HTTP must include `type: 'http'`.
+- `execFileSync('which'|'where', [command], { env })` uses the supplied PATH; tests must include `/usr/bin` so `which` itself is findable.
+- PATH tests use a real temp executable; do not mutate `process.env`.
+
+---
+
+## 2026-09-07 — US-006: Implement async callback-to-generator queue
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/async-queue.ts` — `AsyncQueue<T>` FIFO with push/close/fail and a single waiter
+- `packages/providers/src/community/deepseek/async-queue.test.ts` — FIFO, waiter wakeup, drain-before-done/reject, idempotent terminal, no double-settle
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/async-queue.ts exports AsyncQueue<T> implementing AsyncIterable<T>.
+- [x] push(value: T) appends value in FIFO order, immediately resolving any awaiting reader.
+- [x] close() drains buffered values before completing with done: true.
+- [x] fail(error: unknown) drains buffered values before rejecting with the stored error.
+- [x] close() and fail() are idempotent; push() after terminal state throws.
+- [x] packages/providers/src/community/deepseek/async-queue.test.ts passes via bun test src/community/deepseek/async-queue.test.ts.
+
+**Learnings**:
+- `@typescript-eslint/prefer-promise-reject-errors` rejects `Promise.reject(unknown)` even when `fail(error: unknown)` is the public contract. Reject through `QueueWaiter.reject` so the stored reason identity is preserved.
+- Plan Task 5 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:660-722` (prd.md line numbers are stale).
+
+---
+
+## 2026-09-07 — US-007: Drive complete ACP turn lifecycle and process cleanup
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/acp-client.ts` — `driveDeepseekAcpTurn` + `runDeepseekAcpTurn` with handshake, resume fail-closed, abort cancel, close, and SIGTERM/SIGKILL reaping
+- `packages/providers/src/community/deepseek/acp-client.test.ts` — in-process fake ACP agent covering order, resume, config, streaming, tools, structured output, abort, spawn, and SIGKILL
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/acp-client.ts exports DeepseekAcpTurnInput, driveDeepseekAcpTurn, DeepseekProcessInput, DeepseekProcessDependencies, and runDeepseekAcpTurn.
+- [x] Uses fluent client({ name: 'archon-deepseek' }) API, auto-answering permission requests with answerDeepseekPermissionRequest() and queuing session update notifications via AsyncQueue.
+- [x] Requests initialize with PROTOCOL_VERSION; requires agentCapabilities to include resume and close, and requires http MCP capability if HTTP MCP servers are declared.
+- [x] Calls session/new for fresh turns and session/resume for resumed turns; rejects failed resume with deepseek_resume_failed without calling session/new.
+- [x] Sets model (configId: 'model', value: JSON.stringify([providerRoute, model])) and reasoning effort (configId: 'reasoning_effort') when configured.
+- [x] Augments outbound prompt with augmentPromptForJsonSchema when outputSchema is provided, and parses assistant transcript with tryParseStructuredOutput upon turn completion.
+- [x] Listens to AbortSignal, sends cancel via ctx.notify(methods.agent.session.cancel, ...), requests session/close, and emits local result chunk with stopReason: 'aborted'.
+- [x] Always requests session/close after every created or resumed session.
+- [x] runDeepseekAcpTurn spawns <node> <dshEntrypoint> --profile acp, binds stdio to ndJsonStream, caps stderr at 4096 characters, and reaps the child in finally via SIGTERM with SIGKILL escalation (terminateGraceMs default 2000ms, injectable 0ms).
+- [x] packages/providers/src/community/deepseek/acp-client.test.ts passes against in-process fake ACP agent via bun test src/community/deepseek/acp-client.test.ts.
+
+**Learnings**:
+- Fake `session/set_config_option` must return `{ configOptions: [] }` or ACP response validation fails.
+- Cancel via `notify()` should resolve an in-flight fake prompt hold so `.return()` / abort tests do not deadlock waiting on `connectWith`.
+- Injected FakeChild must emit `exit` synchronously from `kill()`; a microtask exit races `terminateGraceMs: 0` into an extra SIGKILL.
+
+---
+
+## 2026-09-07 — US-008: Implement DeepSeekProvider boundary with error-as-result semantics
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/provider.ts` — `DeepseekProvider` implementing `IAgentProvider` with injected runner/resolvers, lazy `acp-client` import, `withResumedOutcome`, and `toDeepseekErrorResult`
+- `packages/providers/src/community/deepseek/provider.test.ts` — injected-dependency coverage for abort, missing key, model/effort/env precedence, MCP merge/dedup/SSE, resume stamp/fail-closed, redaction, chunk order, and no fabricated usage
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/provider.ts implements IAgentProvider as DeepseekProvider.
+- [x] getType() returns 'deepseek' and getCapabilities() returns DEEPSEEK_CAPABILITIES.
+- [x] Supports injected DeepseekProviderDependencies (runTurn, resolveNodeBinary, resolveDshEntrypoint); in production, sendQuery() dynamically imports ./acp-client.
+- [x] Pre-aborted signal yields one deepseek_aborted error result without invoking preflight or spawning DSH.
+- [x] Preflight resolves options.model ?? config.model, options.nodeConfig?.effort ?? config.effort, and loads MCP passing merged { ...process.env, ...requestOptions.env }.
+- [x] Resumed turns wrap runner stream with withResumedOutcome to stamp resumed: true on the result chunk.
+- [x] Failed resume yields exactly one terminal deepseek_resume_failed error result and never retries.
+- [x] Outer try/catch converts all thrown errors via toDeepseekErrorResult redacting the resolved API key.
+- [x] Result chunks never synthesize tokens, usageBreakdown, or cost.
+- [x] packages/providers/src/community/deepseek/provider.test.ts passes via bun test src/community/deepseek/provider.test.ts.
+
+**Learnings**:
+- Type-only import of `DeepseekProcessInput` from `acp-client.ts` is erased at runtime; keep the value import as `await import('./acp-client')` after preflight.
+- `requestOptions?.nodeConfig?.mcp` does not narrow `requestOptions`; use `requestOptions?.env` when passing the MCP env source.
+- Duplicate `$VAR` expansions in one MCP file are pushed repeatedly by `loadMcpConfig`; dedup before the system warning.
+
+---
+
+## 2026-09-07 — US-009: Register provider, export public surface, and prove lazy loading and workflow selection
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/registration.ts` — idempotent `registerDeepseekProvider()` with `builtIn: false` and vendor `deepseek`
+- `packages/providers/src/community/deepseek/index.ts` — public barrel re-exports
+- `packages/providers/src/community/deepseek/provider-lazy-load.test.ts` — ACP SDK factory-count stays zero on import/instantiate
+- `packages/providers/src/registry.ts` — `registerCommunityProviders()` calls `registerDeepseekProvider()` before the e2e fake
+- `packages/providers/src/registry.test.ts` — aggregator presence/count plus metadata, capabilities, credentials, idempotence
+- `packages/providers/src/index.ts` — re-exports the public DeepSeek surface
+- `packages/providers/package.json` — `./community/deepseek` export and 12 isolated DeepSeek test invocations (lazy-load last)
+- `packages/workflows/src/loader.test.ts` — `provider: deepseek` parses after registration
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/registration.ts exports registerDeepseekProvider(), registering id 'deepseek', displayName 'DeepSeek Harness (community)', builtIn: false, and vendor 'deepseek'.
+- [x] packages/providers/src/registry.ts invokes registerDeepseekProvider() inside registerCommunityProviders().
+- [x] packages/providers/src/community/deepseek/index.ts and packages/providers/src/index.ts re-export DeepseekProvider, parseDeepseekConfig, registerDeepseekProvider, DEEPSEEK_CAPABILITIES, and DeepseekProviderDefaults.
+- [x] packages/providers/package.json exports ./community/deepseek and lists all 12 DeepSeek test files as explicit test script invocations, with provider-lazy-load.test.ts placed in an isolated final invocation.
+- [x] packages/providers/src/community/deepseek/provider-lazy-load.test.ts proves importing registration and instantiating DeepseekProvider evaluates @agentclientprotocol/sdk zero times.
+- [x] packages/workflows/src/loader.test.ts verifies a workflow with provider: deepseek passes parseWorkflowYaml() when registered.
+- [x] packages/providers/src/registry.test.ts asserts registration metadata, capabilities, credentials, and idempotence.
+- [x] Tests pass via bun test src/registry.test.ts, bun test src/community/deepseek/provider-lazy-load.test.ts in packages/providers, and bun test src/loader.test.ts in packages/workflows.
+
+**Learnings**:
+- Plan Task 8 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1004-1144` (prd.md line numbers are stale).
+- Do not use line-anchored patch tools on large files in this harness — `registry.test.ts` was truncated that way; prefer exact-string Python edits that assert original length.
+- `json.dumps` of `package.json` can stay a 3-line git diff if you mutate `exports`/`scripts` in place rather than rewriting unrelated keys.
+
+---
+
+## 2026-09-07 — US-010: Document DeepSeek provider and regenerate capability matrix
+
+**Status**: PASSED
+**Files changed**:
+- `scripts/generate-capability-matrix.ts` — DeepSeek MCP caveat for stdio/HTTP support and SSE fail-fast
+- `packages/docs-web/src/content/docs/reference/provider-capabilities.md` — regenerated; `deepseek` community column with MCP caveat
+- `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` — DeepSeek Harness section, best-effort row, usage table
+- `packages/docs-web/src/content/docs/reference/configuration.md` — defaultAssistant, DEEPSEEK_API_KEY/BASE_URL/NODE_BIN, config keys
+- `packages/docs-web/src/content/docs/guides/mcp-servers.md` — DeepSeek stdio/HTTP, PATH resolution, SSE rejection, no MCP-only via allowed_tools
+
+**Acceptance criteria verified**:
+- [x] scripts/generate-capability-matrix.ts adds caveat for deepseek MCP describing stdio and Streamable HTTP support and fast-failing SSE.
+- [x] bun run generate:capability-matrix updates packages/docs-web/src/content/docs/reference/provider-capabilities.md and bun run check:capability-matrix passes with zero drift.
+- [x] packages/docs-web/src/content/docs/getting-started/ai-assistants.md documents DeepSeek Harness community provider, credentials, baseUrl override, supported keys, safe permission defaults, maxTokens rejection, lack of v1 usage tokens, and YAML example without invented model ids.
+- [x] packages/docs-web/src/content/docs/reference/configuration.md documents defaultAssistant, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, and DEEPSEEK_NODE_BIN.
+- [x] packages/docs-web/src/content/docs/guides/mcp-servers.md documents DeepSeek stdio and HTTP support, environment expansion, command resolution via PATH, and SSE rejection.
+- [x] bun --filter @archon/docs-web type-check passes.
+
+**Learnings**:
+- Plan Task 9 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1146-1240` (prd.md line numbers are stale).
+- StrReplace truncated `ai-assistants.md` (1006 → 302 lines). Restored from git and applied Python exact-string edits with a min_delta assertion.
+- Generated matrix: 9 providers; DeepSeek MCP cell is ✅³ with the stdio/HTTP/SSE caveat.
+
+---
+
+## 2026-09-07 — US-011: Add explicit opt-in ACP live handshake spike
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/acp-handshake-spike.ts` — gated live handshake; skip unless DEEPSEEK_LIVE_TEST=1
+- `packages/providers/package.json` — `spike:deepseek:acp` script omitted from test and validate
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/acp-handshake-spike.ts implements live handshake requiring DEEPSEEK_LIVE_TEST=1, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, and DEEPSEEK_LIVE_MODEL.
+- [x] When DEEPSEEK_LIVE_TEST is not set, script prints a concise skipped message and exits with status 0.
+- [x] When enabled, executes fresh turn ('Reply with exactly pong.') and resumed turn ('Reply with exactly pong again.') verifying non-error results and resumed: true.
+- [x] Never prints secret keys, URLs, model names, prompts, stream chunks, or stderr.
+- [x] packages/providers/package.json adds spike:deepseek:acp script (omitted from test and validate).
+- [x] bun run spike:deepseek:acp exits zero with skipped message.
+
+**Learnings**:
+- Plan Task 10 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1242-1296` (prd.md line numbers are stale).
+- Live billed path was not authorized in this iteration; skip path is the AC gate. Record live as not run rather than claiming it passed.
+- Child DSH stderr is piped (`stdio: pipe`) and must stay unprinted in the spike even after redaction.
+
+---
+
+## 2026-09-07 — US-012: Final repository validation and pattern audit
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/acp-client.ts` — Node-to-Web stream casts go through `unknown` so scripts/tsconfig.json DOM lib type-check passes
+
+**Acceptance criteria verified**:
+- [x] All DeepSeek unit test files and registry.test.ts pass in packages/providers.
+- [x] bun run test and bun run type-check pass in packages/providers.
+- [x] bun test src/loader.test.ts and bun run type-check pass in packages/workflows.
+- [x] bun run check:capability-matrix passes.
+- [x] bun run validate passes from the repository root with zero errors and zero lint warnings.
+- [x] Pattern audit passes: no runtime matches for DSH_PROVIDER_ROUTE, max_tokens, or deepseek-v3; ACP value imports restricted to acp-client.ts; cancel sent only via notify(); no fabricated tokens or usage in results.
+- [x] git status and git diff confirm no unexpected file changes outside the documented file map.
+
+**Learnings**:
+- Plan Task 11 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1298-1393` (prd.md line numbers are stale).
+- Package `bun run type-check` is not a substitute for root validate: scripts/tsconfig.json adds DOM and pulls DeepSeek via `@archon/providers`.
+- First-command matches for DSH_PROVIDER_ROUTE / max_tokens / deepseek-v3 are comments and "do not" docs, not runtime writes.
+- Live billed spike remains not run (US-011).
+
+---

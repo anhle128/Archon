@@ -159,3 +159,11 @@ export {
   isExecutableFile as ompIsExecutableFile,
   resolveFromPath as ompResolveFromPath,
 } from './community/omp/binary-resolver';
+
+export {
+  DEEPSEEK_CAPABILITIES,
+  DeepseekProvider,
+  parseDeepseekConfig,
+  registerDeepseekProvider,
+  type DeepseekProviderDefaults,
+} from './community/deepseek';

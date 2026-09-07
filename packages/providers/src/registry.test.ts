@@ -16,6 +16,8 @@ import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerQoderCliProvider } from './community/qodercli/registration';
 import { registerOmpProvider } from './community/omp/registration';
+import { registerDeepseekProvider } from './community/deepseek/registration';
+import { DEEPSEEK_CAPABILITIES } from './community/deepseek/capabilities';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -307,6 +309,7 @@ describe('registry', () => {
       expect(isRegisteredProvider('copilot')).toBe(true);
       expect(isRegisteredProvider('qodercli')).toBe(true);
       expect(isRegisteredProvider('omp')).toBe(true);
+      expect(isRegisteredProvider('deepseek')).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -317,11 +320,13 @@ describe('registry', () => {
       const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
       const qoderCliCount = getRegisteredProviders().filter(p => p.id === 'qodercli').length;
       const ompCount = getRegisteredProviders().filter(p => p.id === 'omp').length;
+      const deepseekCount = getRegisteredProviders().filter(p => p.id === 'deepseek').length;
       expect(opencodeCount).toBe(1);
       expect(piCount).toBe(1);
       expect(copilotCount).toBe(1);
       expect(qoderCliCount).toBe(1);
       expect(ompCount).toBe(1);
+      expect(deepseekCount).toBe(1);
     });
   });
 
@@ -555,6 +560,30 @@ describe('registry', () => {
       registerOmpProvider();
       expect(() => registerOmpProvider()).not.toThrow();
       expect(getRegisteredProviders().filter(provider => provider.id === 'omp')).toHaveLength(1);
+    });
+  });
+
+  describe('registerDeepseekProvider (community provider)', () => {
+    test('registers deepseek with community metadata, credentials, and capabilities', () => {
+      registerDeepseekProvider();
+      expect(getRegistration('deepseek')).toMatchObject({
+        id: 'deepseek',
+        displayName: 'DeepSeek Harness (community)',
+        builtIn: false,
+        credentials: {
+          kind: 'static',
+          specs: [{ vendor: 'deepseek', displayName: 'DeepSeek', kinds: ['api_key'] }],
+        },
+      });
+      expect(getProviderCapabilities('deepseek')).toEqual(DEEPSEEK_CAPABILITIES);
+    });
+
+    test('is idempotent', () => {
+      registerDeepseekProvider();
+      expect(() => registerDeepseekProvider()).not.toThrow();
+      expect(getRegisteredProviders().filter(provider => provider.id === 'deepseek')).toHaveLength(
+        1
+      );
     });
   });
 });

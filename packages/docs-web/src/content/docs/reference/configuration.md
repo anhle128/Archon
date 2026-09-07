@@ -56,7 +56,7 @@ Create `~/.archon/config.yaml` for user-wide preferences:
 
 ```yaml
 # Default AI assistant
-defaultAssistant: claude # must match a registered provider (e.g. claude, codex, opencode, pi, copilot, qodercli, omp)
+defaultAssistant: claude # must match a registered provider (e.g. claude, codex, opencode, pi, copilot, qodercli, omp, deepseek)
 
 # Assistant defaults
 assistants:
@@ -446,7 +446,7 @@ Environment variables override all other configuration. They are organized by ca
 | `ARCHON_PUBLIC_URL` | Public HTTP or HTTPS Archon web origin for non-Plannotator approval callback review links; Plannotator approval callbacks use the live `reviewUrl` from the review session. | -- |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `opencode`, `pi`, `copilot`, `qodercli`, or `omp`. | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `opencode`, `pi`, `copilot`, `qodercli`, `omp`, or `deepseek`. | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
@@ -489,6 +489,21 @@ The OMP provider reads `assistants.omp.{model, modelReasoningEffort, ompBinaryPa
 `OMP_BIN_PATH` overrides `ompBinaryPath`.
 Authentication and upstream model configuration remain in OMP.
 See the [AI Assistants guide](/getting-started/ai-assistants/#omp-cli-community-provider) for setup and security behavior.
+
+### AI Providers -- DeepSeek Harness (community)
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `DEEPSEEK_API_KEY` | DashScope API key for the DeepSeek Harness provider. Per-user vendor `deepseek` credentials take precedence for that user's runs. | -- |
+| `DEEPSEEK_BASE_URL` | DashScope-compatible base URL. Overridden by `assistants.deepseek.baseUrl`. Request env beats ambient when the config key is unset. | -- |
+| `DEEPSEEK_NODE_BIN` | Absolute path to a Node.js executable used to spawn DSH. Highest precedence, then `assistants.deepseek.nodeBin`, then Node-host `process.execPath`, then `PATH`. | -- |
+
+Supported `assistants.deepseek` keys: `model`, `baseUrl`, `providerRoute`, `profile`, `permissionMode`, `effort`, and `nodeBin`.
+`providerRoute` defaults to `deepseek-official`; `profile` is fixed to `acp`; `permissionMode` defaults to `workspace-write`.
+Config `baseUrl` beats request and ambient `DEEPSEEK_BASE_URL`. Request `DEEPSEEK_API_KEY` beats ambient.
+Do not set `DSH_PROVIDER_ROUTE`; the provider never writes it. `maxTokens` is not a supported key and is rejected at parse time.
+The Web config API exposes no DeepSeek fields — set these values in `~/.archon/config.yaml` or `.archon/config.yaml`.
+See the [AI Assistants guide](/getting-started/ai-assistants/#deepseek-harness-community-provider) for setup.
 
 ### Platform Adapters -- Slack
 

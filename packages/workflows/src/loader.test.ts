@@ -29,7 +29,12 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
-import { registerBuiltinProviders, registerOmpProvider, clearRegistry } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerOmpProvider,
+  registerDeepseekProvider,
+  clearRegistry,
+} from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 registerOmpProvider();
@@ -645,6 +650,26 @@ nodes:
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].errorType).toBe('validation_error');
       expect(result.errors[0].error).toContain("Unknown provider 'claud'");
+    });
+
+    it('should accept provider: deepseek when the community provider is registered', () => {
+      registerDeepseekProvider();
+      try {
+        const { workflow } = parseWorkflowYaml(`name: deepseek-provider
+description: DeepSeek provider selection
+provider: deepseek
+nodes:
+  - id: run
+    provider: deepseek
+    prompt: hello
+`);
+        expect(workflow.provider).toBe('deepseek');
+        expect(workflow.nodes[0].provider).toBe('deepseek');
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+        registerOmpProvider();
+      }
     });
 
     it('should accept any model string with a known provider (SDK validates at run time)', () => {

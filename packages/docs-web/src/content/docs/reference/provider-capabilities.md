@@ -33,33 +33,35 @@ per-node YAML field for that provider; a ❌ means the field is accepted but ign
 - `copilot` — Copilot (GitHub) *(community provider)*
 - `qodercli` — Qoder CLI *(community provider)*
 - `omp` — OMP CLI *(community provider)*
+- `deepseek` — DeepSeek Harness (community) *(community provider)*
 
 ## Capabilities
 
-| Capability | `claude` | `codex` | `grok` | `opencode` | `pi` | `copilot` | `qodercli` | `omp` |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ |
-| Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Skills (`skills:`) | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ | ✅ |
-| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅ | ✅² | ❌ | ✅ | ❌ | ❌ |
-| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅¹ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | **enforced** | best-effort | best-effort | best-effort | best-effort |
-| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Effort control (`effort`) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Thinking control (`thinking`) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ |
-| Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| In-process native tools | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
-| Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| AskHuman mid-turn questions | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Capability | `claude` | `codex` | `grok` | `opencode` | `pi` | `copilot` | `qodercli` | `omp` | `deepseek` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Session resume | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅³ |
+| Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Skills (`skills:`) | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ | ✅ | ❌ |
+| Inline sub-agents (`agents:`) | ✅ | ❌ | ✅ | ✅² | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅¹ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | **enforced** | best-effort | best-effort | best-effort | best-effort | best-effort |
+| Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Effort control (`effort`) | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Thinking control (`thinking`) | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| In-process native tools | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| AskHuman mid-turn questions | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ## Caveats
 
 - ¹ `grok` — Tool restrictions (`allowed_tools`/`denied_tools`) — Uses Grok native tool ids. An empty `allowed_tools: []` fails fast because the CLI interprets an empty allowlist as unset (full access).
 - ² `opencode` — Inline sub-agents (`agents:`) — Config-file-based agent selection (named agents from `opencode.json`) with per-call model/tools overrides — not inline sub-agent definitions.
+- ³ `deepseek` — MCP servers (`mcp:`) — Pinned DeepSeek Harness ACP supports stdio and Streamable HTTP MCP servers; SSE declarations fail fast instead of being ignored.
 
 ## Legend
 
