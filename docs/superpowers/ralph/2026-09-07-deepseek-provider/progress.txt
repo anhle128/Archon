@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### ACP connectWith plus queue streaming
+- **Where**: `packages/providers/src/community/deepseek/acp-client.ts`
+- **Pattern**: Start `client({ name: 'archon-deepseek' }).connectWith(...)` without awaiting. Pipe success to `queue.close()` and failure to `queue.fail()`, then `for await` the queue so session updates are readable before prompt settlement. Cancel with `ctx.notify(methods.agent.session.cancel)` — never `request()`. Wrap resume failures as `deepseek_resume_failed` before the outer `deepseek_protocol_error` catch. Fake `SetSessionConfigOption` handlers must return `{ configOptions: [] }`. Injected FakeChild `kill()` must emit `exit` synchronously so `terminateGraceMs: 0` does not SIGKILL a child that already honored SIGTERM.
+- **Example**: `driveDeepseekAcpTurn(agentApp, input)` / `runDeepseekAcpTurn(processInput, { spawn, terminateGraceMs: 0 })`
+
 ### AsyncQueue single waiter and one terminal
 - **Where**: `packages/providers/src/community/deepseek/async-queue.ts`
 - **Pattern**: One `QueueWaiter` slot and one `closed | failed` terminal. `push` resolves a waiting reader immediately; otherwise enqueue. `close`/`fail` drain the buffer before `done: true` or reject, and are idempotent. `push` after terminal throws. Do not `Promise.reject(unknown)` — `@typescript-eslint/prefer-promise-reject-errors` fails; reject through `QueueWaiter.reject` so `fail(error: unknown)` keeps identity.
@@ -201,5 +206,31 @@
 **Learnings**:
 - `@typescript-eslint/prefer-promise-reject-errors` rejects `Promise.reject(unknown)` even when `fail(error: unknown)` is the public contract. Reject through `QueueWaiter.reject` so the stored reason identity is preserved.
 - Plan Task 5 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:660-722` (prd.md line numbers are stale).
+
+---
+
+## 2026-09-07 — US-007: Drive complete ACP turn lifecycle and process cleanup
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/acp-client.ts` — `driveDeepseekAcpTurn` + `runDeepseekAcpTurn` with handshake, resume fail-closed, abort cancel, close, and SIGTERM/SIGKILL reaping
+- `packages/providers/src/community/deepseek/acp-client.test.ts` — in-process fake ACP agent covering order, resume, config, streaming, tools, structured output, abort, spawn, and SIGKILL
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/acp-client.ts exports DeepseekAcpTurnInput, driveDeepseekAcpTurn, DeepseekProcessInput, DeepseekProcessDependencies, and runDeepseekAcpTurn.
+- [x] Uses fluent client({ name: 'archon-deepseek' }) API, auto-answering permission requests with answerDeepseekPermissionRequest() and queuing session update notifications via AsyncQueue.
+- [x] Requests initialize with PROTOCOL_VERSION; requires agentCapabilities to include resume and close, and requires http MCP capability if HTTP MCP servers are declared.
+- [x] Calls session/new for fresh turns and session/resume for resumed turns; rejects failed resume with deepseek_resume_failed without calling session/new.
+- [x] Sets model (configId: 'model', value: JSON.stringify([providerRoute, model])) and reasoning effort (configId: 'reasoning_effort') when configured.
+- [x] Augments outbound prompt with augmentPromptForJsonSchema when outputSchema is provided, and parses assistant transcript with tryParseStructuredOutput upon turn completion.
+- [x] Listens to AbortSignal, sends cancel via ctx.notify(methods.agent.session.cancel, ...), requests session/close, and emits local result chunk with stopReason: 'aborted'.
+- [x] Always requests session/close after every created or resumed session.
+- [x] runDeepseekAcpTurn spawns <node> <dshEntrypoint> --profile acp, binds stdio to ndJsonStream, caps stderr at 4096 characters, and reaps the child in finally via SIGTERM with SIGKILL escalation (terminateGraceMs default 2000ms, injectable 0ms).
+- [x] packages/providers/src/community/deepseek/acp-client.test.ts passes against in-process fake ACP agent via bun test src/community/deepseek/acp-client.test.ts.
+
+**Learnings**:
+- Fake `session/set_config_option` must return `{ configOptions: [] }` or ACP response validation fails.
+- Cancel via `notify()` should resolve an in-flight fake prompt hold so `.return()` / abort tests do not deadlock waiting on `connectWith`.
+- Injected FakeChild must emit `exit` synchronously from `kill()`; a microtask exit races `terminateGraceMs: 0` into an extra SIGKILL.
 
 ---
