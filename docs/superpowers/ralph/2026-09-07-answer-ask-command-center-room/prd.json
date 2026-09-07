@@ -16,8 +16,8 @@
       "technicalNotes": "Follow plan Task 1 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:531-760). Modify packages/web/src/experiments/console/skills/runs.ts and runs.node-messages.test.ts; create runs.ask.test.ts.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/web/src/experiments/console/skills/runs.ts, runs.node-messages.test.ts, runs.ask.test.ts."
     },
     {
       "id": "US-002",
@@ -37,8 +37,8 @@
         "US-001"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts, parse-ask-envelope.test.ts."
     },
     {
       "id": "US-003",
@@ -56,8 +56,8 @@
         "US-001"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts, select-visible-node-ask-interactions.test.ts."
     },
     {
       "id": "US-004",
@@ -75,8 +75,8 @@
         "US-001"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/experiments/console/components/ask/ask-answer-controller.ts, ask-answer-controller.test.ts."
     },
     {
       "id": "US-005",
@@ -96,8 +96,8 @@
         "US-004"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/experiments/console/components/ask/ask-card-presentation.ts, ask-card-presentation.test.ts."
     },
     {
       "id": "US-006",
@@ -116,8 +116,8 @@
         "US-001"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: awaiting-chrome.ts, awaiting-chrome.test.ts, inspect-status.ts, inspect-status.test.ts, console-inspect-selection.ts, console-inspect-selection.test.ts, build-console-log-entries.test.ts, build-run-graph-input.test.ts, NodeDivider.tsx."
     },
     {
       "id": "US-007",
@@ -134,8 +134,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/experiments/console/components/NodeDivider.tsx, NodeDivider.test.tsx, RunGraphPanel.tsx, RunGraphPanel.test.tsx."
     },
     {
       "id": "US-008",
@@ -147,7 +147,7 @@
         "Root form has aria-label='question from agent, N questions', border-warning bg-surface-elevated classes, header '${agentDisplayName} is asking', and meta row showing nodeId and elapsed duration via formatDurationMs.",
         "Starter pending card renders Submit (enabled only when isAskDraftValid is true) and Decline (opens native dialog with title 'Decline this ask?' and description 'The agent will be told you declined').",
         "Non-starter pending card renders disabled controls, omits buttons, and shows 'Waiting for ${starterDisplayName ?? 'the run starter'} to answer'.",
-        "Resolved states display question-labelled summaries, semantic <time> timestamps, 'Answered · by you' (starter only) / 'Answered' (teammate), 'Declined', 'Already answered' (409), and 'Resume failed — node failed; your answer is preserved below'.",
+        "Resolved states display question-labelled summaries, semantic <time> timestamps, 'Answered \u00b7 by you' (starter only) / 'Answered' (teammate), 'Declined', 'Already answered' (409), and 'Resume failed \u2014 node failed; your answer is preserved below'.",
         "ConsoleInvalidAskCard renders non-interactive role='alert' with 'Invalid Ask payload' and raw payload disclosure.",
         "Unit tests in packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx pass with no React warnings."
       ],
@@ -158,8 +158,8 @@
         "US-005"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/src/experiments/console/lib/format.ts, format.test.ts, components/ask/ConsoleAskCard.tsx, ConsoleAskCard.test.tsx."
     },
     {
       "id": "US-009",
@@ -179,8 +179,8 @@
         "US-006"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx, ConsoleAskChrome.test.tsx."
     },
     {
       "id": "US-010",
@@ -204,8 +204,8 @@
         "US-008"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx, ConsoleNodeRoom.test.tsx, ConsoleInspectPane.tsx, ConsoleInspectPane.test.tsx."
     },
     {
       "id": "US-011",
@@ -231,8 +231,8 @@
         "US-010"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/web/src/experiments/console/components/RunDetailHeader.tsx, RunDetailHeader.test.tsx, routes/RunDetailPage.tsx, routes/RunDetailPage.test.tsx, components/ConsoleInspectPane.tsx."
     },
     {
       "id": "US-012",
@@ -250,8 +250,8 @@
         "US-011"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/web/src/experiments/console/console-isolation.test.ts, packages/web/src/experiments/console/README.md, _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml."
     }
   ]
 }

@@ -1,0 +1,358 @@
+## Codebase Patterns
+
+### Final isolation guard asserts console-owned Ask imports
+- **Where**: `packages/web/src/experiments/console/console-isolation.test.ts`
+- **Pattern**: Keep the NFR4 import scan. Replace premature HITL identifier bans with `Ask UI stays console-owned and out of the conversation composer`: compact() import specs (`from'./ask/ConsoleAskCard'`, `from'../components/ask/ConsoleAskChrome'`), ban `components/workflows` and `/ChatComposer` on room/pane/page, and scan ChatComposer/ChatPage for HITL identifiers.
+- **Example**: `expect(room).toContain("from'./ask/ConsoleAskCard'")`
+
+### RunDetailPage owns Ask mutation with runId-keyed state
+- **Where**: `packages/web/src/experiments/console/routes/RunDetailPage.tsx`, `components/ConsoleInspectPane.tsx`
+- **Pattern**: Keep `askActions` as `{ runId, states }` and ignore stale states when the route id changes. Invalidate `K.run(runId)` plus `K.nodeMessages(runId, selectedNodeId)` via a ref. Gate `a`/`r` with `hasDeclaredGate = isPaused && detail?.run.approval != null`. ConsoleInspectPane Ask props are required (`pendingInteractions`, `viewerIsStarter`, `starterDisplayName`, `actionStates`, `onSubmitAsk`). Header copy is `isPaused && askAwaiting ? 'Awaiting input' : statusLabel[run.status]`.
+- **Example**: `when: (): boolean => hasDeclaredGate`
+
+### ConsoleNodeRoom Ask placement uses generic transcript slots
+- **Where**: `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx`, `ConsoleInspectPane.tsx`
+- **Pattern**: AgentTranscript stays HITL-free with `renderAfterMessage` / `renderAtEnd`. Compute visibleAsks only when `resolution.kind === 'agent'`; split anchored vs unanchored by visible tool ids; on transcript error treat allMessages as `[]` so pending Asks stay unanchored after Retry. Pane Ask props are optional this task (`[]` / `false` / `null` / `{}` / async no-op) and pass through unchanged. Room tests need `[...FIXTURE]` because `WorkflowNodeMessagesResponse.messages` is mutable.
+- **Example**: `renderAtEnd={unanchoredAsks.length === 0 ? undefined : unanchoredAsks.map(renderAskCard)}`
+
+### ConsoleAskChrome is a Story 6.5 copy with layout classes and Run status
+- **Where**: `packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx`
+- **Pattern**: Copy `WorkflowAskChrome`. Swap types to `Run['status']` and `WorkflowNodeState` from `../../skills/runs`. Rename the export/props. Keep error-first CAP-7 banner, awaiting pill, callback order (`onRequestGraphView` then `onSelectAwaitingNode`), and warning/error classes. Prepend `mx-6 mt-3 w-fit` on both roots so the chrome sits under `RunDetailHeader` without a wrapper on null. Hookless tests can call the component as a function and use `renderToStaticMarkup`; add the declared-gate `null` cases the Story 6.5 suite omitted.
+- **Example**: `className="mx-6 mt-3 w-fit rounded-full border border-warning bg-warning/10 ..."`
+
+### Console Ask card tests use happy-dom createRoot, not renderToStaticMarkup
+- **Where**: `packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx`, `packages/web/src/experiments/console/test/install-happy-dom.ts`
+- **Pattern**: `NODE_ENV=development` + React 19 development JSX makes `renderToStaticMarkup` throw `dispatcher.getOwner is not a function`. Use `installHappyDom`/`restoreHappyDom` and `createRoot`, then assert `host.innerHTML` / `textContent`. Alias PascalCase component imports to camelCase (`askCard`) for `@typescript-eslint/naming-convention`. Native decline uses `<dialog role="dialog" aria-modal="true">` and `showModal()`/`close()`; assert `dialog.open`.
+- **Example**: `harness.root.render(createElement(askCard, cardProps(overrides)))`
+
+### Awaiting warning chrome uses `--warning` tokens, not `--running`
+- **Where**: `packages/web/src/experiments/console/components/NodeDivider.tsx`, `RunGraphPanel.tsx`
+- **Pattern**: Divider `STATUS_COLOR.awaiting` is `text-warning`. Graph `InspectCardStatus` includes `'awaiting'` with warning `color-mix` fill/border, `statusGlyphClass` `text-warning`, and `animate-[pulse_2.4s_ease-in-out_infinite] motion-reduce:animate-none` (running stays `animate-pulse`). Labels still go through `inspectStatusLabel`. Keep existing `routeLoopStates()` fixtures independent; set `review` to `awaiting` only in the warning-chrome test.
+- **Example**: `status === 'awaiting' ? 'animate-[pulse_2.4s_ease-in-out_infinite] motion-reduce:animate-none' : ''`
+
+### Expanding InspectStatus to awaiting requires NodeDivider to consume InspectStatus
+- **Where**: `packages/web/src/experiments/console/components/NodeDivider.tsx`, `RunStream.tsx:457`
+- **Pattern**: `buildConsoleLogEntries` types `displayStatus` as `InspectStatus`. `RunStream` passes that into `NodeDivider` without mapping. Adding `'awaiting'` to `InspectStatus` is a type error until `NodeDividerProps.status` is `InspectStatus` and `STATUS_COLOR` has an `awaiting` key. Labels go through `inspectStatusLabel`, not a local identity map. Warning tokens are `text-warning` / `--warning` in NodeDivider and RunGraphPanel (US-007).
+- **Example**: `status: InspectStatus` and `{inspectStatusLabel(status)}`
+
+### Console Ask presentation swaps WorkflowNodeStateResponse for WorkflowNodeState
+- **Where**: `packages/web/src/experiments/console/components/ask/ask-card-presentation.ts`
+- **Pattern**: Copy Story 6.5 `resolveAskCardPresentation`. Import types from `../../skills/runs` and `AskActionState` from `./ask-answer-controller`. Replace every `WorkflowNodeStateResponse` with `WorkflowNodeState`. Tests copy the Story 6.5 view-state table unchanged besides the skills/runs import.
+- **Example**: `import type { AskAnswerBody, PendingInteraction, WorkflowNodeState } from '../../skills/runs';`
+
+### Console Ask controller uses HttpError for 409, not getApiErrorStatus
+- **Where**: `packages/web/src/experiments/console/components/ask/ask-answer-controller.ts`
+- **Pattern**: Copy Story 6.5 `createAskAnswerController`. Swap API types to `../../skills/runs` and import `HttpError` from `../../lib/http`. Replace `getApiErrorStatus(error) === 409` with `error instanceof HttpError && error.status === 409`. Tests copy the Story 6.5 suite except the 409 fixture is `new HttpError(409, '/ask', 'taken')`.
+- **Example**: `if (error instanceof HttpError && error.status === 409)`
+
+### Console Ask selector copies Story 6.5 helpers without merge types
+- **Where**: `packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts`
+- **Pattern**: Copy `collectToolIds`, `sortedBySeq`, `visibleReachesTranscriptTail`, and `selectVisibleNodeAskInteractions` from `packages/web/src/components/workflows/merge-agent-room-items.ts`. Do not copy or export `AgentRoomItem` / `mergeAgentRoomItems`. Replace every `WorkflowNodeMessageResponse` annotation with `WorkflowNodeMessage` from `../../skills/runs`.
+- **Example**: `import type { PendingInteraction, WorkflowNodeMessage } from '../../skills/runs';`
+
+### Console Ask parser is a Story 6.5 copy with one import swap
+- **Where**: `packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts`
+- **Pattern**: Duplicate legacy `packages/web/src/components/workflows/parse-ask-envelope.ts` byte-for-byte. The only source change is `import type { AskAnswerBody } from '../../skills/runs'` instead of `@/lib/api`. Tests copy the Story 6.5 behavioral table unchanged. No Zod, no `components/workflows` imports.
+- **Example**: `import type { AskAnswerBody } from '../../skills/runs';`
+
+### Console run skills re-export generated OpenAPI types
+- **Where**: `packages/web/src/experiments/console/skills/runs.ts`
+- **Pattern**: Console code never imports `@/lib/api` functions. Re-export schema types from `@/lib/api.generated` (`components['schemas'][...]`) and call APIs through console `requestJson`. Fetch spies use `spyOn(globalThis, 'fetch')` plus `ensureWindow()` when `HttpError` builds a URL from `window.location.origin`.
+- **Example**: `export type PendingInteraction = components['schemas']['PendingInteraction']` and `answerAskHuman` POST via `requestJson`.
+
+### GET-run Ask mapping treats non-string metadata.error as null
+- **Where**: `packages/web/src/experiments/console/skills/runs.ts` `getRun`
+- **Pattern**: `runError` is `typeof metadataError === 'string' ? metadataError : null`. `viewerIsStarter` uses `=== true` so a missing runtime field is false; keep that comparison even though OpenAPI types it as boolean, with the eslint-disable for `no-unnecessary-boolean-literal-compare`.
+- **Example**: `{ unsafe: true }` metadata error → `runError: null`.
+
+---
+
+## 2026-09-07 — US-001: Extend the typed console Ask data boundary
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/skills/runs.ts` — re-export Ask types; map pendingInteractions, viewerIsStarter, starterDisplayName, runError; add answerAskHuman
+- `packages/web/src/experiments/console/skills/runs.node-messages.test.ts` — GET-run retention test for Ask fields and non-string metadata error
+- `packages/web/src/experiments/console/skills/runs.ask.test.ts` — POST URL encoding, JSON headers/body, and 409 HttpError
+
+**Acceptance criteria verified**:
+- [x] packages/web/src/experiments/console/skills/runs.ts re-exports generated schema types: PendingInteraction, AskAnswerBody, and WorkflowRunActionResponse.
+- [x] ConsoleRunDetail interface adds pendingInteractions: PendingInteraction[], viewerIsStarter: boolean, starterDisplayName: string | null, and runError: string | null.
+- [x] getRun maps pendingInteractions to res.pending_interactions ?? [], viewerIsStarter to res.viewer_is_starter === true, starterDisplayName to res.starter_display_name, and runError to string res.run.metadata.error or null.
+- [x] answerAskHuman(runId, requestId, body) issues POST to /api/workflows/runs/${encodeURIComponent(runId)}/ask/${encodeURIComponent(requestId)}/answer with JSON content-type and stringified body using console requestJson.
+- [x] Unit test in packages/web/src/experiments/console/skills/runs.node-messages.test.ts asserts retention of pendingInteractions, viewerIsStarter, starterDisplayName, and string runError.
+- [x] Unit tests in packages/web/src/experiments/console/skills/runs.ask.test.ts assert URL encoding, JSON headers, payload forwarding, and rejection handling, passing via bun test src/experiments/console/skills/runs.ask.test.ts.
+
+**Learnings**:
+- `bun --filter @archon/web type-check` needs a prior `bun install` in a fresh worktree (`bun-types` / `vite/client` missing otherwise).
+- ESLint ignores console `*.test.ts` unless `--no-warn-ignored`; lint-staged uses that flag. The locked `viewer_is_starter === true` mapping needs an eslint-disable on `runs.ts`.
+- Fetch tests that expect `HttpError` must call `ensureWindow()` because `requestJson` uses `new URL(url, window.location.origin)`.
+
+---
+
+## 2026-09-07 — US-002: Duplicate the Ask envelope parser
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts` — Story 6.5 parser copy; AskAnswerBody from console skills/runs
+- `packages/web/src/experiments/console/components/ask/parse-ask-envelope.test.ts` — Story 6.5 behavioral table copy
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts exporting AskQuestion, AskDraftValue, AskDraft, parseAskEnvelope, parseAskAnswer, isQuestionValid, isAskDraftValid, and draftToAnswerBody.
+- [x] parseAskEnvelope returns AskQuestion[] in original envelope order for valid envelopes; returns null for non-objects, missing/empty questions, invalid types, missing prompt/selection/options, non-boolean allowOther, or duplicate question IDs.
+- [x] isQuestionValid and isAskDraftValid enforce single-select (valid option or non-empty trimmed other if allowOther) and multi-select (non-empty array of valid options/trimmed other) rules, requiring all questions in the draft to be valid.
+- [x] draftToAnswerBody converts a complete valid draft into { answers: Array<{ questionId: string; value: string | string[] }> } in envelope order.
+- [x] parseAskAnswer decodes strictly either { decline: true } or valid answers array with non-empty questionId and string/string[] values, returning null for invalid or extra-keyed objects.
+- [x] Imports in parse-ask-envelope.ts use console types from ../../skills/runs and do not import from components/workflows or Zod.
+- [x] Unit tests in packages/web/src/experiments/console/components/ask/parse-ask-envelope.test.ts pass via bun test src/experiments/console/components/ask/parse-ask-envelope.test.ts.
+
+**Learnings**:
+- Copy the legacy parser and test wholesale; changing only the AskAnswerBody import satisfies NFR4 without re-deriving validation rules.
+- ESLint ignores `**/*.test.ts`; lint the implementation file directly. lint-staged uses `--no-warn-ignored` so both files still get eslint+prettier on commit.
+
+---
+
+## 2026-09-07 — US-003: Add loop-safe Ask selection
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts` — Story 6.5 selector copy; types from console skills/runs; no mergeAgentRoomItems / AgentRoomItem
+- `packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts` — node filtering, loop slice isolation, transcript tail fallback
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts exporting selectVisibleNodeAskInteractions.
+- [x] selectVisibleNodeAskInteractions filters for kind === 'ask', selected nodeId, and status pending|answered in GET order; excludes purged and permission rows.
+- [x] An Ask matching a tool row in the full transcript is included only when that tool row is in visibleMessages; an unanchored Ask is included only when visibleMessages reaches the end of the full transcript.
+- [x] Implementation imports PendingInteraction and WorkflowNodeMessage only from ../../skills/runs and does not export unused mergeAgentRoomItems or AgentRoomItem.
+- [x] Unit tests in packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts verify node filtering, loop slice isolation, and transcript tail fallback, passing via bun test src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts.
+
+**Learnings**:
+- Copy only the selector and its private helpers from merge-agent-room-items.ts; mergeAgentRoomItems has no console production caller.
+- Use the plan's complete generated-shape fixtures (`envelope: { questions: [] }`, tool `payload.input`) rather than the legacy test's partial Pick helper.
+
+---
+
+## 2026-09-07 — US-004: Add the Ask mutation controller
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/ask/ask-answer-controller.ts` — Story 6.5 controller copy; types from console skills/runs; 409 via `HttpError`
+- `packages/web/src/experiments/console/components/ask/ask-answer-controller.test.ts` — success, 409, error, concurrency, duplicate suppression
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/experiments/console/components/ask/ask-answer-controller.ts exporting AskActionState, AskActionStateByRequest, AskAnswerController, and createAskAnswerController.
+- [x] createAskAnswerController maintains a private in-flight Set<string>; duplicate calls for the same in-flight requestId return immediately without a second POST, while different request IDs can run concurrently.
+- [x] Transitions state to sending before POST, accepted with submitted answer and resolvedAt ISO timestamp upon success, rejected-late for HTTP 409 (detected via error instanceof HttpError && error.status === 409), and error with thrown message or 'Failed to answer.' otherwise.
+- [x] Success and 409 trigger invalidate(), catching any invalidation failure and logging console.warn with run and request IDs without reverting accepted or rejected-late state.
+- [x] Unit tests in packages/web/src/experiments/console/components/ask/ask-answer-controller.test.ts cover success, 409, error, concurrency, and duplicate suppression, passing via bun test src/experiments/console/components/ask/ask-answer-controller.test.ts.
+
+**Learnings**:
+- Copy the legacy controller wholesale; the only behavioral swap is `error instanceof HttpError && error.status === 409` instead of `getApiErrorStatus(error) === 409`.
+- Tests copy the Story 6.5 suite; replace the `{ status: 409 }` Error fixture with `new HttpError(409, '/ask', 'taken')`.
+
+---
+
+## 2026-09-07 — US-005: Add canonical and optimistic Ask presentation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/ask/ask-card-presentation.ts` — Story 6.5 presentation copy; types from console skills/runs; `WorkflowNodeState` instead of `WorkflowNodeStateResponse`
+- `packages/web/src/experiments/console/components/ask/ask-card-presentation.test.ts` — view-state matrix, resume error classification, malformed canonical answers
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/experiments/console/components/ask/ask-card-presentation.ts exporting AskCardViewState, AskCardPresentation, and resolveAskCardPresentation.
+- [x] resolveAskCardPresentation derives viewState (pending, sending, answered, declined, rejected-late, failed-resume), preferring canonical interaction answer over local accepted answer, and retaining rejected-late even after refetch.
+- [x] failed-resume is selected only when an accepted or canonical answer exists, nodeStatus is 'failed', and nodeError starts with 'Could not resume the AskHuman session'; unrelated node failures remain answered or declined.
+- [x] Malformed canonical answers produce inline error 'Malformed canonical answer' while retaining answered viewState.
+- [x] Unit tests in packages/web/src/experiments/console/components/ask/ask-card-presentation.test.ts cover view state matrix, resume error classification, and malformed canonical answers, passing via bun test src/experiments/console/components/ask/ask-card-presentation.test.ts.
+
+**Learnings**:
+- Copy the Story 6.5 presentation wholesale; the only source swap is `WorkflowNodeState` for `WorkflowNodeStateResponse` plus console `../../skills/runs` imports.
+- Story 6.5 fixtures (`envelope: {}`, `answer: { extra: true }`) type-check against generated `PendingInteraction` as they do in the legacy suite.
+
+---
+
+## 2026-09-07 — US-006: Derive awaiting state and initial inspect selection
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/ask/awaiting-chrome.ts` — countPendingAsks, isAskAwaitingRun, firstAwaitingNodeId, isAskHumanUnsupportedError; no nodeStatusLabel
+- `packages/web/src/experiments/console/components/ask/awaiting-chrome.test.ts` — Story 6.5 helper suite minus nodeStatusLabel assertions
+- `packages/web/src/experiments/console/components/inspect/inspect-status.ts` — awaiting is a first-class InspectStatus; label is waiting on you
+- `packages/web/src/experiments/console/components/inspect/inspect-status.test.ts` — pass-through and waiting-on-you label
+- `packages/web/src/experiments/console/components/inspect/console-inspect-selection.ts` — awaiting lookup before running
+- `packages/web/src/experiments/console/components/inspect/console-inspect-selection.test.ts` — invalid query falls back to awaiting; awaiting wins over earlier running
+- `packages/web/src/experiments/console/components/inspect/build-console-log-entries.test.ts` — displayStatus stays awaiting
+- `packages/web/src/experiments/console/components/graph/build-run-graph-input.test.ts` — awaiting nodeState on-path
+- `packages/web/src/experiments/console/components/NodeDivider.tsx` — status is InspectStatus so RunStream can pass awaiting displayStatus
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/experiments/console/components/ask/awaiting-chrome.ts exporting countPendingAsks, isAskAwaitingRun, firstAwaitingNodeId, and isAskHumanUnsupportedError.
+- [x] countPendingAsks counts only pending interactions with kind === 'ask' and status === 'pending'; isAskAwaitingRun returns true only when status === 'paused' and countPendingAsks > 0; isAskHumanUnsupportedError checks for prefix 'AskHuman is not supported by provider'.
+- [x] inspect-status.ts preserves 'awaiting' as a valid InspectStatus (does not map to 'running'), inspectStatusLabel maps 'awaiting' to 'waiting on you', and isInspectRunLive includes 'running' and 'paused'.
+- [x] build-console-log-entries preserves awaiting as displayStatus, and build-run-graph-input passes awaiting nodeState through to layout as on-path.
+- [x] resolveInitialInspectSelection prioritizes valid ?node= param, then the first awaiting node, then the first running node, then approval node, then first log row.
+- [x] Unit tests in awaiting-chrome.test.ts, inspect-status.test.ts, console-inspect-selection.test.ts, build-console-log-entries.test.ts, and build-run-graph-input.test.ts pass.
+
+**Learnings**:
+- Copy Story 6.5 awaiting helpers without `nodeStatusLabel`; console already owns that via `inspectStatusLabel`.
+- `isAskAwaitingRun` takes `Run['status']` from `primitives/run`, not `WorkflowRunStatus`.
+- Adding `'awaiting'` to `InspectStatus` type-errors `RunStream` → `NodeDivider` until NodeDivider consumes `InspectStatus`. Warning chrome remains US-007.
+- NodeDivider.test.tsx `act is not a function` fails on HEAD too; not this story's gate.
+
+---
+
+## 2026-09-07 — US-007: Render awaiting warning chrome in Logs and Graph
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/NodeDivider.tsx` — `STATUS_COLOR.awaiting` is `text-warning`
+- `packages/web/src/experiments/console/components/NodeDivider.test.tsx` — awaiting divider renders `waiting on you` with `text-warning`
+- `packages/web/src/experiments/console/components/RunGraphPanel.tsx` — `InspectCardStatus`/`cardStatus` include `awaiting`; warning fill/border/glyph; slower pulse with `motion-reduce:animate-none`
+- `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx` — review card awaiting chrome, independent of shared route-loop fixture
+
+**Acceptance criteria verified**:
+- [x] NodeDividerProps['status'] accepts 'awaiting', rendering 'waiting on you' with text-warning color class in NodeDivider.tsx.
+- [x] RunGraphPanel InspectCardStatus and cardStatus accept 'awaiting', rendering statusFill 'color-mix(in oklch, var(--warning), transparent 90%)', statusBorder 'color-mix(in oklch, var(--warning), transparent 40%)', statusGlyphClass 'text-warning', and pulsing animation class 'animate-[pulse_2.4s_ease-in-out_infinite] motion-reduce:animate-none'.
+- [x] Graph cards for awaiting nodes display 'waiting on you' in content and title attribute.
+- [x] Unit tests in packages/web/src/experiments/console/components/NodeDivider.test.tsx and RunGraphPanel.test.tsx pass via bun test src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunGraphPanel.test.tsx.
+
+**Learnings**:
+- Keep `routeLoopStates()` on completed/running so the existing `not.toContain('awaiting')` graph test stays independent; override `review` to `awaiting` only in the warning-chrome test.
+- NodeDivider labels already come from `inspectStatusLabel`; this story only swaps the color token. `NODE_ENV=development bun test` makes `react.act` available.
+
+---
+
+## 2026-09-07 — US-008: Build the console Ask card
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/lib/format.ts` — export `formatDurationMs` with locked ms/s/m body
+- `packages/web/src/experiments/console/lib/format.test.ts` — boundary table 0/999/1000/59999/60000/90000
+- `packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx` — native form/fieldset/dialog Ask card; no shadcn
+- `packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx` — Story 6.5 lifecycle/validity/decline/focus suite on happy-dom createRoot
+
+**Acceptance criteria verified**:
+- [x] packages/web/src/experiments/console/lib/format.ts exports formatDurationMs(ms: number) formatting <1000ms as 'Xms', <60s as 'X.Xs', and >=60s as 'X.Xm', verified by format.test.ts.
+- [x] Create packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx exporting ConsoleAskCard and ConsoleInvalidAskCard using native HTML elements (form, fieldset, legend, radio, checkbox, textarea, button, dialog) without shadcn imports.
+- [x] Root form has aria-label='question from agent, N questions', border-warning bg-surface-elevated classes, header '${agentDisplayName} is asking', and meta row showing nodeId and elapsed duration via formatDurationMs.
+- [x] Starter pending card renders Submit (enabled only when isAskDraftValid is true) and Decline (opens native dialog with title 'Decline this ask?' and description 'The agent will be told you declined').
+- [x] Non-starter pending card renders disabled controls, omits buttons, and shows 'Waiting for ${starterDisplayName ?? 'the run starter'} to answer'.
+- [x] Resolved states display question-labelled summaries, semantic <time> timestamps, 'Answered · by you' (starter only) / 'Answered' (teammate), 'Declined', 'Already answered' (409), and 'Resume failed — node failed; your answer is preserved below'.
+- [x] ConsoleInvalidAskCard renders non-interactive role='alert' with 'Invalid Ask payload' and raw payload disclosure.
+- [x] Unit tests in packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx pass with no React warnings.
+
+**Learnings**:
+- Copy Story 6.5 card behavior; replace Card/Button/AlertDialog/Textarea with native elements and `showModal()`/`close()`.
+- `renderToStaticMarkup` under `NODE_ENV=development` throws React 19 `dispatcher.getOwner`; use console `installHappyDom` + `createRoot`.
+- Decline `dialog` needs explicit `role="dialog"` `aria-modal="true"` for keymap suppression. Tests alias `askCard`/`invalidAskCard` for naming-convention.
+
+---
+
+## 2026-09-07 — US-009: Build the console run Ask chrome
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx` — Story 6.5 chrome copy; `Run['status']` + `WorkflowNodeState`; `mx-6 mt-3 w-fit` on both roots
+- `packages/web/src/experiments/console/components/ask/ConsoleAskChrome.test.tsx` — count, callback order, no-node no-op, CAP-7 banner, declared-gate/non-Ask null
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx exporting ConsoleAskChrome(props: ConsoleAskChromeProps).
+- [x] When run has failed with a CAP-7 error (isAskHumanUnsupportedError(runError) is true), renders an error banner with role='alert', border-error bg-error/10 text-error, the full persisted error message, and no awaiting pill.
+- [x] When run is paused with pending Asks (isAskAwaitingRun is true), renders a warning button with aria-live='polite', warning tokens, and text 'Awaiting input (${count})'.
+- [x] Clicking the awaiting pill calls onRequestGraphView first, then onSelectAwaitingNode with the first awaiting node ID; click is a no-op if no awaiting node exists.
+- [x] When neither condition holds (or declared-gate pause without pending asks), returns null.
+- [x] Unit tests in packages/web/src/experiments/console/components/ask/ConsoleAskChrome.test.tsx pass via bun test src/experiments/console/components/ask/ConsoleAskChrome.test.tsx.
+
+**Learnings**:
+- Copy WorkflowAskChrome; only type/name swaps plus `mx-6 mt-3 w-fit` on both returned roots.
+- Hookless chrome can still use `renderToStaticMarkup` when invoked as a function; ConsoleAskCard still needs happy-dom.
+- Story 6.5 chrome test omitted declared-gate null; add `pendingInteractions: []` and `status: 'running'` so AC5 is covered.
+
+---
+
+## 2026-09-07 — US-010: Place Ask cards in the Command Center agent room
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx` — generic AgentTranscript slots; agent-only Ask composition; error-path unanchored cards
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx` — anchored placement, empty/error unanchored, malformed/teammate/stdout; loop header expects waiting on you
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx` — optional Ask props threaded to ConsoleNodeRoom
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx` — Log/Graph switch preserves Ask form identity
+
+**Acceptance criteria verified**:
+- [x] AgentTranscript in ConsoleNodeRoom.tsx accepts generic slots renderAfterMessage?: (message: WorkflowNodeMessage) => ReactNode and renderAtEnd?: ReactNode without HITL types.
+- [x] ConsoleNodeRoom splits visible Asks into anchored and unanchored; renders anchored cards immediately following matching tool messages via renderAfterMessage, and unanchored cards via renderAtEnd.
+- [x] When transcript has no messages or fails to load, unanchored cards are rendered at the tail (after the retry button on error), preventing query failures from blocking Ask actions.
+- [x] Only agent rooms (resolution.kind === 'agent') render Ask cards; stdout, gate, and loop-group rooms never render Ask cards.
+- [x] ConsoleInspectPane accepts pendingInteractions, viewerIsStarter, starterDisplayName, actionStates, and onSubmitAsk, threading them to ConsoleNodeRoom.
+- [x] Switching between Log and Graph views in ConsoleInspectPane preserves the persistent room and does not remount Ask cards.
+- [x] Tests in packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx and ConsoleInspectPane.test.tsx pass.
+
+**Learnings**:
+- Copy Task 10 derivation exactly; local collectToolIds is required even though the selector file already has a private copy.
+- `{ messages: FIXTURE }` does not type-check against mutable `messages`; spread `[...FIXTURE]`.
+- compareDocumentPosition needs a narrowed Node after the null assertion; bun test does not catch that.
+- Run these suites with `NODE_ENV=development` so `react.act` exists.
+
+---
+
+## 2026-09-07 — US-011: Wire run-detail ownership, chrome, and composer isolation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/RunDetailHeader.tsx` — `askAwaiting?: boolean`; paused Ask copy is `Awaiting input`
+- `packages/web/src/experiments/console/components/RunDetailHeader.test.tsx` — Ask pause vs declared-gate copy
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — page-owned controller, ConsoleAskChrome, required inspect Ask props, hasDeclaredGate keymap
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` — jump/answer/keymap isolation and CAP-7 chrome
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx` — Ask props required, no optional defaults
+
+**Acceptance criteria verified**:
+- [x] RunDetailHeaderProps adds askAwaiting?: boolean; when run is paused and askAwaiting is true, displays 'Awaiting input' instead of 'Waiting for approval'.
+- [x] RunDetailPage owns per-run AskActionStateByRequest and instantiates createAskAnswerController per run.id; resets action states on run change.
+- [x] Controller invalidation invalidates K.run(runId) and K.nodeMessages(runId, selectedNodeId) when a node is selected.
+- [x] RunDetailPage renders ConsoleAskChrome under RunDetailHeader with onRequestGraphView setting view to 'graph' and onSelectAwaitingNode selecting the node.
+- [x] Keymap 'a' / 'r' bindings are guarded by hasDeclaredGate (isPaused && detail?.run.approval != null) and never trigger Ask submissions or declines.
+- [x] ConsoleInspectPane receives required Ask props from RunDetailPage.
+- [x] ChatComposer and ChatPage receive zero pending interaction props and remain conversation-only.
+- [x] Tests in packages/web/src/experiments/console/components/RunDetailHeader.test.tsx and routes/RunDetailPage.test.tsx pass.
+
+**Learnings**:
+- Copy Task 11 wiring exactly; `answerPosts` type must be `{ path: string; body: unknown }[]` (`Array<T>` fails `@typescript-eslint/array-type`).
+- Plannotator paused detail is the declared-gate regression: `Waiting for approval` and no `Awaiting input (` pill.
+- ChatComposer/ChatPage isolation is a non-change: do not thread Ask props there.
+
+---
+
+## 2026-09-07 — US-012: Isolation, docs, validate, and close tracking
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/console-isolation.test.ts` — replaced premature HITL guard with final Ask architecture guard
+- `packages/web/src/experiments/console/README.md` — replaced Epic 6 handoff with AskHuman description
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — `6-6-answer-the-ask-in-the-command-center-room` and `epic-6` set to `done`
+
+**Acceptance criteria verified**:
+- [x] console-isolation.test.ts replaces premature HITL test with final architecture guard: verifies ConsoleNodeRoom, ConsoleInspectPane, and RunDetailPage do not import components/workflows or ChatComposer; verifies room imports ConsoleAskCard and page imports ConsoleAskChrome; verifies ChatComposer and ChatPage do not contain pendingInteractions, answerAskHuman, ConsoleAskCard, or ConsoleAskChrome.
+- [x] packages/web/src/experiments/console/README.md replaces Epic 6 handoff note with AskHuman description.
+- [x] All focused console Ask/inspect suites and Story 6.5 legacy Ask regression suites pass with zero failures.
+- [x] bun run type-check, bun run lint, bun run format:check, and bun run validate pass at repository root.
+- [x] _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml updates 6-6-answer-the-ask-in-the-command-center-room to 'done', epic-6 to 'done', with matching last_updated timestamps.
+
+**Learnings**:
+- Story 6.5 React suites (`AskCard.test.tsx`, `NodeTranscriptPane.test.tsx`) need `NODE_ENV=development` so `react.act` exists; the plan's bare `bun test` command fails on that pre-existing runner requirement.
+- Update sprint-status.yaml only after type-check, lint, format:check, and validate are green, then re-run format:check and validate on that final tree so the committed tracking file is inside the gate.
+- Isolation guard compact() assertions match import spec strings with whitespace stripped (`from'./ask/ConsoleAskCard'`).
+
+---
+
+BLOCKER US-012 | gate=bun run validate | cause=packages/core/src/db/workflow-pending-interactions.test.ts:52 duplicate binding `PendingInteractionNotFoundError has already been declared` (pre-existing from 7f194bc8 + c3b7676e; outside US-012 diff) | action=chore(unblock) 06e8d395 removed the duplicate import; bun test src/db/workflow-pending-interactions.test.ts 38 pass | 2026-09-07
+
+## 2026-09-07 — US-012 gate re-run after sprint-status.yaml commit
+
+**Status**: PASSED (final committed state)
+**HEAD**: 06e8d395 (US-012 67ef2b34 + unblock)
+**Commands**: `bun run format:check` exit 0; `bun run validate` exit 0
+**Post-hook**: no story-file diffs; working tree only Ralph tracking (`prd.json` modified, `progress.txt` untracked)
+
+---
