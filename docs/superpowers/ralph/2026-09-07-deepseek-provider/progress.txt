@@ -1,8 +1,23 @@
 ## Codebase Patterns
 
+### Isolated child-env records (never mutate process.env)
+- **Where**: `packages/providers/src/community/deepseek/env.ts`
+- **Pattern**: `buildDeepseekChildEnv` takes `ambient`/`request` records. Tests pass isolated objects; never mutate `process.env`. Request overlays ambient, then config `baseUrl`, then `DSH_PERMISSION_MODE`. Empty/missing `DEEPSEEK_API_KEY` throws `deepseek_missing_api_key` without trimming or logging the value. Never writes `DSH_PROVIDER_ROUTE`.
+- **Example**: `buildDeepseekChildEnv({ ambient, request, baseUrl, permissionMode })`
+
+### Injectable DeepSeek runtime facts
+- **Where**: `packages/providers/src/community/deepseek/node-resolver.ts` `DeepseekRuntimeFacts`
+- **Pattern**: Inject `isBinary`/`execPath`/`isNodeHost`/`platform`/`findNodeOnPath` so tests cover POSIX vs Windows without changing `process.platform` or spawning a shell. POSIX uses `X_OK`; Windows only requires a regular file. Binary mode throws `deepseek_runtime_unavailable` before `createRequire()`.
+- **Example**: `resolveDeepseekNodeBinary(configNodeBin, env, facts)`
+
+### Typed DeepSeek errors + redaction
+- **Where**: `packages/providers/src/community/deepseek/errors.ts`
+- **Pattern**: `DeepseekProviderError(subtype, message)`. `toDeepseekErrorResult` keeps known subtypes, maps unknown to `deepseek_acp_error`, replaces every secret occurrence with `[REDACTED]`, and never synthesizes tokens/usage/cost/sessionId.
+- **Example**: `toDeepseekErrorResult(error, [apiKey])` → `{ type: 'result', isError: true, errorSubtype, errors: [sanitized] }`
+
 ### DeepSeek config parser fail-fast + applied defaults
 - **Where**: `packages/providers/src/community/deepseek/config.ts`
-- **Pattern**: `parseDeepseekConfig` always returns `profile`/`providerRoute`/`permissionMode` defaults. Explicit `providerRoute` without `model` is rejected; the default route is allowed without a model. `maxTokens !== undefined` throws a plain `Error` until US-003 wraps it as `DeepseekProviderError`.
+- **Pattern**: `parseDeepseekConfig` always returns `profile`/`providerRoute`/`permissionMode` defaults. Explicit `providerRoute` without `model` is rejected; the default route is allowed without a model. `maxTokens !== undefined` throws `DeepseekProviderError('deepseek_unsupported_config', ...)` with the pinned-ACP message.
 - **Example**: `'assistants.deepseek.maxTokens is unsupported: pinned DSH ACP exposes only model and reasoning_effort.'`
 
 ### DeepSeek effort switch (not clampEffort)
@@ -70,5 +85,37 @@
 - `bun test src/community/deepseek/config.test.ts` from `packages/providers`: 13 pass, 0 fail.
 - Surgical edits to `packages/providers/src/types.ts` must keep the full 900+ line file; never write back a truncated read.
 - US-003 must replace only the `maxTokens` `Error` type with `DeepseekProviderError('deepseek_unsupported_config', ...)` and keep the same message.
+
+---
+
+## 2026-09-07 — US-003: Implement runtime resolution, child environment, permission policy, and typed errors
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/errors.ts` — `DeepseekErrorSubtype`, `DeepseekProviderError`, `redactDeepseekSecrets`, `toDeepseekErrorResult`
+- `packages/providers/src/community/deepseek/errors.test.ts` — subtype preservation, unknown→`deepseek_acp_error`, full-secret redaction, no synthesized usage
+- `packages/providers/src/community/deepseek/env.ts` — `buildDeepseekChildEnv` with request/config precedence
+- `packages/providers/src/community/deepseek/env.test.ts` — isolated env records (no `process.env` mutation)
+- `packages/providers/src/community/deepseek/permission.ts` — auto-cancel ACP permission requests
+- `packages/providers/src/community/deepseek/permission.test.ts` — cancelled outcome, no option id
+- `packages/providers/src/community/deepseek/node-resolver.ts` — Node precedence + bundled DSH `createRequire` / binary fail-closed
+- `packages/providers/src/community/deepseek/node-resolver.test.ts` — injectable facts for POSIX vs Windows
+- `packages/providers/src/community/deepseek/config.ts` — `maxTokens` throws `DeepseekProviderError('deepseek_unsupported_config', ...)`
+- `packages/providers/src/community/deepseek/config.test.ts` — asserts the typed subtype
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/errors.ts defines DeepseekErrorSubtype, DeepseekProviderError, redactDeepseekSecrets, and toDeepseekErrorResult.
+- [x] toDeepseekErrorResult returns { type: 'result', isError: true, errorSubtype, errors: [sanitizedMessage] } without synthesizing tokens, usage, cost, or session id, and redacts all occurrences of secrets.
+- [x] packages/providers/src/community/deepseek/config.ts updates maxTokens rejection to throw DeepseekProviderError with subtype deepseek_unsupported_config.
+- [x] packages/providers/src/community/deepseek/env.ts implements buildDeepseekChildEnv: request key beats ambient key, config baseUrl beats request and ambient DEEPSEEK_BASE_URL, sets DSH_PERMISSION_MODE, never sets DSH_PROVIDER_ROUTE, and throws deepseek_missing_api_key when key is empty or missing.
+- [x] packages/providers/src/community/deepseek/permission.ts implements answerDeepseekPermissionRequest returning exactly { outcome: { outcome: 'cancelled' } } without selecting an option id.
+- [x] packages/providers/src/community/deepseek/node-resolver.ts implements resolveDeepseekNodeBinary with precedence DEEPSEEK_NODE_BIN -> config nodeBin -> host process.execPath -> PATH (via injectable facts.findNodeOnPath; POSIX checks X_OK, Windows checks file existence).
+- [x] resolveBundledDshEntrypoint resolves @deepseek-ai/dsh/lib/bin.js via createRequire in source mode and throws deepseek_runtime_unavailable in binary mode (isBinary: true).
+- [x] Focused test files env.test.ts, permission.test.ts, errors.test.ts, and node-resolver.test.ts pass via bun test in packages/providers.
+
+**Learnings**:
+- `permission.ts` uses `import type` from `@agentclientprotocol/sdk` so ACP SDK values stay unevaluated (US-009 lazy-load gate).
+- PATH lookup must sit behind `facts.findNodeOnPath`; tests drive POSIX vs `win32` without `process.platform` or a shell.
+- Source-mode DSH resolve: `createRequire(import.meta.url).resolve('@deepseek-ai/dsh/lib/bin.js')`. Binary mode must throw before `createRequire()`.
 
 ---
