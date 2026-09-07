@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Large markdown surgical edits
+- **Where**: `packages/docs-web/src/content/docs/getting-started/ai-assistants.md`
+- **Pattern**: Exact-string Python replace with a post-edit length assertion. Line-anchored and some exact-replace editors truncated this 1006-line file to 302 lines. Restore from git if `wc -l` drops.
+- **Example**: `apply(path, [(old, new)], min_delta=1500)` then `git checkout --` on shrink
+
 ### Community provider registration without eager ACP
 - **Where**: `packages/providers/src/community/deepseek/registration.ts`, `packages/providers/src/registry.ts`
 - **Pattern**: Idempotent `isRegisteredProvider('deepseek')` guard, `builtIn: false`, vendor `deepseek` API-key spec. One import + `registerDeepseekProvider()` in `registerCommunityProviders()` immediately before the env-gated fake. Root and community barrels re-export `DeepseekProvider`, `parseDeepseekConfig`, `registerDeepseekProvider`, `DEEPSEEK_CAPABILITIES`, and `DeepseekProviderDefaults`. Lazy-load test mocks only `@agentclientprotocol/sdk` with a factory counter (do not mock `@deepseek-ai/dsh`), then dynamically imports registration/provider and instantiates — never `sendQuery()`. `provider-lazy-load.test.ts` is its own last DeepSeek `bun test` invocation. Loader tests register in the case and restore `registerBuiltinProviders()` + `registerOmpProvider()` in `finally` after `clearRegistry()`.
@@ -299,5 +304,30 @@
 - Plan Task 8 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1004-1144` (prd.md line numbers are stale).
 - Do not use line-anchored patch tools on large files in this harness — `registry.test.ts` was truncated that way; prefer exact-string Python edits that assert original length.
 - `json.dumps` of `package.json` can stay a 3-line git diff if you mutate `exports`/`scripts` in place rather than rewriting unrelated keys.
+
+---
+
+## 2026-09-07 — US-010: Document DeepSeek provider and regenerate capability matrix
+
+**Status**: PASSED
+**Files changed**:
+- `scripts/generate-capability-matrix.ts` — DeepSeek MCP caveat for stdio/HTTP support and SSE fail-fast
+- `packages/docs-web/src/content/docs/reference/provider-capabilities.md` — regenerated; `deepseek` community column with MCP caveat
+- `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` — DeepSeek Harness section, best-effort row, usage table
+- `packages/docs-web/src/content/docs/reference/configuration.md` — defaultAssistant, DEEPSEEK_API_KEY/BASE_URL/NODE_BIN, config keys
+- `packages/docs-web/src/content/docs/guides/mcp-servers.md` — DeepSeek stdio/HTTP, PATH resolution, SSE rejection, no MCP-only via allowed_tools
+
+**Acceptance criteria verified**:
+- [x] scripts/generate-capability-matrix.ts adds caveat for deepseek MCP describing stdio and Streamable HTTP support and fast-failing SSE.
+- [x] bun run generate:capability-matrix updates packages/docs-web/src/content/docs/reference/provider-capabilities.md and bun run check:capability-matrix passes with zero drift.
+- [x] packages/docs-web/src/content/docs/getting-started/ai-assistants.md documents DeepSeek Harness community provider, credentials, baseUrl override, supported keys, safe permission defaults, maxTokens rejection, lack of v1 usage tokens, and YAML example without invented model ids.
+- [x] packages/docs-web/src/content/docs/reference/configuration.md documents defaultAssistant, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, and DEEPSEEK_NODE_BIN.
+- [x] packages/docs-web/src/content/docs/guides/mcp-servers.md documents DeepSeek stdio and HTTP support, environment expansion, command resolution via PATH, and SSE rejection.
+- [x] bun --filter @archon/docs-web type-check passes.
+
+**Learnings**:
+- Plan Task 9 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1146-1240` (prd.md line numbers are stale).
+- StrReplace truncated `ai-assistants.md` (1006 → 302 lines). Restored from git and applied Python exact-string edits with a min_delta assertion.
+- Generated matrix: 9 providers; DeepSeek MCP cell is ✅³ with the stdio/HTTP/SSE caveat.
 
 ---

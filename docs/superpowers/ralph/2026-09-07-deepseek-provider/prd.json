@@ -220,8 +220,8 @@
         "US-009"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: scripts/generate-capability-matrix.ts, packages/docs-web/src/content/docs/getting-started/ai-assistants.md, packages/docs-web/src/content/docs/reference/configuration.md, packages/docs-web/src/content/docs/guides/mcp-servers.md, packages/docs-web/src/content/docs/reference/provider-capabilities.md."
     },
     {
       "id": "US-011",
