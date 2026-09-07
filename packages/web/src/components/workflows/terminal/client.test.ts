@@ -357,6 +357,29 @@ describe('createRunTerminalClient', () => {
     expect(harness.sockets).toHaveLength(1);
   });
 
+  test('closeSession while reconnecting sends close over a one-shot resumed socket', () => {
+    const harness = createHarness();
+    const first = harness.sockets[0];
+    if (!first) throw new Error('missing socket');
+    first.open();
+    first.receiveText(readyFrame(TOKEN));
+    first.remoteClose(1006);
+    expect(harness.states.at(-1)).toEqual({ kind: 'reconnecting' });
+
+    harness.client.closeSession();
+
+    expect(harness.timers).toEqual([]);
+    expect(harness.store.has(resumeStorageKey(RUN_ID))).toBe(false);
+    expect(harness.states.at(-1)).toEqual({ kind: 'closed' });
+    expect(harness.sockets).toHaveLength(2);
+    const closer = harness.sockets[1];
+    if (!closer) throw new Error('missing close socket');
+    expect(closer.url).toBe(`ws://localhost:5173${ENCODED_PATH}?resume=${TOKEN}`);
+    closer.open();
+    expect(closer.sent).toEqual([JSON.stringify({ type: 'close' })]);
+    expect(closer.closes.length).toBeGreaterThan(0);
+  });
+
   test('unavailable, error, and exit clear storage and disable reconnect', () => {
     for (const frame of [
       JSON.stringify({

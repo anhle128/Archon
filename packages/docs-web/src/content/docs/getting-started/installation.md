@@ -60,7 +60,7 @@ bun install
 
 ### Prerequisites (Source Install)
 
-- [Bun](https://bun.sh) >= 1.0.0
+- [Bun](https://bun.sh) 1.3.5 or newer in the 1.x line
 - [GitHub CLI](https://cli.github.com/) (`gh`)
 - [Claude Code](https://claude.ai/code) (`claude`)
 

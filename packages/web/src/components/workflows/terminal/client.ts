@@ -59,6 +59,7 @@ export interface CreateRunTerminalClientInput {
 const SOCKET_OPEN = 1;
 const BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000];
 const REPLACED_TAB_MESSAGE = 'Terminal opened in another tab.';
+const CLOSE_FRAME = JSON.stringify({ type: 'close' });
 
 function terminalSocketUrl(
   location: LocationPort,
@@ -128,6 +129,23 @@ export function createRunTerminalClient(input: CreateRunTerminalClientInput): Ru
   const sendCachedSize = (target: TerminalBrowserSocket): void => {
     if (!latestSize || target.readyState !== SOCKET_OPEN) return;
     target.send(JSON.stringify({ type: 'resize', cols: latestSize.cols, rows: latestSize.rows }));
+  };
+
+  const openCloseSocket = (resumeToken: string | null): void => {
+    if (!isResumeToken(resumeToken)) return;
+    try {
+      const closer = createSocket(terminalSocketUrl(location, input.runId, resumeToken));
+      closer.binaryType = 'arraybuffer';
+      closer.addEventListener('open', (): void => {
+        if (closer.readyState === SOCKET_OPEN) closer.send(CLOSE_FRAME);
+        closer.close();
+      });
+      closer.addEventListener('error', (): void => {
+        closer.close();
+      });
+    } catch {
+      // The visible state is already closed; a failed best-effort close probe should not throw.
+    }
   };
 
   const handleControl = (message: ReturnType<typeof parseServerControlMessage>): void => {
@@ -242,13 +260,18 @@ export function createRunTerminalClient(input: CreateRunTerminalClientInput): Ru
       }
     },
     closeSession(): void {
+      const resumeToken = storage.getItem(storageKey);
+      const currentSocket = socket;
       disableReconnect();
       clearToken();
-      if (socket?.readyState === SOCKET_OPEN) {
-        socket.send(JSON.stringify({ type: 'close' }));
-      }
-      socket?.close();
       socket = null;
+      if (currentSocket?.readyState === SOCKET_OPEN) {
+        currentSocket.send(CLOSE_FRAME);
+        currentSocket.close();
+      } else {
+        currentSocket?.close();
+        openCloseSocket(resumeToken);
+      }
       setState({ kind: 'closed' });
     },
     disconnect(): void {

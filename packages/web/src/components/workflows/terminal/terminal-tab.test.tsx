@@ -13,5 +13,6 @@ describe('TerminalTab', () => {
     expect(html).toContain('Connecting…');
     expect(html).toContain('h-full w-full');
     expect(html).toContain('bg-surface-inset');
+    expect(html).toContain('absolute inset-0');
   });
 });

@@ -233,6 +233,32 @@ describe('createTerminalSessionManager', () => {
     expect(harness.logs.map(call => call.event)).toContain('terminal.session_reconnected');
   });
 
+  test('create takes over an existing session instead of replacing it with a second PTY', () => {
+    const harness = createHarness();
+    const first = fakeSocket();
+    harness.createSession(first);
+    const firstPty = harness.lastPty;
+    const emit = harness.emit;
+    if (!emit) throw new Error('missing emit');
+    emit(new Uint8Array([4, 5, 6]));
+
+    const replacement = fakeSocket();
+    harness.createSession(replacement);
+
+    expect(harness.spawnCount).toBe(1);
+    expect(harness.lastPty).toBe(firstPty);
+    expect(first.closes).toEqual([{ code: REPLACED_SOCKET_CLOSE_CODE, reason: undefined }]);
+    expect(binaryFrames(replacement).map(frame => Array.from(frame))).toEqual([[4, 5, 6]]);
+    expect(controlFrames(replacement).at(-1)).toEqual({
+      type: 'ready',
+      resumeToken: TOKEN,
+      cols: DEFAULT_COLS,
+      rows: DEFAULT_ROWS,
+    });
+    harness.manager.input(replacement, 'pwd\n');
+    expect(firstPty?.writes).toEqual(['pwd\n']);
+  });
+
   test('old socket close callback cannot detach the replacement socket', () => {
     const harness = createHarness();
     const first = fakeSocket();

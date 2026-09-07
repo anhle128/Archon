@@ -375,6 +375,12 @@ export function createTerminalSessionManager(
       spawn(onData: (chunk: Uint8Array) => void): SpawnedTerminal;
     }): void {
       const key = sessionKey(input.userId, input.runId);
+      const existing = sessions.get(key);
+      if (existing !== undefined) {
+        attachSocket(existing, input.socket);
+        logLifecycle(existing, 'reconnected');
+        return;
+      }
       const early: Uint8Array[] = [];
       const pty = input.spawn((chunk: Uint8Array): void => {
         const copied = copyBytes(chunk);

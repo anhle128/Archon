@@ -1,6 +1,6 @@
 # Interactive Workflow Run Terminal Ralph PRD
 
-Source plan: `docs/superpowers/plans/2026-09-07-workflow-run-terminal.md`  
+Source plan: `docs/superpowers/plans/2026-09-07-workflow-run-terminal.md`
 Derived slug: `2026-09-07-workflow-run-terminal`
 
 ## Overview

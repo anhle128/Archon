@@ -41,7 +41,11 @@ export function TerminalTab({ runId }: { runId: string }): ReactElement {
       </div>
       <div className="relative flex-1 min-h-0 overflow-hidden bg-surface-inset">
         <div ref={hostRef} className="h-full w-full" />
-        {state.kind !== 'connected' && <TerminalStatus state={state} />}
+        {state.kind !== 'connected' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-surface-inset">
+            <TerminalStatus state={state} />
+          </div>
+        )}
       </div>
     </section>
   );
