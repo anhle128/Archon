@@ -381,8 +381,8 @@ export async function* runDeepseekAcpTurn(
   }
 
   const stream = ndJsonStream(
-    Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-    Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>
+    Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>,
+    Readable.toWeb(child.stdout) as unknown as ReadableStream<Uint8Array>
   );
   const gen = driveDeepseekAcpTurn(stream, input);
 
