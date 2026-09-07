@@ -14,6 +14,12 @@ export function formatElapsed(totalSeconds: number): string {
   return h > 0 ? `${pad(h)}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
 
+export function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${String(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60000).toFixed(1)}m`;
+}
+
 /**
  * DB timestamps (SQLite `datetime('now')`, Postgres `TIMESTAMP`) reach the
  * console as naive strings ("2026-06-13 23:22:53") that are UTC wall-clock,
