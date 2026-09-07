@@ -106,12 +106,13 @@ nodes:
       echo "PR_HEAD=$PR_HEAD"
       echo "PR_BASE=$PR_BASE"
 
-  # Lane B — frame the user story, write the Playwright spec(s), list the
-  # external services the tests mock (the third-party requirements).
+  # Lane B authoring — AXI live drive + screenshot evidence, then crystallize
+  # Playwright specs. run-e2e (Playwright npm run test:ui) stays the regression gate.
   - id: plan-tests
     depends_on: [resolve-paths]
     skills:
       - web-automation-test-pr
+      - chrome-devtools-axi
     prompt: |
       The PR to verify is #$ARGUMENTS.
       This worktree is already detached at the PR head SHA (see $resolve-paths.output).
@@ -121,19 +122,31 @@ nodes:
       files with `gh pr view $ARGUMENTS --json files -q '.files[].path'` (do NOT
       use `gh pr diff` — it fails with HTTP 406 on large PRs; read a file's change
       with `gh pr diff $ARGUMENTS -- <path>` or at HEAD).
-      Follow the web-automation-test-pr skill: frame the full end-to-end user
-      story, derive the edge cases, crystallize them into Playwright spec(s)
-      under `e2e/ui/`, and list every external service the tests mock as a
-      third-party requirement.
+      Follow web-automation-test-pr and chrome-devtools-axi:
+      - Boot/use the real app from this PR-head worktree (isolated ARCHON_HOME;
+        poll readiness). Record PIDs you start.
+      - Drive the UI with `npx -y chrome-devtools-axi` and
+        `CHROME_DEVTOOLS_AXI_SESSION=$WORKFLOW_ID`: open → snapshot → click/fill →
+        screenshot. On STALE_REF, re-snapshot and retry; do not invent refs.
+      - Write screenshots under `$ARTIFACTS_DIR/plan-tests/`. Read each image and
+        judge the visible UX before writing Playwright asserts.
+      - Crystallize durable specs under `e2e/ui/` (`trace:'on-first-retry'`,
+        `screenshot:'only-on-failure'`, `[P0]/[P1]/[P2]` tags).
+      - List every external service the tests mock as a third-party requirement.
+      - If this PR touches UI/UX (frontend/web/CSS/layout/copy-visible),
+        `artifacts` MUST include at least one screenshot. If capture fails after
+        two retries, FAIL this node and explain why — do not claim plan-tests done.
       Write ONLY new test files (specs, helpers, fixtures) under `e2e/`. Do NOT
       modify the workflow YAML, provider/model settings, or any other config —
       your job is the tests, nothing else.
+      Cleanup: `npx -y chrome-devtools-axi stop` with the same session env; kill
+      only recorded PIDs. Never `pkill chrome` or `pkill node`.
     provider: claude
     model: "claude-opus-4-8[1M]"
     effort: high
     output_format:
       type: object
-      required: [pr, spec_file, mocked_externals]
+      required: [pr, spec_file, mocked_externals, artifacts]
       properties:
         pr:
           type: string
@@ -143,6 +156,21 @@ nodes:
           type: array
           items:
             type: string
+        ui_touched:
+          type: boolean
+        artifacts:
+          type: array
+          items:
+            type: object
+            required: [kind, path, purpose]
+            properties:
+              kind:
+                type: string
+                enum: [screenshot, other]
+              path:
+                type: string
+              purpose:
+                type: string
 
   # Lane A gate — is every mocked external anchored by a real contract test?
   # Re-entered after each `resolve` (loop-back) via one_success on [plan-tests, resolve].
@@ -291,6 +319,11 @@ nodes:
       evid=$(cat "$ARTIFACTS_DIR/.evidence-status" 2>/dev/null || echo unknown)
       # Cap the embedded log so a verbose failure cannot exceed GitHub's comment limit.
       log=$(tail -c 40000 "$ARTIFACTS_DIR/e2e-result.log" 2>/dev/null || echo "(no e2e output captured)")
+      # AXI authoring screenshots live in the run artifacts dir (not committed).
+      axi_shots=""
+      if [ -d "$ARTIFACTS_DIR/plan-tests" ]; then
+        axi_shots=$(find "$ARTIFACTS_DIR/plan-tests" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.webp' \) | sort || true)
+      fi
 
       case "$evid" in
         pushed\ *) evid_line="📌 Evidence committed & pushed to this branch: \`${evid#pushed }\`" ;;
@@ -304,12 +337,26 @@ nodes:
         {
           printf '✅ **E2E verify passed** — the feature works end-to-end as the user story expects (third-party coverage anchored, Playwright specs green).\n\n'
           printf '%s\n\n' "$evid_line"
+          if [ -n "$axi_shots" ]; then
+            printf '### AXI authoring screenshots\n\n'
+            printf '%s\n' "$axi_shots" | while IFS= read -r f; do
+              printf -- '- `%s`\n' "${f#"$ARTIFACTS_DIR"/}"
+            done
+            printf '\nThese files live in this run'\''s `$ARTIFACTS_DIR/plan-tests/` (reviewer evidence; not committed). Playwright specs under `e2e/ui/` are the durable gate.\n\n'
+          fi
           printf '<details><summary>Playwright output</summary>\n\n```\n%s\n```\n</details>\n' "$log"
         } > "$body_file"
       else
         {
           printf '❌ **E2E verify FAILED** — the feature has issues end-to-end.\n\n'
           printf '%s\n\n' "$evid_line"
+          if [ -n "$axi_shots" ]; then
+            printf '### AXI authoring screenshots\n\n'
+            printf '%s\n' "$axi_shots" | while IFS= read -r f; do
+              printf -- '- `%s`\n' "${f#"$ARTIFACTS_DIR"/}"
+            done
+            printf '\n'
+          fi
           printf '<details open><summary>Playwright output</summary>\n\n```\n%s\n```\n</details>\n' "$log"
         } > "$body_file"
       fi
