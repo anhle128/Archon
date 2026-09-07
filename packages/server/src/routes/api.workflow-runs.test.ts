@@ -2752,6 +2752,104 @@ describe('GET /api/workflows/runs/:runId', () => {
       { nodeId: 'review', name: 'review', status: 'awaiting', retryEpoch: 0, provider: 'claude' },
     ]);
   });
+
+  test('embeds sibling and same-node Ask rows while projecting every pending owner as awaiting', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      status: 'paused',
+    }));
+    mockListWorkflowEvents.mockImplementationOnce(async () => [
+      {
+        id: 'evt-review-start',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_started',
+        step_index: null,
+        step_name: 'review',
+        data: { node_id: 'review', provider: 'claude' },
+        created_at: NOW,
+      },
+      {
+        id: 'evt-beta-start',
+        workflow_run_id: 'run-uuid-1',
+        event_type: 'node_started',
+        step_index: null,
+        step_name: 'beta',
+        data: { node_id: 'beta', provider: 'claude' },
+        created_at: NOW,
+      },
+    ]);
+    mockGetConversationById.mockImplementationOnce(async () => ({
+      id: 'conv-uuid-1',
+      platform_conversation_id: 'web-conv-abc',
+    }));
+    mockListPendingInteractions.mockImplementationOnce(async () => [
+      {
+        id: 'pend-review-answered',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_review_answered',
+        kind: 'ask',
+        status: 'answered',
+        envelope: { questions: [{ prompt: 'First review question' }] },
+        answer: { answers: [{ questionId: 'first', value: 'yes' }] },
+        provider_session_id: 'sess-review',
+        created_at: '2026-09-06T00:00:00.000Z',
+        resolved_at: '2026-09-06T00:01:00.000Z',
+        resolved_by: 'user-1',
+      },
+      {
+        id: 'pend-review-open',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'review',
+        tool_use_id: 'toolu_review_open',
+        kind: 'ask',
+        status: 'pending',
+        envelope: { questions: [{ prompt: 'Second review question' }] },
+        answer: null,
+        provider_session_id: 'sess-review',
+        created_at: '2026-09-06T00:00:01.000Z',
+        resolved_at: null,
+        resolved_by: null,
+      },
+      {
+        id: 'pend-beta-open',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'beta',
+        tool_use_id: 'toolu_beta_open',
+        kind: 'ask',
+        status: 'pending',
+        envelope: { questions: [{ prompt: 'Beta question' }] },
+        answer: null,
+        provider_session_id: 'sess-beta',
+        created_at: '2026-09-06T00:00:02.000Z',
+        resolved_at: null,
+        resolved_by: null,
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1');
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      run: { status: string };
+      pending_interactions: Array<{ node_id: string; tool_use_id: string; status: string }>;
+      nodeStates: Array<{ nodeId: string; status: string }>;
+    };
+    expect(mockListPendingInteractions).toHaveBeenCalledWith('run-uuid-1');
+    expect(body.run.status).toBe('paused');
+    expect(
+      body.pending_interactions.map(row => [row.node_id, row.tool_use_id, row.status])
+    ).toEqual([
+      ['review', 'toolu_review_answered', 'answered'],
+      ['review', 'toolu_review_open', 'pending'],
+      ['beta', 'toolu_beta_open', 'pending'],
+    ]);
+    expect(body.nodeStates).toEqual([
+      { nodeId: 'review', name: 'review', status: 'awaiting', retryEpoch: 0, provider: 'claude' },
+      { nodeId: 'beta', name: 'beta', status: 'awaiting', retryEpoch: 0, provider: 'claude' },
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

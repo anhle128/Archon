@@ -42,6 +42,7 @@ import {
   CONTAINER_ENV_DENYLIST,
   AskHumanAwaitingError,
   AskHumanNoStarterError,
+  AskHumanPauseFailedError,
 } from '@archon/providers/types';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
@@ -641,9 +642,9 @@ export const CANCEL_CHECK_INTERVAL_MS = 10_000;
  * node be allowed to continue for a given observed run status?
  *
  * - `running`: the normal case → continue.
- * - `paused`: a concurrent approval node in the same topological layer has
+ * - `paused`: a concurrent approval or AskHuman node in the same topological layer has
  *   transitioned the run to paused. The streaming node should finish its own
- *   output; workflow progression is gated by the approval node, not by tearing
+ *   output; workflow progression is gated by the paused node, not by tearing
  *   down unrelated in-flight streams.
  * - `null` (run deleted), `cancelled`, `failed`, `completed`, or any other
  *   state → abort the stream.
@@ -1771,12 +1772,11 @@ function nativeToolsForAskHuman(
 }
 
 async function pauseOnAskHuman(
-  deps: WorkflowDeps,
+  _deps: WorkflowDeps,
   runId: string,
   nodeId: string,
   recordStatus: (state: string) => Promise<void>
 ): Promise<void> {
-  await deps.store.pauseWorkflowRun(runId);
   await recordStatus('awaiting');
   getWorkflowEventEmitter().emit({
     type: 'node_awaiting',
@@ -2208,7 +2208,7 @@ async function executeNodeInternal(
 
         // Cancel/pause check — read-only, no write contention in WAL mode (every 10s).
         //
-        // `paused` is tolerated here: an approval node can transition the run to
+        // `paused` is tolerated here: an approval or AskHuman node can transition the run to
         // paused while this concurrent node is mid-stream (same topological layer).
         // The streaming node should be allowed to finish its own output — the
         // paused gate owns workflow progression, not individual node lifecycles.
@@ -3269,7 +3269,8 @@ async function executeNodeInternal(
     if (
       nodeAbortController.signal.aborted &&
       !nodeIdleTimedOut &&
-      !(error instanceof AskHumanNoStarterError)
+      !(error instanceof AskHumanNoStarterError) &&
+      !(error instanceof AskHumanPauseFailedError)
     ) {
       getLog().info({ nodeId: node.id }, 'dag_node_cancelled_via_abort');
       await recordFailedStatus('Cancelled by user');
@@ -5542,7 +5543,7 @@ async function executeLoopNode(
         })) {
           // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
           // lifted from the AI-node stream loop in executeNodeInternal. Same
-          // posture: `paused` is tolerated (a sibling approval node may pause
+          // posture: `paused` is tolerated (a sibling approval or AskHuman node may pause
           // the run while this loop streams); only terminal/unknown states
           // abort the in-flight iteration. Without this, a cancelled run kept
           // streaming until the iteration finished on its own — and the
