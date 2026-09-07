@@ -49,8 +49,6 @@ jobs:
     name: PR E2E Verify
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    env:
-      ARCHON_HOME: ${{ runner.temp }}/archon-home
     steps:
       # Trusted base: run the CLI and `.archon/workflows/pr-e2e-verify.yaml`
       # from the destination branch, not the PR head. The DAG's resolve-paths
@@ -213,6 +211,7 @@ jobs:
         id: run
         if: steps.gate.outputs.run == 'true'
         env:
+          ARCHON_HOME: ${{ runner.temp }}/archon-home
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
