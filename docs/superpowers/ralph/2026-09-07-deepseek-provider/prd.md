@@ -1,6 +1,6 @@
 # DeepSeek Harness Community Provider Ralph PRD
 
-Source plan: `docs/superpowers/plans/2026-09-07-deepseek-provider.md`  
+Source plan: `docs/superpowers/plans/2026-09-07-deepseek-provider.md`
 Derived slug: `2026-09-07-deepseek-provider`
 
 ## Overview
