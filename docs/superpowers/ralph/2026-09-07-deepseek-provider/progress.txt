@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Strict MCP translation (no skip, no mutation)
+- **Where**: `packages/providers/src/community/deepseek/mcp.ts`
+- **Pattern**: `import type { McpServer }` only. Omitted `type` is stdio. Bare commands resolve with `which`/`where` against the supplied `PATH`; absolute commands stay unchanged after a POSIX `X_OK` / Windows regular-file check. Stdio ACP shape has no `type` field; HTTP includes `type: 'http'`. SSE and unknown transports throw `deepseek_mcp_config_error`. Never mutate input objects; clone `args` and convert env/headers into new `{ name, value }[]`.
+- **Example**: `buildDeepseekMcpServers(servers, env)`
+
 ### Stateful ACP SessionUpdate translation (no fabricated usage)
 - **Where**: `packages/providers/src/community/deepseek/event-bridge.ts`
 - **Pattern**: `mapDeepseekSessionUpdate` uses an exhaustive `switch (update.sessionUpdate)` with a `never` default. Tool start stores `{ name, input }` by `toolCallId`; in-progress updates mutate that entry; `completed`/`failed` emit `tool_result` then `delete`. `usage_update` (even with `cost`) and other housekeeping variants emit `[]` — never `tokens`/`usageBreakdown`/`cost`. Non-text message/thought content is ignored, not stringified.
@@ -146,5 +151,29 @@
 - Keep ACP SDK as `import type` in `event-bridge.ts` (value imports stay isolated to later `acp-client.ts`).
 - Tests construct fixtures with `satisfies SessionUpdate`; they do not need a dynamic ACP SDK value import.
 - `rawOutput` wins over display `content`; structured values go through `JSON.stringify`.
+
+---
+
+## 2026-09-07 — US-005: Validate and convert per-node MCP declarations
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/mcp.ts` — `buildDeepseekMcpServers` converts Archon MCP maps to ACP stdio/HTTP, resolves PATH, rejects SSE
+- `packages/providers/src/community/deepseek/mcp.test.ts` — stdio defaults, PATH lookup, HTTP headers, SSE/unknown/malformed, no mutation
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/mcp.ts exports buildDeepseekMcpServers(servers: Record<string, unknown>, env: Record<string, string>): McpServer[].
+- [x] Defaults omitted type to stdio; validates non-empty command, string args, and string env.
+- [x] Resolves bare stdio commands through supplied PATH using which or where; unresolved bare command throws deepseek_mcp_config_error naming server and command.
+- [x] Formats stdio output as { name, command: absolutePath, args, env: [{ name, value }] }.
+- [x] Validates HTTP transport requiring absolute http: or https: URL and converts headers to { name, value }[].
+- [x] Rejects SSE transport with deepseek_mcp_config_error stating pinned DSH ACP supports only stdio and Streamable HTTP.
+- [x] Rejects unknown transports, malformed objects, and blank names; does not mutate input objects.
+- [x] packages/providers/src/community/deepseek/mcp.test.ts passes via bun test src/community/deepseek/mcp.test.ts.
+
+**Learnings**:
+- Stdio ACP `McpServerStdio` has no `type` field; HTTP must include `type: 'http'`.
+- `execFileSync('which'|'where', [command], { env })` uses the supplied PATH; tests must include `/usr/bin` so `which` itself is findable.
+- PATH tests use a real temp executable; do not mutate `process.env`.
 
 ---
