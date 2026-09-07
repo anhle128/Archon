@@ -96,7 +96,7 @@ const STATUS_COLOR: Record<InspectStatus, string> = {
   completed: 'text-success',
   failed: 'text-error',
   skipped: 'text-text-tertiary',
-  awaiting: 'text-[color:var(--running)]',
+  awaiting: 'text-warning',
 };
 
 /**
