@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Opt-in DeepSeek ACP live spike
+- **Where**: `packages/providers/src/community/deepseek/acp-handshake-spike.ts`, `packages/providers/package.json` `spike:deepseek:acp`
+- **Pattern**: Skip with exit 0 unless `DEEPSEEK_LIVE_TEST=1`. When enabled, require `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_LIVE_MODEL` without printing values. Fresh prompt `Reply with exactly pong.` then resume `Reply with exactly pong again.` and require a non-error result plus `resumed: true`. Print only skip/pass/generic-fail. Keep the script out of `test` and `validate`.
+- **Example**: `bun run spike:deepseek:acp` → `DeepSeek ACP live spike skipped (set DEEPSEEK_LIVE_TEST=1 to run).` exit 0
+
 ### Large markdown surgical edits
 - **Where**: `packages/docs-web/src/content/docs/getting-started/ai-assistants.md`
 - **Pattern**: Exact-string Python replace with a post-edit length assertion. Line-anchored and some exact-replace editors truncated this 1006-line file to 302 lines. Restore from git if `wc -l` drops.
@@ -329,5 +334,27 @@
 - Plan Task 9 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1146-1240` (prd.md line numbers are stale).
 - StrReplace truncated `ai-assistants.md` (1006 → 302 lines). Restored from git and applied Python exact-string edits with a min_delta assertion.
 - Generated matrix: 9 providers; DeepSeek MCP cell is ✅³ with the stdio/HTTP/SSE caveat.
+
+---
+
+## 2026-09-07 — US-011: Add explicit opt-in ACP live handshake spike
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/acp-handshake-spike.ts` — gated live handshake; skip unless DEEPSEEK_LIVE_TEST=1
+- `packages/providers/package.json` — `spike:deepseek:acp` script omitted from test and validate
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/acp-handshake-spike.ts implements live handshake requiring DEEPSEEK_LIVE_TEST=1, DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, and DEEPSEEK_LIVE_MODEL.
+- [x] When DEEPSEEK_LIVE_TEST is not set, script prints a concise skipped message and exits with status 0.
+- [x] When enabled, executes fresh turn ('Reply with exactly pong.') and resumed turn ('Reply with exactly pong again.') verifying non-error results and resumed: true.
+- [x] Never prints secret keys, URLs, model names, prompts, stream chunks, or stderr.
+- [x] packages/providers/package.json adds spike:deepseek:acp script (omitted from test and validate).
+- [x] bun run spike:deepseek:acp exits zero with skipped message.
+
+**Learnings**:
+- Plan Task 10 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1242-1296` (prd.md line numbers are stale).
+- Live billed path was not authorized in this iteration; skip path is the AC gate. Record live as not run rather than claiming it passed.
+- Child DSH stderr is piped (`stdio: pipe`) and must stay unprinted in the spike even after redaction.
 
 ---

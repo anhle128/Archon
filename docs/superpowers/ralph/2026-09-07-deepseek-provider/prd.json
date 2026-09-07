@@ -240,8 +240,8 @@
         "US-009"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/providers/src/community/deepseek/acp-handshake-spike.ts, packages/providers/package.json."
     },
     {
       "id": "US-012",
