@@ -6,7 +6,7 @@ description: |
   test workflow management, verify parallel agent orchestration, or run comprehensive browser-based E2E tests.
   Triggers: "validate ui", "test the ui", "e2e test", "browser test", "validate archon",
             "test archon ui", "ui audit", "ux review", "comprehensive test", "validate everything".
-  Capability: Starts Archon, runs exhaustive browser automation tests via agent-browser CLI,
+  Capability: Starts Archon, runs exhaustive browser automation tests via chrome-devtools-axi,
   performs codebase review, and produces a detailed bug/UX report.
   NOT for: Unit tests (use `bun test`), CLI-only validation (use /validation:validate-simple).
 argument-hint: "[focus-area]"
@@ -47,19 +47,16 @@ sleep 2
 ! lsof -i:3090 && ! lsof -i:5173 && echo "Ports 3090 and 5173 are free" || echo "WARNING: Ports still in use"
 ```
 
-### 0.2 Install agent-browser (if needed)
+### 0.2 Check chrome-devtools-axi (if needed)
 
 ```bash
-# Check if agent-browser is available
-which agent-browser 2>/dev/null || npx agent-browser --version 2>/dev/null
+# Zero-install path — do not use agent-browser (removed in this fork)
+npx -y chrome-devtools-axi --help >/dev/null
 
-# If not installed globally, install it:
-# npm install -g agent-browser && agent-browser install
-# On WSL2/Linux, use --with-deps to get Chromium system dependencies:
-# agent-browser install --with-deps
+# Optional global install:
+# npm install -g chrome-devtools-axi
 
-# IMPORTANT: Do NOT use bunx — Bun skips postinstall scripts that agent-browser needs.
-# Use npx or global npm install.
+# IMPORTANT: Do NOT use bunx. Use npx -y or a global chrome-devtools-axi binary.
 ```
 
 ### 0.3 Start Archon Backend + Frontend
@@ -112,13 +109,14 @@ curl -s -X POST http://localhost:3090/api/conversations \
 
 ## Phase 1: Browser Automation — End-to-End Testing
 
-Use the `agent-browser` CLI for all browser interactions. Follow the snapshot-refs workflow:
-1. `agent-browser open <url>` — navigate
-2. `agent-browser snapshot -i` — get interactive elements with refs
-3. Interact using refs (click, fill, etc.)
+Use `npx -y chrome-devtools-axi` for all browser interactions. Load the `chrome-devtools-axi` skill. Follow the snapshot-refs workflow:
+1. `npx -y chrome-devtools-axi open <url>` — navigate (already returns a snapshot)
+2. `npx -y chrome-devtools-axi snapshot` — accessibility tree with refs like `@g1:1`
+3. Interact using refs **exactly** as printed; on `STALE_REF`, re-snapshot
 4. Re-snapshot after navigation or DOM changes
+5. Screenshot, then **Read** the image before judging UX
 
-Take screenshots at each major test point: `agent-browser screenshot /tmp/archon-test-{name}.png`
+Take screenshots at each major test point: `npx -y chrome-devtools-axi screenshot /tmp/archon-test-{name}.png`
 
 ### Test Suite 1: Dashboard (Route: `/`)
 
@@ -382,7 +380,7 @@ Take screenshots at each major test point: `agent-browser screenshot /tmp/archon
 ### Test Suite 7: SSE & Real-time Infrastructure
 
 **7.1 SSE Connection**
-- Open browser DevTools Network tab (via `agent-browser eval` or console)
+- Inspect network via `npx -y chrome-devtools-axi network` or `eval`
 - Verify: EventSource connection to `/api/stream/{conversationId}` is established
 - Verify: heartbeat events arrive every ~30 seconds
 - Verify: connection state is OPEN (readyState 1)
@@ -396,7 +394,7 @@ Take screenshots at each major test point: `agent-browser screenshot /tmp/archon
 - Verify: buffered messages are delivered on reconnect
 
 **7.3 Multiple Tabs**
-- Open the same conversation in two browser tabs (use `agent-browser --session` for parallel)
+- Open the same conversation in two browser tabs (`newpage` / `selectpage`, or a second `CHROME_DEVTOOLS_AXI_SESSION` if you need a second Chrome)
 - Send a message from tab 1
 - Verify: response streams in BOTH tabs (SSE fan-out via stream registry replacement)
 - Note: the web adapter replaces old streams on new connections, so only the latest tab gets live SSE
@@ -432,11 +430,11 @@ Take screenshots at each major test point: `agent-browser screenshot /tmp/archon
 **8.4 Responsiveness**
 - Set viewport to different sizes:
   ```bash
-  agent-browser set viewport 1920 1080  # Desktop
-  agent-browser set viewport 1366 768   # Laptop
-  agent-browser set viewport 1024 768   # Tablet landscape
-  agent-browser set viewport 768 1024   # Tablet portrait
-  agent-browser set viewport 375 812    # Mobile
+  npx -y chrome-devtools-axi resize 1920 1080          # Desktop
+  npx -y chrome-devtools-axi emulate --viewport 1366x768   # Laptop
+  npx -y chrome-devtools-axi emulate --viewport 1024x768   # Tablet landscape
+  npx -y chrome-devtools-axi emulate --viewport 768x1024   # Tablet portrait
+  npx -y chrome-devtools-axi emulate --viewport 375x812    # Mobile
   ```
 - At each size: screenshot and check for layout breakage, overflow, truncation
 
@@ -584,7 +582,7 @@ After completing all tests and reviews, produce a structured report:
 # Archon Web UI Validation Report
 
 **Date**: {date}
-**Tester**: Claude Code (agent-browser + codebase review)
+**Tester**: Claude Code (chrome-devtools-axi + codebase review)
 **Archon Version**: {git commit hash}
 **Screenshots**: /tmp/archon-test-*.png
 
@@ -650,12 +648,11 @@ Specifically evaluate:
 
 ## Execution Notes
 
-- Run all `agent-browser` commands via the Bash tool
-- Use `npx agent-browser` if not installed globally
-- After each navigation, re-snapshot (`agent-browser snapshot -i`) to get fresh refs
-- Take screenshots liberally — save to `/tmp/archon-test-{section}-{name}.png`
+- Run all AXI commands via the Bash tool (`npx -y chrome-devtools-axi ...`)
+- After each navigation, re-snapshot to get fresh `@gN:M` refs
+- Take screenshots liberally — save to `/tmp/archon-test-{section}-{name}.png` — then Read each file
 - If a test fails, document it immediately and continue to the next test
-- Use `agent-browser wait --load networkidle` after actions that trigger API calls
-- For SSE testing, use `agent-browser eval` to check EventSource state
+- Use `npx -y chrome-devtools-axi wait 2000` (or wait for visible text) after actions that trigger API calls
+- For SSE testing, use `npx -y chrome-devtools-axi eval` to check EventSource state
 - Remember: WSL2 headless mode works fine — no display server needed
-- Close the browser session when done: `agent-browser close`
+- Stop this session when done: `npx -y chrome-devtools-axi stop` (do not pkill chrome/node)

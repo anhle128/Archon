@@ -4,7 +4,7 @@ description: |
   Triggers: "create issue", "file a bug", "report this bug", "open an issue for",
             "create github issue", "report issue", "log this bug".
   Does: Classifies problem area (haiku) -> gathers context in parallel (templates, git state, duplicates) ->
-        investigates relevant code -> reproduces the issue using area-specific tools (agent-browser, CLI, DB queries) ->
+        investigates relevant code -> reproduces the issue using area-specific tools (chrome-devtools-axi, CLI, DB queries) ->
         gates on reproduction success -> creates issue with full evidence OR reports back if cannot reproduce.
   NOT for: Feature requests, enhancements, or non-bug work. Only for bugs/problems.
 
@@ -246,17 +246,17 @@ nodes:
 
       ### web-ui
       1. Read the server port: `PORT=$(cat "$ARTIFACTS_DIR/.server-port" | tr -d '\n')`
-      2. Open the app: `agent-browser open http://localhost:$PORT`
-      3. Take a baseline screenshot: `agent-browser screenshot "$ARTIFACTS_DIR/repro-01-baseline.png"`
-      4. Get interactive elements: `agent-browser snapshot -i`
-      5. Navigate to the area related to the issue (use @refs from snapshot)
-      6. Perform the actions described in the repro_hint
-      7. Screenshot each significant state: `agent-browser screenshot "$ARTIFACTS_DIR/repro-02-action.png"`
-      8. If an error appears, capture it: `agent-browser get text @errorElement`
-      9. Check browser console: `agent-browser console`
-      10. Check for JS errors: `agent-browser errors`
-      11. Final screenshot: `agent-browser screenshot "$ARTIFACTS_DIR/repro-03-result.png"`
-      12. Close browser: `agent-browser close`
+      2. Isolate this run: `export CHROME_DEVTOOLS_AXI_SESSION="$WORKFLOW_ID"` then `axi() { npx -y chrome-devtools-axi "$@"; }`
+      3. Open the app: `axi open http://localhost:$PORT`
+      4. Take a baseline screenshot: `axi screenshot "$ARTIFACTS_DIR/repro-01-baseline.png"` — then Read the file
+      5. Get interactive elements: `axi snapshot` (refs look like `@g1:1`; pass them back exactly)
+      6. Navigate to the area related to the issue (use @refs from snapshot)
+      7. Perform the actions described in the repro_hint
+      8. Screenshot each significant state: `axi screenshot "$ARTIFACTS_DIR/repro-02-action.png"`
+      9. If an error appears, capture it from the snapshot or `axi eval` (do not invent a `get text` command)
+      10. Check browser console: `axi console` and `axi console --type error`
+      11. Final screenshot: `axi screenshot "$ARTIFACTS_DIR/repro-03-result.png"`
+      12. Stop this session only: `axi stop`
 
       ### api-server
       1. Read the server port: `PORT=$(cat "$ARTIFACTS_DIR/.server-port" | tr -d '\n')`
@@ -367,11 +367,11 @@ nodes:
 
       Even if you cannot fully reproduce the issue, document what you tried
       and what you observed. Partial reproduction is still valuable evidence.
-      Use $agent-browser when browser-based reproduction is relevant.
+      Use the chrome-devtools-axi skill when browser-based reproduction is relevant.
     depends_on: [classify, git-context, investigate, start-server]
     context: fresh
     skills:
-      - agent-browser
+      - chrome-devtools-axi
     trigger_rule: one_success
     idle_timeout: 300000
 
@@ -403,8 +403,10 @@ nodes:
         done
       fi
 
-      # Close any agent-browser session
-      agent-browser close 2>/dev/null || true
+      # Stop this run's AXI session only (default session if WORKFLOW_ID is unset)
+      if [ -n "$WORKFLOW_ID" ]; then
+        CHROME_DEVTOOLS_AXI_SESSION="$WORKFLOW_ID" npx -y chrome-devtools-axi stop 2>/dev/null || true
+      fi
 
       sleep 1
       echo "Cleanup complete"

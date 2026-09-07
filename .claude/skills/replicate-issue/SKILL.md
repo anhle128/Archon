@@ -8,7 +8,7 @@ description: |
   Triggers: "replicate issue", "reproduce issue", "validate issue", "confirm bug",
             "test issue", "can you reproduce", "try to replicate", "verify the bug".
   Capability: Checks out main, pulls latest, starts Archon, reads the GitHub issue,
-  then uses agent-browser to systematically test every symptom and produce a findings report.
+  then uses chrome-devtools-axi to systematically test every symptom and produce a findings report.
   NOT for: Fixing issues (use /archon or /exp-piv-loop:fix-issue), general UI testing (use /validate-ui).
 argument-hint: "[issue-number]"
 disable-model-invocation: true
@@ -114,26 +114,26 @@ For each symptom described in the issue, define:
 
 ## Phase 2: Reproduce with Browser Automation
 
-Use the `agent-browser` CLI (NOT Playwright) for all browser interactions.
+Use `npx -y chrome-devtools-axi` (NOT Playwright, NOT `agent-browser`) for all browser interactions. Load the `chrome-devtools-axi` skill.
 
 ### Core Workflow
 
 ```bash
-# 1. Navigate to the page
-agent-browser open http://localhost:5173
+# 1. Navigate to the page (open already snapshots)
+npx -y chrome-devtools-axi open http://localhost:5173
 
-# 2. Get interactive elements
-agent-browser snapshot -i
+# 2. Refresh interactive elements (refs look like @g1:1)
+npx -y chrome-devtools-axi snapshot
 
-# 3. Interact using refs from the snapshot
-agent-browser click @e1
-agent-browser fill @e2 "text"
+# 3. Interact using refs from the snapshot — pass them back exactly
+npx -y chrome-devtools-axi click @g1:1
+npx -y chrome-devtools-axi fill @g1:2 "text"
 
-# 4. Re-snapshot after navigation or DOM changes
-agent-browser snapshot -i
+# 4. Re-snapshot after navigation or DOM changes (required on STALE_REF)
+npx -y chrome-devtools-axi snapshot
 
-# 5. Take screenshots at every significant point
-agent-browser screenshot /tmp/issue-$ARGUMENTS-{step-name}.png
+# 5. Take screenshots at every significant point, then Read the file
+npx -y chrome-devtools-axi screenshot /tmp/issue-$ARGUMENTS-{step-name}.png
 ```
 
 ### Testing Guidelines
@@ -147,7 +147,7 @@ agent-browser screenshot /tmp/issue-$ARGUMENTS-{step-name}.png
 - **Use curl for API verification** — cross-reference UI state with direct API calls to confirm data accuracy
 - **Check after page refresh** — many SSE/real-time bugs only manifest after navigation or refresh
 - **Check across conversations** — if the issue involves conversations, test with multiple open conversations
-- **Wait for async operations** — use `agent-browser wait` commands for network-dependent operations
+- **Wait for async operations** — use `npx -y chrome-devtools-axi wait 2000` or `wait "visible text"` for network-dependent operations
 
 ### Triggering Workflows (if needed)
 
@@ -237,8 +237,8 @@ Provide at least 2-3 options ranging from quick fix to comprehensive solution.
 ## Phase 6: Cleanup
 
 ```bash
-# Close the browser
-agent-browser close
+# Stop this AXI session only — do not pkill chrome/node
+npx -y chrome-devtools-axi stop
 
 # Stop Archon (optional — leave running if user wants to continue testing)
 # fuser -k 3090/tcp 2>/dev/null
@@ -278,11 +278,11 @@ Present a final summary to the user:
 
 ## Execution Notes
 
-- Always use `agent-browser` (Vercel Agent Browser CLI), NOT Playwright
-- Load the `/agent-browser` skill if you need a command reference
+- Always use `npx -y chrome-devtools-axi`, NOT Playwright and NOT `agent-browser`
+- Load the `chrome-devtools-axi` skill if you need a command reference
 - Take screenshots at EVERY significant test point — these are your evidence
 - Read screenshots with the Read tool to visually verify what the UI shows
 - If reproduction requires long-running operations, be patient — wait for workflows to complete
 - Cross-reference browser state with API responses (`curl`) to distinguish UI bugs from backend bugs
 - If the issue cannot be reproduced, document what you tried and suggest possible reasons
-- Close the browser when finished: `agent-browser close`
+- Stop the AXI session when finished: `npx -y chrome-devtools-axi stop`

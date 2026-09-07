@@ -690,7 +690,7 @@ export class PiProvider implements IAgentProvider {
       explicitSystemPrompt ??
       (usesAnthropicOAuth ? ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT : undefined);
 
-    //    4d. skills: Archon uses name references (e.g. `skills: [agent-browser]`).
+    //    4d. skills: Archon uses name references (e.g. `skills: [chrome-devtools-axi]`).
     //        Resolve each name against .agents/skills and .claude/skills (project
     //        + user-global). Resolved paths go through Pi's additionalSkillPaths;
     //        Pi's buildSystemPrompt appends their agentskills.io XML block to

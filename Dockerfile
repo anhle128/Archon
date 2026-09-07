@@ -76,7 +76,7 @@ RUN apt-get update && apt-get install -y \
     # code-search tool; jq powers JSON handling in bash workflow nodes) — see #1836
     ripgrep \
     jq \
-    # Chromium for agent-browser E2E testing (drives browser via CDP)
+    # Chromium for chrome-devtools-axi E2E (CDP via chrome-devtools-mcp)
     chromium \
     && rm -rf /var/lib/apt/lists/*
 
@@ -88,29 +88,25 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install agent-browser CLI (Vercel Labs) for E2E testing workflows
-# - Uses npm (not bun) because postinstall script downloads the native Rust binary
-# - After install, symlink the Rust binary directly and purge nodejs/npm (~60MB saved)
-# - The npm entry point is a Node.js wrapper; the native binary works standalone
-# - agent-browser auto-detects Docker (via /.dockerenv) and adds --no-sandbox to Chromium
+# chrome-devtools-axi is a Node CLI (wraps chrome-devtools-mcp). Keep nodejs/npm —
+# unlike the old agent-browser native binary, AXI cannot run after purging Node.
+# Agents may call `chrome-devtools-axi` (global) or `npx -y chrome-devtools-axi`.
+# Preinstall chrome-devtools-mcp and pin CHROME_DEVTOOLS_AXI_MCP_PATH so each
+# session skips a cold `npx` of the MCP server. npm's global prefix varies by
+# distro, so resolve it at build time and symlink to a stable path.
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
-    && npm install -g agent-browser@0.22.1 \
-    && NATIVE_BIN=$(find /usr/local/lib/node_modules/agent-browser -name 'agent-browser-*' -type f -executable 2>/dev/null | head -1) \
-    && if [ -n "$NATIVE_BIN" ]; then \
-         cp "$NATIVE_BIN" /usr/local/bin/agent-browser-native \
-         && chmod +x /usr/local/bin/agent-browser-native \
-         && ln -sf /usr/local/bin/agent-browser-native /usr/local/bin/agent-browser; \
-       else \
-         echo "ERROR: agent-browser native binary not found after npm install" >&2 && exit 1; \
-       fi \
+    && npm install -g chrome-devtools-axi chrome-devtools-mcp \
+    && MCP_JS="$(npm prefix -g)/lib/node_modules/chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js" \
+    && test -f "$MCP_JS" \
+    && ln -sf "$MCP_JS" /usr/local/lib/chrome-devtools-mcp.js \
     && npm cache clean --force \
-    && rm -rf /usr/local/lib/node_modules/agent-browser \
-    && apt-get purge -y nodejs npm \
-    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
-# Point agent-browser to system Chromium (avoids ~400MB Chrome for Testing download)
-ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+# Point Puppeteer/MCP at system Chromium; container Chrome needs --no-sandbox.
+# AXI has no --session flag: parallel runs set CHROME_DEVTOOLS_AXI_SESSION instead.
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV CHROME_DEVTOOLS_AXI_CHROME_ARGS="--no-sandbox --disable-dev-shm-usage --disable-gpu"
+ENV CHROME_DEVTOOLS_AXI_MCP_PATH=/usr/local/lib/chrome-devtools-mcp.js
 
 # CLAUDE_BIN_PATH is set at container startup (docker-entrypoint.sh).
 # The entrypoint pins the glibc variant to bypass the SDK's musl-first resolver.

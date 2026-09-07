@@ -1,6 +1,6 @@
 ---
 title: E2E Testing
-description: Set up agent-browser for end-to-end browser testing in Archon workflows.
+description: Set up chrome-devtools-axi for live agent-driven browser testing in Archon workflows.
 category: deployment
 area: infra
 audience: [developer, operator]
@@ -9,65 +9,90 @@ sidebar:
   order: 5
 ---
 
-Archon uses [agent-browser](https://github.com/vercel-labs/agent-browser) (by Vercel Labs) for end-to-end browser testing in workflows like `archon-validate-pr`. It is an **optional** external dependency — core Archon functionality works without it.
+Archon has two browser layers. Do not mix them up:
+
+| Layer | Tool | Role |
+|-------|------|------|
+| Live agent UI | [chrome-devtools-axi](https://github.com/kunchenguid/chrome-devtools-axi) | `archon-validate-pr` E2E commands, `validate-ui`, `replicate-issue` |
+| Merge / regression | Playwright (`e2e/`, `pr-e2e-verify`) | Durable committed specs. **Unchanged** — do not convert to AXI |
+
+AXI is an **optional** external dependency for live agent-driven flows. Core Archon and Playwright gates work without it.
+
+**Migration:** this fork removed Vercel Labs `agent-browser`. Do not install or invoke `agent-browser`. Isolation is `CHROME_DEVTOOLS_AXI_SESSION=$WORKFLOW_ID`, not `--session`.
 
 ## Installation
 
 ```bash
-# Install globally
-npm install -g agent-browser
+# Zero install — recommended
+npx -y chrome-devtools-axi --help
 
-# Download browser engine (Chrome for Testing)
-agent-browser install
+# Optional global install
+npm install -g chrome-devtools-axi
 ```
 
-## Verify Installation
+Needs a local Chrome (or Chromium). Do not use `bunx`.
+
+## Verify
 
 ```bash
-agent-browser --version
-# Expected: prints version number (e.g., 0.x.x)
+npx -y chrome-devtools-axi --version
 
-# Quick smoke test — opens a page and closes
-agent-browser open https://example.com
-agent-browser close
+# Smoke test — open a page, then stop this session's bridge
+npx -y chrome-devtools-axi open https://example.com
+npx -y chrome-devtools-axi stop
 ```
 
 ## Where It's Used
-
-The following workflows and commands depend on agent-browser:
 
 | Resource | Type | Purpose |
 |----------|------|---------|
 | `archon-validate-pr` | Workflow | E2E testing phase of PR validation |
 | `validate-ui` | Skill | Comprehensive UI testing |
 | `replicate-issue` | Skill | Issue reproduction via browser |
+| `archon-create-issue` | Workflow | web-ui reproduction playbook |
 | `archon-validate-pr-e2e-main.md` | Command | E2E tests against the main branch |
 | `archon-validate-pr-e2e-feature.md` | Command | E2E tests against the feature branch |
+
+Playwright `e2e/` and `pr-e2e-verify` do **not** use AXI.
+
+## Parallel sessions
+
+AXI has no `--session` flag. Each named session gets its own bridge, derived port, and (in the default isolated launch) its own Chrome:
+
+```bash
+export CHROME_DEVTOOLS_AXI_SESSION="$WORKFLOW_ID"
+npx -y chrome-devtools-axi open http://localhost:5173
+# ...
+npx -y chrome-devtools-axi stop
+```
+
+Do **not** export `CHROME_DEVTOOLS_AXI_PORT` when running concurrent sessions — it forces every session onto one port and the second run fails to bind.
 
 ## Platform-Specific Notes
 
 ### Docker
 
-agent-browser is **pre-installed** in the Archon Docker image. No action needed.
+`chrome-devtools-axi` and Node are **pre-installed** in the Archon Docker image. System Chromium is wired via `PUPPETEER_EXECUTABLE_PATH`. Container Chrome flags (`--no-sandbox`) are set with `CHROME_DEVTOOLS_AXI_CHROME_ARGS`. No extra install step.
 
 ### macOS / Linux
 
-Works natively after running the install commands above. If the daemon fails to start:
+Works natively after the commands above. If a stale bridge is stuck:
 
 ```bash
-# Kill stale daemons and retry
-pkill -f daemon.js
-agent-browser open http://localhost:3090
+npx -y chrome-devtools-axi stop
+npx -y chrome-devtools-axi open http://localhost:3090
 ```
+
+Do not `pkill chrome` or `pkill node`.
 
 ### Windows
 
-agent-browser has a [known bug](https://github.com/vercel-labs/agent-browser/issues/56) where the daemon fails to start due to Unix domain socket incompatibility on Windows.
+AXI talks to its bridge over HTTP (`localhost:9224` by default, or a per-session derived port). It does **not** use the Unix-domain-socket daemon that made `agent-browser` fail on Windows.
 
-**Workaround:** Run agent-browser inside WSL while dev servers run on Windows. See the [E2E Testing on WSL](/deployment/e2e-testing-wsl/) guide for detailed setup instructions.
+Try AXI natively on Windows first. The [E2E Testing on WSL](/deployment/e2e-testing-wsl/) page is only for the optional topology where Chrome runs inside WSL and the Archon dev servers run on Windows.
 
-## Running Without agent-browser
+## Running Without AXI
 
-If agent-browser is not installed, the E2E workflow nodes will fail when the agent tries to invoke `agent-browser`. The AI agent is instructed (via prompt) to stop after 2 failed connection attempts and produce a code-review-only report — but this is a prompt-level instruction, not automated workflow logic. Results may vary depending on the AI model's adherence to the instruction.
+If AXI is not installed and `npx` cannot fetch it, live E2E workflow nodes fail when the agent tries to invoke the CLI. The agent is instructed (via prompt) to stop after 2 failed connection attempts and produce a code-review-only report — a prompt-level instruction, not automated workflow logic.
 
-You can safely run all non-E2E workflows without agent-browser installed.
+You can safely run all non-E2E workflows without AXI. Playwright `e2e/` does not need it.

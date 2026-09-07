@@ -34,5 +34,5 @@ SQLite stores data at `~/.archon/archon.db` (or `/.archon/archon.db` in Docker).
 
 | Guide | Audience |
 |-------|----------|
-| [E2E Testing](/deployment/e2e-testing/) | Developers and operators |
-| [E2E Testing on WSL](/deployment/e2e-testing-wsl/) | Developers on Windows |
+| [E2E Testing](/deployment/e2e-testing/) | Developers and operators (chrome-devtools-axi + Playwright split) |
+| [E2E Testing on WSL](/deployment/e2e-testing-wsl/) | Optional: Chrome in WSL, Archon servers on Windows |

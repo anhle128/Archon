@@ -1,5 +1,5 @@
 ---
-description: Start Archon from main branch, use agent-browser to reproduce the bug via E2E testing
+description: Start Archon from main branch, use chrome-devtools-axi to reproduce the bug via E2E testing
 argument-hint: (none - reads from artifacts)
 ---
 
@@ -7,22 +7,23 @@ argument-hint: (none - reads from artifacts)
 
 Start Archon from the **main branch** code and use browser automation to reproduce the bug or gap described in the PR. Take screenshots as evidence.
 
-**CRITICAL**: You MUST use the `agent-browser` CLI for ALL browser interactions. Load the `/agent-browser` skill for the full command reference.
+**CRITICAL**: You MUST use `npx -y chrome-devtools-axi` for ALL browser interactions. Load the `chrome-devtools-axi` skill for the full command reference. Do not use `agent-browser`.
 
 **CRITICAL**: You MUST clean up ALL spawned processes before finishing. Record PIDs and kill them in Phase 4.
 
 **CRITICAL — SESSION ISOLATION**: This workflow runs in parallel with other validate-pr instances.
-You MUST use `--session $WORKFLOW_ID` on EVERY `agent-browser` command to isolate your browser session.
-Example: `agent-browser --session $WORKFLOW_ID open "http://..."`, `agent-browser --session $WORKFLOW_ID snapshot -i`, etc.
+AXI has no `--session` flag. You MUST set `CHROME_DEVTOOLS_AXI_SESSION=$WORKFLOW_ID` on EVERY AXI command so this run gets its own bridge, port, and Chrome.
+Example: `CHROME_DEVTOOLS_AXI_SESSION=$WORKFLOW_ID npx -y chrome-devtools-axi open "http://..."`
 The session ID is written to `$ARTIFACTS_DIR/.browser-session` for cleanup.
+Do **not** export `CHROME_DEVTOOLS_AXI_PORT` (it collapses every session onto one port).
 
 **ABSOLUTELY FORBIDDEN — NEVER DO ANY OF THESE**:
 - `taskkill //F //IM chrome.exe` or ANY variant that kills chrome by image name — this kills the USER's browser
 - `taskkill //F //IM node.exe` or `taskkill //F //IM bun.exe` — this kills Claude Code, the Archon server, and all other workflows
 - `pkill chrome`, `pkill node`, `pkill bun`, or any broad process-name kill
-- `agent-browser close` without `--session $WORKFLOW_ID` — this kills OTHER workflows' browser sessions
-- Any "kill everything" or "kill all" escalation pattern — if agent-browser isn't working, SKIP E2E testing and note it in your report
-- If agent-browser fails to connect after 2 attempts, STOP trying and write your findings based on code review only
+- `npx -y chrome-devtools-axi stop` without `CHROME_DEVTOOLS_AXI_SESSION=$WORKFLOW_ID` — that stops the default session, not yours, and can disturb another run using the default
+- Any "kill everything" or "kill all" escalation pattern — if AXI isn't working, SKIP E2E testing and note it in your report
+- If AXI fails to connect after 2 attempts, STOP trying and write your findings based on code review only
 
 ---
 
@@ -176,40 +177,42 @@ fi
 
 ## Phase 3: Browser Testing (Reproduce Bug)
 
-### 3.1 Load the Agent-Browser Skill
+### 3.1 Load the chrome-devtools-axi Skill
 
-**YOU MUST LOAD THE AGENT-BROWSER SKILL NOW.** Use `/agent-browser` or invoke the skill. This gives you the full command reference for browser automation.
+**YOU MUST LOAD THE CHROME-DEVTOOLS-AXI SKILL NOW.** Use `/chrome-devtools-axi` or invoke the skill. This gives you the full command reference for browser automation.
 
 ### 3.2 Core Browser Workflow
 
 Follow this pattern for every interaction:
 
 ```bash
-# 0. Store session ID for cleanup
+# 0. Isolate this run's bridge/Chrome and store the session id for cleanup
+export CHROME_DEVTOOLS_AXI_SESSION="$WORKFLOW_ID"
 echo "$WORKFLOW_ID" > "$ARTIFACTS_DIR/.browser-session"
+axi() { npx -y chrome-devtools-axi "$@"; }
 
-# 1. Open the Archon UI (ALWAYS use --session)
+# 1. Open the Archon UI (open already returns a snapshot)
 FRONTEND_PORT=$(cat $ARTIFACTS_DIR/.frontend-port | tr -d '\n')
-agent-browser --session $WORKFLOW_ID open "http://localhost:$FRONTEND_PORT"
+axi open "http://localhost:$FRONTEND_PORT"
 
-# 2. Wait for the app to load
-agent-browser --session $WORKFLOW_ID wait --load networkidle
+# 2. Wait for the app to load (AXI has no --load networkidle)
+axi wait 2000
 
-# 3. Get interactive elements
-agent-browser --session $WORKFLOW_ID snapshot -i
+# 3. Refresh interactive refs (pass @g1:1 style refs exactly as printed)
+axi snapshot
 
-# 4. Take a screenshot of initial state
-agent-browser --session $WORKFLOW_ID screenshot "$ARTIFACTS_DIR/e2e-main-01-initial.png"
+# 4. Take a screenshot of initial state, then Read the file
+axi screenshot "$ARTIFACTS_DIR/e2e-main-01-initial.png"
 
-# 5. Interact using refs from snapshot
-# agent-browser --session $WORKFLOW_ID click @e1
-# agent-browser --session $WORKFLOW_ID fill @e2 "text"
+# 5. Interact using refs from the latest snapshot
+# axi click @g1:1
+# axi fill @g1:2 "text"
 
-# 6. Re-snapshot after DOM changes
-# agent-browser --session $WORKFLOW_ID snapshot -i
+# 6. Re-snapshot after DOM changes (or on STALE_REF)
+# axi snapshot
 
 # 7. Take screenshots at every significant point
-# agent-browser --session $WORKFLOW_ID screenshot "$ARTIFACTS_DIR/e2e-main-02-{step}.png"
+# axi screenshot "$ARTIFACTS_DIR/e2e-main-02-{step}.png"
 ```
 
 ### 3.3 Execute Test Plan
@@ -249,8 +252,8 @@ curl -s "http://localhost:$BACKEND_PORT/api/conversations" | head -c 500
 ### 4.1 Close Browser
 
 ```bash
-# ALWAYS use --session to only close YOUR browser, not other workflows'
-agent-browser --session $WORKFLOW_ID close 2>/dev/null || true
+# ALWAYS set CHROME_DEVTOOLS_AXI_SESSION so you only stop YOUR bridge/Chrome
+CHROME_DEVTOOLS_AXI_SESSION="$WORKFLOW_ID" npx -y chrome-devtools-axi stop 2>/dev/null || true
 ```
 
 ### 4.2 Stop Main Branch Archon (Cross-Platform)
@@ -346,7 +349,7 @@ Write to `$ARTIFACTS_DIR/e2e-main.md`:
 ## Success Criteria
 
 - **ARCHON_STARTED**: Backend and frontend running on allocated ports
-- **BROWSER_TESTED**: All test cases executed with agent-browser
+- **BROWSER_TESTED**: All test cases executed with chrome-devtools-axi
 - **SCREENSHOTS_TAKEN**: Evidence captured for each test case
 - **BUG_ASSESSED**: Each PR claim tested on main branch
 - **ARCHON_STOPPED**: Processes killed, ports freed — **VERIFY ports are free before finishing**

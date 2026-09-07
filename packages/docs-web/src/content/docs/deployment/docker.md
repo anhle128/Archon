@@ -623,7 +623,7 @@ docker run --env-file .env -p 3000:3000 archon
 
 - **Runtime**: Bun 1.2 (runs TypeScript directly, no compile step)
 - **System deps**: git, curl, gh (GitHub CLI), postgresql-client, Chromium
-- **Browser tooling**: [agent-browser](https://github.com/vercel-labs/agent-browser) (Vercel Labs) — enables E2E testing workflows via CDP. Uses system Chromium (`AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`)
+- **Browser tooling**: [chrome-devtools-axi](https://github.com/kunchenguid/chrome-devtools-axi) — live agent-driven E2E via CDP. Node stays in the image (AXI is a JS CLI). `chrome-devtools-mcp` is also preinstalled and pointed at by `CHROME_DEVTOOLS_AXI_MCP_PATH` so each session skips a cold `npx` of the MCP server. System Chromium is selected with `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium`; container flags come from `CHROME_DEVTOOLS_AXI_CHROME_ARGS`. Parallel runs isolate with `CHROME_DEVTOOLS_AXI_SESSION`, not `--session`. Playwright `e2e/` is separate and unchanged.
 - **App**: All 10 workspace packages (source), pre-built web UI
 - **User**: Non-root `appuser` (UID 1001) — required by Claude Code SDK
 - **Archon dirs**: `/.archon/workspaces`, `/.archon/worktrees`

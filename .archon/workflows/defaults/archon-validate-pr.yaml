@@ -121,7 +121,7 @@ nodes:
 
       - **e2e_testable**: Changes affect the Web UI (components, hooks, styles, API routes
         that serve the frontend, SSE streaming, layout, user-visible behavior). These can be
-        validated by starting Archon and using agent-browser to interact with the UI.
+        validated by starting Archon and using chrome-devtools-axi to interact with the UI.
       - **code_review_only**: Changes are purely backend logic, CLI-only, workflow engine,
         database schemas, git operations, build tooling, tests, documentation, or other
         non-UI code. No visual validation possible.
@@ -148,6 +148,8 @@ nodes:
     depends_on: [classify-testability, find-ports, resolve-paths, code-review-main, code-review-feature]
     when: "$classify-testability.output.testable == 'e2e_testable'"
     context: fresh
+    skills:
+      - chrome-devtools-axi
     idle_timeout: 1800000
 
   - id: e2e-test-feature
@@ -155,6 +157,8 @@ nodes:
     depends_on: [e2e-test-main, find-ports, resolve-paths]
     when: "$classify-testability.output.testable == 'e2e_testable'"
     context: fresh
+    skills:
+      - chrome-devtools-axi
     idle_timeout: 1800000
 
   # ═══════════════════════════════════════════════════════════════
@@ -197,10 +201,10 @@ nodes:
       pkill -f "PORT=$BACKEND_PORT.*bun" 2>/dev/null || true
       pkill -f "vite.*port.*$FRONTEND_PORT" 2>/dev/null || true
 
-      # Close this workflow's browser session only (scoped by session ID)
+      # Stop this workflow's AXI bridge + Chrome only (scoped by session name)
       BROWSER_SESSION=$(cat "$ARTIFACTS_DIR/.browser-session" 2>/dev/null | tr -d '\n')
       if [ -n "$BROWSER_SESSION" ]; then
-        agent-browser --session "$BROWSER_SESSION" close 2>/dev/null || true
+        CHROME_DEVTOOLS_AXI_SESSION="$BROWSER_SESSION" npx -y chrome-devtools-axi stop 2>/dev/null || true
       fi
 
       # Remove main E2E worktree if it still exists (safety net)

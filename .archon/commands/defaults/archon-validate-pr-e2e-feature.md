@@ -1,5 +1,5 @@
 ---
-description: Start Archon from the feature branch, use agent-browser to verify the fix works correctly
+description: Start Archon from the feature branch, use chrome-devtools-axi to verify the fix works correctly
 argument-hint: (none - reads from artifacts)
 ---
 
@@ -7,21 +7,22 @@ argument-hint: (none - reads from artifacts)
 
 Start Archon from the **feature branch** (this worktree) and use browser automation to verify that the bug is fixed and the UI/UX is correct. Take screenshots as evidence.
 
-**CRITICAL**: You MUST use the `agent-browser` CLI for ALL browser interactions. Load the `/agent-browser` skill for the full command reference.
+**CRITICAL**: You MUST use `npx -y chrome-devtools-axi` for ALL browser interactions. Load the `chrome-devtools-axi` skill for the full command reference. Do not use `agent-browser`.
 
 **CRITICAL**: You MUST clean up ALL spawned processes before finishing. Record PIDs and kill them in Phase 4. Orphaned processes from previous E2E runs may still be running — check and kill them first.
 
 **CRITICAL — SESSION ISOLATION**: This workflow runs in parallel with other validate-pr instances.
-You MUST use `--session $WORKFLOW_ID` on EVERY `agent-browser` command to isolate your browser session.
-Example: `agent-browser --session $WORKFLOW_ID open "http://..."`, `agent-browser --session $WORKFLOW_ID snapshot -i`, etc.
+AXI has no `--session` flag. You MUST set `CHROME_DEVTOOLS_AXI_SESSION=$WORKFLOW_ID` on EVERY AXI command so this run gets its own bridge, port, and Chrome.
+Example: `CHROME_DEVTOOLS_AXI_SESSION=$WORKFLOW_ID npx -y chrome-devtools-axi open "http://..."`
+Do **not** export `CHROME_DEVTOOLS_AXI_PORT` (it collapses every session onto one port).
 
 **ABSOLUTELY FORBIDDEN — NEVER DO ANY OF THESE**:
 - `taskkill //F //IM chrome.exe` or ANY variant that kills chrome by image name — this kills the USER's browser
 - `taskkill //F //IM node.exe` or `taskkill //F //IM bun.exe` — this kills Claude Code, the Archon server, and all other workflows
 - `pkill chrome`, `pkill node`, `pkill bun`, or any broad process-name kill
-- `agent-browser close` without `--session $WORKFLOW_ID` — this kills OTHER workflows' browser sessions
-- Any "kill everything" or "kill all" escalation pattern — if agent-browser isn't working, SKIP E2E testing and note it in your report
-- If agent-browser fails to connect after 2 attempts, STOP trying and write your findings based on code review only
+- `npx -y chrome-devtools-axi stop` without `CHROME_DEVTOOLS_AXI_SESSION=$WORKFLOW_ID` — that stops the default session, not yours, and can disturb another run using the default
+- Any "kill everything" or "kill all" escalation pattern — if AXI isn't working, SKIP E2E testing and note it in your report
+- If AXI fails to connect after 2 attempts, STOP trying and write your findings based on code review only
 
 ---
 
@@ -181,25 +182,29 @@ fi
 
 ## Phase 3: Browser Testing (Verify Fix)
 
-### 3.1 Load the Agent-Browser Skill
+### 3.1 Load the chrome-devtools-axi Skill
 
-**YOU MUST LOAD THE AGENT-BROWSER SKILL NOW.** Use `/agent-browser` or invoke the skill. This gives you the full command reference for browser automation.
+**YOU MUST LOAD THE CHROME-DEVTOOLS-AXI SKILL NOW.** Use `/chrome-devtools-axi` or invoke the skill. This gives you the full command reference for browser automation.
 
 ### 3.2 Core Browser Workflow
 
 ```bash
-# 1. Open the Archon UI (ALWAYS use --session)
+export CHROME_DEVTOOLS_AXI_SESSION="$WORKFLOW_ID"
+echo "$WORKFLOW_ID" > "$ARTIFACTS_DIR/.browser-session"
+axi() { npx -y chrome-devtools-axi "$@"; }
+
+# 1. Open the Archon UI (open already returns a snapshot)
 FRONTEND_PORT=$(cat $ARTIFACTS_DIR/.frontend-port | tr -d '\n')
-agent-browser --session $WORKFLOW_ID open "http://localhost:$FRONTEND_PORT"
+axi open "http://localhost:$FRONTEND_PORT"
 
-# 2. Wait for the app to load
-agent-browser --session $WORKFLOW_ID wait --load networkidle
+# 2. Wait for the app to load (AXI has no --load networkidle)
+axi wait 2000
 
-# 3. Get interactive elements
-agent-browser --session $WORKFLOW_ID snapshot -i
+# 3. Refresh interactive refs if the first snapshot is stale
+axi snapshot
 
-# 4. Take a screenshot of initial state
-agent-browser --session $WORKFLOW_ID screenshot "$ARTIFACTS_DIR/e2e-feature-01-initial.png"
+# 4. Take a screenshot of initial state, then Read the file
+axi screenshot "$ARTIFACTS_DIR/e2e-feature-01-initial.png"
 ```
 
 ### 3.3 Re-Run All Test Cases from Main
@@ -222,10 +227,10 @@ Beyond just checking the bug is fixed, validate the overall experience:
 3. **Visual quality** — no layout issues, colors correct, text readable
 4. **Responsiveness** — resize the viewport, check different sizes:
    ```bash
-   agent-browser --session $WORKFLOW_ID set viewport 1920 1080
-   agent-browser --session $WORKFLOW_ID screenshot "$ARTIFACTS_DIR/e2e-feature-desktop.png"
-   agent-browser --session $WORKFLOW_ID set viewport 768 1024
-   agent-browser --session $WORKFLOW_ID screenshot "$ARTIFACTS_DIR/e2e-feature-tablet.png"
+   axi resize 1920 1080
+   axi screenshot "$ARTIFACTS_DIR/e2e-feature-desktop.png"
+   axi emulate --viewport 768x1024
+   axi screenshot "$ARTIFACTS_DIR/e2e-feature-tablet.png"
    ```
 5. **No regressions** — other features near the fix still work correctly
 
@@ -247,8 +252,8 @@ curl -s "http://localhost:$BACKEND_PORT/api/conversations" | head -c 500
 ### 4.1 Close Browser
 
 ```bash
-# ALWAYS use --session to only close YOUR browser, not other workflows'
-agent-browser --session $WORKFLOW_ID close 2>/dev/null || true
+# ALWAYS set CHROME_DEVTOOLS_AXI_SESSION so you only stop YOUR bridge/Chrome
+CHROME_DEVTOOLS_AXI_SESSION="$WORKFLOW_ID" npx -y chrome-devtools-axi stop 2>/dev/null || true
 ```
 
 ### 4.2 Stop Feature Branch Archon (Cross-Platform)

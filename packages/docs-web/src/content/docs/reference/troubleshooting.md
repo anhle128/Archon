@@ -197,28 +197,34 @@ Do not kill `claude.exe` processes — those are active Claude Code sessions.
 
 See also: [Windows Setup](/deployment/windows/) for more Windows-specific guidance.
 
-## E2E Testing / agent-browser
+## E2E Testing / chrome-devtools-axi
 
-**`agent-browser: command not found`:**
+This fork uses [chrome-devtools-axi](https://github.com/kunchenguid/chrome-devtools-axi), not Vercel Labs `agent-browser`. Playwright `e2e/` / `pr-e2e-verify` are a separate merge gate.
 
-`agent-browser` is an optional external dependency -- see the [E2E Testing Guide](/deployment/e2e-testing/) for installation.
+**`chrome-devtools-axi: command not found` / `npx` cannot fetch the package:**
+
+AXI is an optional external dependency -- see the [E2E Testing Guide](/deployment/e2e-testing/).
 
 ```bash
-npm install -g agent-browser
-agent-browser install
+npx -y chrome-devtools-axi --help
+# or
+npm install -g chrome-devtools-axi
 ```
 
-**agent-browser daemon fails to start (Windows):**
+**Windows:** AXI uses an HTTP bridge, not the Unix-socket daemon that broke `agent-browser` on Windows. Try native Windows first. The [E2E Testing on WSL](/deployment/e2e-testing-wsl/) page is only for Chrome-in-WSL + servers-on-Windows.
 
-agent-browser has a [known Windows bug](https://github.com/vercel-labs/agent-browser/issues/56). Use WSL as a workaround -- see [E2E Testing on WSL](/deployment/e2e-testing-wsl/).
+**Stale AXI bridge (macOS/Linux/Windows):**
 
-**agent-browser daemon fails to start (macOS/Linux):**
+Stop **this session's** bridge and retry. Do not `pkill chrome` or `pkill node`.
 
-Kill stale daemons and retry:
 ```bash
-pkill -f daemon.js
-agent-browser open http://localhost:3090
+CHROME_DEVTOOLS_AXI_SESSION="$WORKFLOW_ID" npx -y chrome-devtools-axi stop
+npx -y chrome-devtools-axi open http://localhost:3090
 ```
+
+**Second parallel validate-pr cannot bind a port:**
+
+You exported `CHROME_DEVTOOLS_AXI_PORT`. Unset it so each `CHROME_DEVTOOLS_AXI_SESSION` can use its derived port.
 
 ## Docker
 
