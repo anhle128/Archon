@@ -79,63 +79,9 @@ nodes:
   # STEP 3b / 5 — Independent Codex gpt-5.6-sol verify + fix (replaces ck:plan's
   # human review gates) and answers the planner's open questions.
   # ───────────────────────────────────────────────────────────────────
-  - id: verify-and-fix-plan
+  - id: validate-plan
     prompt: |
-      Review and revise the complete plan at `$resolve-plan.output`.
-      Treat the current plan as an unverified draft.
-      Do not trust its claims, assumptions, scope, file references, technical decisions, or conclusions.
-
-      Independently inspect the repository, documentation, code, tests, configuration, and existing behavior.
-      Use repository evidence to verify every material part of the plan.
-
-      Determine:
-
-      - What goal the plan is trying to achieve.
-      - Whether that goal matches the actual project need.
-      - Whether the proposed solution fully meets that goal.
-      - Whether the scope is correct and complete.
-      - Whether any requirements, decisions, or steps conflict.
-      - Whether the plan conflicts with existing behavior, contracts, architecture, conventions, or repository rules.
-      - Whether the design is correct, simple, maintainable, secure, scalable, and reliable.
-      - Whether the named files, components, dependencies, and code paths are accurate.
-      - Whether the implementation order is practical and complete.
-      - Whether compatibility, migration, rollout, failure handling, and operational concerns are covered.
-      - Whether the test and validation strategy can prove the result.
-      - Whether the acceptance criteria are complete, measurable, and tied to the goal.
-      - Whether the plan contains unsupported assumptions, gaps, unnecessary work, duplication, or premature abstractions.
-
-      Trace the affected behavior end to end.
-      Check direct and indirect effects outside the files named by the plan.
-      Look for important cases that the plan author may have missed.
-
-      Fix every verified problem directly in the plan.
-      Add missing details that an implementing engineer needs.
-      Remove incorrect, conflicting, redundant, or unnecessary content.
-      Keep the solution focused and proportional to the goal.
-
-      Do not implement production code.
-      Your task is to make the plan ready for implementation.
-
-      After revising the plan, review it again from these perspectives:
-
-      1. Product goal and user outcome.
-      2. Architecture and technical correctness.
-      3. Public and internal contracts.
-      4. Security, reliability, and data integrity.
-      5. Performance and scalability.
-      6. Implementation completeness.
-      7. Testing and verification.
-      8. Operations, compatibility, migration, and rollback.
-      9. Simplicity and long-term maintainability.
-
-      Finish with a concise report that states:
-
-      - Your interpretation of the goal.
-      - The evidence you inspected.
-      - The important problems you found.
-      - The changes you made.
-      - Any remaining risks, assumptions, or unresolved questions.
-      - Whether the plan is ready to implement.
+      /ak:plan validate `$resolve-plan.output`.
     depends_on: [resolve-plan]
     provider: codex
     effort: xhigh
@@ -213,9 +159,9 @@ nodes:
       Report the ABSOLUTE path of the Ralph directory as `prd_dir` (resolve it with
       `realpath` so it is stable regardless of cwd).
     depends_on: [verify-fix]
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-sol
+    provider: omp
+    model: cursor/gemini-3.8-flash  
+    effort: hight
     context: fresh
     output_format:
       type: object

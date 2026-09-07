@@ -17,11 +17,16 @@ Do not bypass that policy or claim screenshot parity from source reads.
 
 ## Delivery Failure
 
-- `SPEC.md` names its companions as the complete contract but omits the UX document and mockup.
-- `epics-workflow-run-view-hitl/epics.md:97` records that the UX/mockup was absent at extraction.
+- `_bmad-output/specs/spec-workflow-run-view-hitl/SPEC.md:3` names its companions as the complete contract but omits the UX document and mockup.
+- `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md:97` records that the UX/mockup was absent at extraction.
 - `docs/superpowers/plans/2026-09-06-node-transcript-logs-legacy.md:2019` changes tool blocks into chips with collapsed JSON details.
 - That plan's acceptance walkthrough checks content and ordering, not comparison with the mockup.
 - `NodeRoom.tsx:147` implements the substituted tool presentation.
+
+This evidence identifies a broken design handoff and a missing visual acceptance gate.
+It does not establish which person or agent read each file.
+During planning, another session advanced HEAD to `7981e417` and committed the initial plan stubs.
+The intervening diff contains planning and skill files, not product-source changes, so the product findings above still apply to the research baseline.
 
 ## Visual Inventory
 
