@@ -64,6 +64,8 @@ function renderRoom(
     messages?: readonly WorkflowNodeMessageResponse[] | undefined;
     isPending?: boolean;
     error?: unknown;
+    renderAfterMessage?: (message: WorkflowNodeMessageResponse) => React.ReactNode;
+    renderAtEnd?: React.ReactNode;
   } = {}
 ): string {
   return renderToStaticMarkup(
@@ -76,6 +78,8 @@ function renderRoom(
       onRetry={(): void => {
         return;
       }}
+      renderAfterMessage={overrides.renderAfterMessage}
+      renderAtEnd={overrides.renderAtEnd}
     />
   );
 }
@@ -212,5 +216,59 @@ describe('NodeRoom', () => {
     expect(prohibited.includes('awaiting')).toBe(false);
     expect(prohibited.includes('pending-interaction')).toBe(false);
     expect(prohibited.includes('pending_interaction')).toBe(false);
+  });
+
+  test('renders generic transcript extension slots', () => {
+    const text: WorkflowNodeMessageResponse = {
+      id: 'text-1',
+      seq: 1,
+      kind: 'text',
+      payload: { text: 'alpha' },
+      created_at: CREATED_AT,
+    };
+    const tool: WorkflowNodeMessageResponse = {
+      id: 'tool-1',
+      seq: 2,
+      kind: 'tool',
+      payload: { name: 'Read', id: 't1' },
+      created_at: CREATED_AT,
+    };
+    const renderAfterMessage = (message: WorkflowNodeMessageResponse): React.ReactNode =>
+      `extension-${message.id}`;
+
+    const ordered = renderRoom({
+      messages: [text, tool],
+      renderAfterMessage,
+      renderAtEnd: 'end-extension',
+    });
+    const alphaIndex = ordered.indexOf('alpha');
+    const afterText = ordered.indexOf('extension-text-1');
+    const toolIndex = ordered.indexOf('Read');
+    const afterTool = ordered.indexOf('extension-tool-1');
+    const endIndex = ordered.indexOf('end-extension');
+    expect(alphaIndex).toBeGreaterThan(-1);
+    expect(afterText).toBeGreaterThan(alphaIndex);
+    expect(toolIndex).toBeGreaterThan(afterText);
+    expect(afterTool).toBeGreaterThan(toolIndex);
+    expect(endIndex).toBeGreaterThan(afterTool);
+
+    const empty = renderRoom({
+      messages: [],
+      renderAfterMessage,
+      renderAtEnd: 'end-extension',
+    });
+    expect(visibleText(empty)).toBe('end-extension');
+    expect(empty).not.toContain("Node hasn't produced output");
+
+    const errorMarkup = renderRoom({
+      error: new Error('boom'),
+      messages: undefined,
+      renderAfterMessage,
+      renderAtEnd: 'end-extension',
+    });
+    const retryIndex = errorMarkup.indexOf('Retry');
+    const errorEndIndex = errorMarkup.indexOf('end-extension');
+    expect(retryIndex).toBeGreaterThan(-1);
+    expect(errorEndIndex).toBeGreaterThan(retryIndex);
   });
 });

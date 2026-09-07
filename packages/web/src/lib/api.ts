@@ -432,6 +432,36 @@ export async function getWorkflowRun(
   return fetchJSON(`/api/workflows/runs/${encodeURIComponent(runId)}`);
 }
 
+export type PendingInteraction = components['schemas']['PendingInteraction'];
+export type AskAnswerBody = components['schemas']['AskAnswerBody'];
+export type WorkflowRunActionResponse = components['schemas']['WorkflowRunActionResponse'];
+
+export function getApiErrorStatus(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null) {
+    return null;
+  }
+  if (!('status' in error)) {
+    return null;
+  }
+  const status = error.status;
+  return typeof status === 'number' ? status : null;
+}
+
+export async function answerAskHuman(
+  runId: string,
+  requestId: string,
+  body: AskAnswerBody
+): Promise<WorkflowRunActionResponse> {
+  return fetchJSON(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/ask/${encodeURIComponent(requestId)}/answer`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
+}
+
 export type GitChangesResponse = components['schemas']['GitChangesResponse'];
 export type GitChangedFile = components['schemas']['GitChangedFile'];
 export type GitEmptyReason = components['schemas']['GitEmptyReason'];
