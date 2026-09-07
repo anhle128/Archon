@@ -6,6 +6,8 @@ import type { Root } from 'react-dom/client';
 import type { LogRow } from './inspect/build-log-rows';
 import type { Run } from '../primitives/run';
 import type {
+  AskAnswerBody,
+  PendingInteraction,
   WorkflowEvent,
   WorkflowNodeMessage,
   WorkflowNodeMessagesResponse,
@@ -146,13 +148,38 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
-function assertNoEpicSix(host: Element): void {
+function assertNoConversationComposer(host: Element): void {
   const text = host.textContent ?? '';
-  expect(text).not.toContain('Waiting on you');
-  expect(text).not.toContain('AskCard');
   expect(text).not.toContain('ChatComposer');
-  expect(text).not.toContain('pending_interactions');
-  expect(text).not.toContain('awaiting');
+  expect(text).not.toContain('Reply…');
+}
+
+function ask(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
+  return {
+    id: 'ask-1',
+    workflow_run_id: 'run-1',
+    node_id: 'review',
+    tool_use_id: 'tool-1',
+    kind: 'ask',
+    status: 'pending',
+    envelope: {
+      questions: [
+        {
+          id: 'q1',
+          prompt: 'Ship it?',
+          selection: 'single',
+          options: ['Ship', 'Hold'],
+          allowOther: false,
+        },
+      ],
+    },
+    answer: null,
+    provider_session_id: 'session-1',
+    created_at: CREATED_AT,
+    resolved_at: null,
+    resolved_by: null,
+    ...overrides,
+  };
 }
 
 type IntervalCallback = () => void;
@@ -224,6 +251,11 @@ describe('ConsoleNodeRoom', () => {
         onClose: (): void => {
           closed += 1;
         },
+        pendingInteractions: [],
+        viewerIsStarter: true,
+        starterDisplayName: 'Avery',
+        actionStates: {},
+        onSubmitAsk: async (_requestId: string, _body: AskAnswerBody): Promise<void> => undefined,
         ...overrides,
       })
     );
@@ -257,10 +289,10 @@ describe('ConsoleNodeRoom', () => {
     expect(host.textContent).toContain('"ok": true');
     expect(host.textContent).toContain('iteration_started');
     expect(host.textContent).toContain('iteration_failed');
-    expect(host.textContent).toContain('running');
+    expect(host.textContent).toContain('waiting on you');
     expect(host.textContent).toContain('×2');
     expect(host.textContent).not.toContain('first');
-    assertNoEpicSix(host);
+    assertNoConversationComposer(host);
   });
 
   test('rekeys loadMessages when the selected agent node changes', async () => {
@@ -546,7 +578,7 @@ describe('ConsoleNodeRoom', () => {
     expect(pre?.textContent).toBe('hello\nworld');
     expect(host.textContent).toContain('Output truncated from 40000 bytes');
     expect(host.textContent).toContain('Exit status: 0');
-    assertNoEpicSix(host);
+    assertNoConversationComposer(host);
   });
 
   test('renders gate message, decision controls, and omits controls when inactive', async () => {
@@ -573,7 +605,7 @@ describe('ConsoleNodeRoom', () => {
     expect(host.textContent).toContain('Waiting for approval');
     expect(host.textContent).toContain('Continue');
     expect(host.textContent).toContain('Reject');
-    assertNoEpicSix(host);
+    assertNoConversationComposer(host);
 
     await act(async () => {
       renderRoom({
@@ -803,6 +835,111 @@ describe('ConsoleNodeRoom', () => {
     const open = host.querySelector('details[open]');
     expect(open?.getAttribute('aria-current')).toBe('true');
     expect(open?.textContent).toContain('×2 failed');
+  });
+
+  test('places independent anchored Ask cards after their tool rows', async () => {
+    const messages: WorkflowNodeMessage[] = [
+      ...FIXTURE,
+      {
+        id: 'm9',
+        seq: 9,
+        kind: 'tool',
+        payload: { name: 'AskHuman', id: 'tool-2', input: {} },
+        created_at: CREATED_AT,
+      },
+    ];
+    await act(async () => {
+      renderRoom({
+        selectedRow: row({ nodeId: 'review', label: 'Review', status: 'awaiting' }),
+        nodeStates: [nodeState({ nodeId: 'review', name: 'Review', status: 'awaiting' })],
+        pendingInteractions: [ask(), ask({ id: 'ask-2', tool_use_id: 'tool-2' })],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages }),
+      });
+    });
+    await flushUntil('two Ask cards', () => host.querySelectorAll('form').length === 2);
+    const firstTool = [...host.querySelectorAll('span')].find(
+      item => (item.textContent ?? '').trim() === 'Read'
+    );
+    const firstCard = host.querySelector('form');
+    expect(firstTool).toBeDefined();
+    expect(firstCard).not.toBeNull();
+    if (firstTool === undefined || firstCard === null) {
+      throw new Error('missing tool or card');
+    }
+    expect(
+      firstTool.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).not.toBe(0);
+    expect(host.textContent).toContain('waiting on you');
+    assertNoConversationComposer(host);
+  });
+
+  test('appends an unanchored Ask for an empty transcript and keeps it on fetch error', async () => {
+    await act(async () => {
+      renderRoom({
+        pendingInteractions: [ask({ tool_use_id: 'not-yet-persisted' })],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+      });
+    });
+    await flushUntil('empty transcript Ask', () => host.querySelector('form') !== null);
+    expect(host.textContent).not.toContain("Node hasn't produced output");
+
+    invalidate('run-node-messages');
+    await act(async () => {
+      renderRoom({
+        run: run({ id: 'run-error-ask' }),
+        pendingInteractions: [ask({ workflow_run_id: 'run-error-ask', tool_use_id: 'missing' })],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => {
+          throw new Error('boom');
+        },
+      });
+    });
+    await flushUntil('error and Ask', () =>
+      (host.textContent ?? '').includes('Failed to load node transcript')
+    );
+    expect(host.querySelector('form')).not.toBeNull();
+    expect(host.textContent).toContain('Retry');
+  });
+
+  test('maps malformed and teammate cards but never renders Ask in stdout rooms', async () => {
+    await act(async () => {
+      renderRoom({
+        viewerIsStarter: false,
+        pendingInteractions: [ask({ envelope: { broken: true } })],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [...FIXTURE],
+        }),
+      });
+    });
+    await flushUntil('invalid Ask', () => (host.textContent ?? '').includes('Invalid Ask payload'));
+    expect(host.textContent).not.toContain('Submit');
+
+    await act(async () => {
+      renderRoom({
+        viewerIsStarter: false,
+        pendingInteractions: [ask()],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [...FIXTURE],
+        }),
+      });
+    });
+    await flushUntil('teammate Ask', () =>
+      (host.textContent ?? '').includes('Waiting for Avery to answer')
+    );
+    expect(host.textContent).not.toContain('Submit');
+    expect(host.textContent).not.toContain('Decline');
+
+    await act(async () => {
+      renderRoom({
+        nodeId: 'setup',
+        selectedRow: row({ nodeId: 'setup', label: 'Setup' }),
+        definitionNodes: [{ id: 'setup', bash: 'echo ok' }],
+        nodeStates: [nodeState({ nodeId: 'setup', name: 'Setup', status: 'completed' })],
+        pendingInteractions: [ask({ node_id: 'setup' })],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+      });
+    });
+    await flush();
+    expect(host.querySelector('form')).toBeNull();
   });
 
   test('close button calls onClose', async () => {

@@ -8,6 +8,7 @@ import { foldNodeRuns, toRunEvent } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Run } from '../primitives/run';
 import type {
+  PendingInteraction,
   WorkflowEvent,
   WorkflowNodeMessage,
   WorkflowNodeMessagesResponse,
@@ -307,6 +308,11 @@ describe('ConsoleInspectPane', () => {
       onCloseRoom: (): void => undefined,
       loadDefinition: defaultLoadDefinition,
       loadMessages: defaultLoadMessages,
+      pendingInteractions: [],
+      viewerIsStarter: true,
+      starterDisplayName: 'Avery',
+      actionStates: {},
+      onSubmitAsk: async (): Promise<void> => undefined,
       ...overrides,
     };
   }
@@ -323,7 +329,31 @@ describe('ConsoleInspectPane', () => {
       calls.push([runId, nodeId]);
       return Promise.resolve({ messages: [...PLAN_MESSAGES] });
     };
-    const props = baseProps({ loadMessages });
+    const pendingAsk: PendingInteraction = {
+      id: 'ask-plan',
+      workflow_run_id: 'run-1',
+      node_id: 'plan',
+      tool_use_id: 'tool-not-persisted',
+      kind: 'ask',
+      status: 'pending',
+      envelope: {
+        questions: [
+          {
+            id: 'q1',
+            prompt: 'Ship it?',
+            selection: 'single',
+            options: ['Ship', 'Hold'],
+            allowOther: false,
+          },
+        ],
+      },
+      answer: null,
+      provider_session_id: 'session-1',
+      created_at: CREATED_AT,
+      resolved_at: null,
+      resolved_by: null,
+    };
+    const props = baseProps({ loadMessages, pendingInteractions: [pendingAsk] });
 
     await act(async () => {
       root.render(
@@ -336,7 +366,9 @@ describe('ConsoleInspectPane', () => {
     await flushUntil('plan transcript', () => (host.textContent ?? '').includes(PLAN_TEXT));
 
     const roomBefore = host.querySelector('[aria-label="plan room"]');
+    const formBefore = host.querySelector('form');
     expect(roomBefore).not.toBeNull();
+    expect(formBefore).not.toBeNull();
     expect(calls).toEqual([['run-1', 'plan']]);
     expect(host.textContent).toContain('Log header');
     expect(host.textContent).toContain('plan output');
@@ -354,6 +386,7 @@ describe('ConsoleInspectPane', () => {
     );
     const roomAfter = host.querySelector('[aria-label="plan room"]');
     expect(roomAfter).toBe(roomBefore);
+    expect(host.querySelector('form')).toBe(formBefore);
     expect(calls).toEqual([['run-1', 'plan']]);
     expect(host.textContent).toContain(PLAN_TEXT);
     expect(host.textContent).not.toContain('Log header');
