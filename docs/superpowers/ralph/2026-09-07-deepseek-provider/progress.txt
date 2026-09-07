@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### AsyncQueue single waiter and one terminal
+- **Where**: `packages/providers/src/community/deepseek/async-queue.ts`
+- **Pattern**: One `QueueWaiter` slot and one `closed | failed` terminal. `push` resolves a waiting reader immediately; otherwise enqueue. `close`/`fail` drain the buffer before `done: true` or reject, and are idempotent. `push` after terminal throws. Do not `Promise.reject(unknown)` — `@typescript-eslint/prefer-promise-reject-errors` fails; reject through `QueueWaiter.reject` so `fail(error: unknown)` keeps identity.
+- **Example**: `new AsyncQueue<T>()` then `push` / `close` / `fail`
+
 ### Strict MCP translation (no skip, no mutation)
 - **Where**: `packages/providers/src/community/deepseek/mcp.ts`
 - **Pattern**: `import type { McpServer }` only. Omitted `type` is stdio. Bare commands resolve with `which`/`where` against the supplied `PATH`; absolute commands stay unchanged after a POSIX `X_OK` / Windows regular-file check. Stdio ACP shape has no `type` field; HTTP includes `type: 'http'`. SSE and unknown transports throw `deepseek_mcp_config_error`. Never mutate input objects; clone `args` and convert env/headers into new `{ name, value }[]`.
@@ -175,5 +180,26 @@
 - Stdio ACP `McpServerStdio` has no `type` field; HTTP must include `type: 'http'`.
 - `execFileSync('which'|'where', [command], { env })` uses the supplied PATH; tests must include `/usr/bin` so `which` itself is findable.
 - PATH tests use a real temp executable; do not mutate `process.env`.
+
+---
+
+## 2026-09-07 — US-006: Implement async callback-to-generator queue
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/async-queue.ts` — `AsyncQueue<T>` FIFO with push/close/fail and a single waiter
+- `packages/providers/src/community/deepseek/async-queue.test.ts` — FIFO, waiter wakeup, drain-before-done/reject, idempotent terminal, no double-settle
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/async-queue.ts exports AsyncQueue<T> implementing AsyncIterable<T>.
+- [x] push(value: T) appends value in FIFO order, immediately resolving any awaiting reader.
+- [x] close() drains buffered values before completing with done: true.
+- [x] fail(error: unknown) drains buffered values before rejecting with the stored error.
+- [x] close() and fail() are idempotent; push() after terminal state throws.
+- [x] packages/providers/src/community/deepseek/async-queue.test.ts passes via bun test src/community/deepseek/async-queue.test.ts.
+
+**Learnings**:
+- `@typescript-eslint/prefer-promise-reject-errors` rejects `Promise.reject(unknown)` even when `fail(error: unknown)` is the public contract. Reject through `QueueWaiter.reject` so the stored reason identity is preserved.
+- Plan Task 5 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:660-722` (prd.md line numbers are stale).
 
 ---
