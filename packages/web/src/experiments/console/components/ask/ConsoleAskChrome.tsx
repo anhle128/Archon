@@ -3,7 +3,7 @@ import type { PendingInteraction, WorkflowNodeState } from '../../skills/runs';
 
 import {
   countPendingAsks,
-  firstAwaitingNodeId,
+  firstPendingAskAwaitingNodeId,
   isAskAwaitingRun,
   isAskHumanUnsupportedError,
 } from './awaiting-chrome';
@@ -41,7 +41,10 @@ export function ConsoleAskChrome({
   }
 
   const handleClick = (): void => {
-    const nodeId = firstAwaitingNodeId(nodeStates);
+    const nodeId = firstPendingAskAwaitingNodeId({
+      pending: pendingInteractions,
+      nodes: nodeStates,
+    });
     if (nodeId === null) {
       return;
     }

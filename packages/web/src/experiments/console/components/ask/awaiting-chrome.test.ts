@@ -5,6 +5,7 @@ import type { PendingInteraction, WorkflowNodeState } from '../../skills/runs';
 import {
   countPendingAsks,
   firstAwaitingNodeId,
+  firstPendingAskAwaitingNodeId,
   isAskAwaitingRun,
   isAskHumanUnsupportedError,
 } from './awaiting-chrome';
@@ -76,5 +77,32 @@ describe('awaiting chrome helpers', () => {
     expect(isAskHumanUnsupportedError('')).toBe(false);
     expect(isAskHumanUnsupportedError(null)).toBe(false);
     expect(isAskHumanUnsupportedError(undefined)).toBe(false);
+  });
+
+  test('first pending Ask awaiting node ignores earlier non-Ask awaiting nodes', () => {
+    const permission = interaction({
+      id: 'perm-1',
+      node_id: 'approve',
+      tool_use_id: 'tool-p',
+      kind: 'permission',
+    });
+    const pendingAsk = interaction({ node_id: 'review' });
+
+    expect(
+      firstPendingAskAwaitingNodeId({
+        pending: [permission, pendingAsk],
+        nodes: [
+          node({ nodeId: 'approve', status: 'awaiting' }),
+          node({ nodeId: 'review', status: 'awaiting' }),
+        ],
+      })
+    ).toBe('review');
+
+    expect(
+      firstPendingAskAwaitingNodeId({
+        pending: [pendingAsk],
+        nodes: [node({ nodeId: 'review', status: 'running' })],
+      })
+    ).toBeNull();
   });
 });

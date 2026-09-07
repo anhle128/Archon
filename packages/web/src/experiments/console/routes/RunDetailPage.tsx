@@ -24,7 +24,7 @@ import {
   type AskActionState,
   type AskActionStateByRequest,
 } from '../components/ask/ask-answer-controller';
-import { isAskAwaitingRun } from '../components/ask/awaiting-chrome';
+import { firstPendingAskAwaitingNodeId, isAskAwaitingRun } from '../components/ask/awaiting-chrome';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { buildConsoleLogEntries } from '../components/inspect/build-console-log-entries';
 import { buildLogRows } from '../components/inspect/build-log-rows';
@@ -246,6 +246,14 @@ export function RunDetailPage(): ReactElement {
     [inspectNodeStates, detail]
   );
 
+  const askAwaitingNodeId = useMemo(() => {
+    if (detail === undefined || detail === null) return null;
+    return firstPendingAskAwaitingNodeId({
+      pending: detail.pendingInteractions,
+      nodes: inspectNodeStates,
+    });
+  }, [detail, inspectNodeStates]);
+
   const logEntries = useMemo(
     () =>
       buildConsoleLogEntries({
@@ -284,12 +292,13 @@ export function RunDetailPage(): ReactElement {
     setInspectSelection(
       resolveInitialInspectSelection({
         requestedNodeId: readNodeSearchParam(location.search),
+        preferredNodeId: askAwaitingNodeId,
         nodeStates: inspectNodeStates,
         rows: logRows,
         approvalNodeId: readApprovalContext(detail.approval)?.nodeId ?? null,
       })
     );
-  }, [detail, runId, inspectNodeStates, logRows, location.search]);
+  }, [detail, runId, inspectNodeStates, logRows, location.search, askAwaitingNodeId]);
 
   useEffect(() => {
     const requested = readNodeSearchParam(location.search);

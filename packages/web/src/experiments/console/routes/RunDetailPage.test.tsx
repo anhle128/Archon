@@ -790,13 +790,20 @@ describe('RunDetailPage inspect selection', () => {
 
   test('jumps to an awaiting room, answers through the skill, and keeps gate keys inactive', async () => {
     const pending = ask();
+    const permission = ask({
+      id: 'permission-1',
+      node_id: 'approve',
+      tool_use_id: 'tool-permission',
+      kind: 'permission',
+    });
     stubPageFetch({
       status: 'paused',
       nodeStates: [
+        nodeState({ nodeId: 'approve', name: 'Approve', status: 'awaiting' }),
         nodeState({ nodeId: 'review', name: 'Review', status: 'awaiting' }),
         nodeState({ nodeId: 'build', name: 'Build', status: 'running' }),
       ],
-      pendingInteractions: [pending],
+      pendingInteractions: [permission, pending],
       viewerIsStarter: true,
       starterDisplayName: 'Avery',
     });
@@ -817,6 +824,22 @@ describe('RunDetailPage inspect selection', () => {
         host.querySelector('[aria-label="review room"] form') !== null
     );
     expect(locationSearch()).toContain('node=review');
+
+    const dialog = host.querySelector('dialog[aria-modal="true"]');
+    if (dialog === null) throw new Error('missing decline dialog');
+    expect((dialog as HTMLDialogElement).open).toBe(false);
+
+    document.body.focus();
+    const logKey = new KeyboardEvent('keydown', { key: '1', cancelable: true });
+    await act(async () => {
+      window.dispatchEvent(logKey);
+    });
+    expect(logKey.defaultPrevented).toBe(true);
+    await flushUntil(
+      'log key switched view',
+      () => host.querySelector('[data-testid="console-run-graph-scroller"]') === null
+    );
+    expect(host.querySelector('[aria-label="review room"] form')).not.toBeNull();
 
     const choice = host.querySelector('input[type="radio"][value="Ship"]');
     if (!(choice instanceof HTMLInputElement)) throw new Error('missing Ship choice');
@@ -849,6 +872,35 @@ describe('RunDetailPage inspect selection', () => {
     expect(approveKey.defaultPrevented).toBe(false);
     expect(rejectKey.defaultPrevented).toBe(false);
     expect(host.textContent).not.toContain('Reply…');
+  });
+
+  test('initial room selection prefers the pending Ask node over permission awaiting nodes', async () => {
+    const pending = ask();
+    const permission = ask({
+      id: 'permission-1',
+      node_id: 'approve',
+      tool_use_id: 'tool-permission',
+      kind: 'permission',
+    });
+    stubPageFetch({
+      status: 'paused',
+      nodeStates: [
+        nodeState({ nodeId: 'approve', name: 'Approve', status: 'awaiting' }),
+        nodeState({ nodeId: 'review', name: 'Review', status: 'awaiting' }),
+        nodeState({ nodeId: 'build', name: 'Build', status: 'running' }),
+      ],
+      pendingInteractions: [permission, pending],
+      viewerIsStarter: true,
+      starterDisplayName: 'Avery',
+    });
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil(
+      'review Ask room',
+      () => host.querySelector('[aria-label="review room"] form') !== null
+    );
+    expect(host.querySelector('[aria-label="approve room"] form')).toBeNull();
   });
 
   test('renders CAP-7 failure as error chrome without an awaiting pill', async () => {

@@ -68,6 +68,24 @@ describe('resolveInitialInspectSelection', () => {
     ).toEqual({ nodeId: 'review', logRowId: 'review-row' });
   });
 
+  test('a preferred live node wins over generic awaiting fallback', () => {
+    expect(
+      resolveInitialInspectSelection({
+        requestedNodeId: null,
+        preferredNodeId: 'review',
+        nodeStates: [
+          nodeState({ nodeId: 'approve', name: 'Approve', status: 'awaiting' }),
+          nodeState({ nodeId: 'review', name: 'Review', status: 'awaiting' }),
+        ],
+        rows: [
+          row({ id: 'approve-row', nodeId: 'approve', status: 'awaiting' }),
+          row({ id: 'review-row', nodeId: 'review', status: 'awaiting' }),
+        ],
+        approvalNodeId: null,
+      })
+    ).toEqual({ nodeId: 'review', logRowId: 'review-row' });
+  });
+
   test('awaiting wins over an earlier running node', () => {
     expect(
       resolveInitialInspectSelection({

@@ -86,6 +86,32 @@ describe('ConsoleAskChrome', () => {
     );
     expect(order).toEqual(['graph', 'review']);
 
+    const mixedOrder: string[] = [];
+    clickRootButton(
+      renderChrome({
+        pendingInteractions: [
+          interaction({
+            id: 'perm-1',
+            node_id: 'approve',
+            tool_use_id: 'tool-p',
+            kind: 'permission',
+          }),
+          interaction({ node_id: 'review' }),
+        ],
+        nodeStates: [
+          node({ nodeId: 'approve', status: 'awaiting' }),
+          node({ nodeId: 'review', status: 'awaiting' }),
+        ],
+        onRequestGraphView: (): void => {
+          mixedOrder.push('graph');
+        },
+        onSelectAwaitingNode: (nodeId: string): void => {
+          mixedOrder.push(nodeId);
+        },
+      })
+    );
+    expect(mixedOrder).toEqual(['graph', 'review']);
+
     const noopCalls: string[] = [];
     clickRootButton(
       renderChrome({
