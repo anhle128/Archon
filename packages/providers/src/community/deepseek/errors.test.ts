@@ -4,6 +4,7 @@ import {
   collectDeepseekSecretValues,
   DeepseekProviderError,
   isDeepseekSecretName,
+  isRedactableSecretValue,
   redactDeepseekSecrets,
   toDeepseekErrorResult,
 } from './errors';
@@ -36,6 +37,32 @@ describe('redactDeepseekSecrets', () => {
     expect(redactDeepseekSecrets('a SECRET then SECRET', ['SECRET'])).toBe(
       'a [REDACTED] then [REDACTED]'
     );
+  });
+
+  test('redacts a longer secret before a shorter secret that is its prefix', () => {
+    // Shortest-first would turn `sk-live-secret` into `[REDACTED]e-secret`,
+    // leaving the longer secret's remainder in the message.
+    const shorter = 'sk-liv';
+    const longer = 'sk-live-secret';
+
+    expect(redactDeepseekSecrets(`key=${longer}`, [shorter, longer])).toBe('key=[REDACTED]');
+    expect(redactDeepseekSecrets(`key=${longer}`, [longer, shorter])).toBe('key=[REDACTED]');
+    expect(redactDeepseekSecrets(`key=${shorter}`, [shorter, longer])).toBe('key=[REDACTED]');
+  });
+
+  test('does not mutate the caller secret order', () => {
+    const secrets = ['sk-liv', 'sk-live-secret'];
+    redactDeepseekSecrets('sk-live-secret', secrets);
+    expect(secrets).toEqual(['sk-liv', 'sk-live-secret']);
+  });
+});
+
+describe('isRedactableSecretValue', () => {
+  test('applies the shared length floor and rejects undefined', () => {
+    expect(isRedactableSecretValue('abcd')).toBe(true);
+    expect(isRedactableSecretValue('abc')).toBe(false);
+    expect(isRedactableSecretValue('')).toBe(false);
+    expect(isRedactableSecretValue(undefined)).toBe(false);
   });
 });
 

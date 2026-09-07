@@ -20,6 +20,7 @@ import {
   collectDeepseekSecretValues,
   DeepseekProviderError,
   isDeepseekSecretName,
+  isRedactableSecretValue,
   toDeepseekErrorResult,
 } from './errors';
 import { buildDeepseekMcpServers } from './mcp';
@@ -57,33 +58,40 @@ function asDeepseekMcpConfigError(error: unknown): DeepseekProviderError {
   });
 }
 
+/**
+ * Append candidate secret values, applying the one shared policy: the length
+ * floor and de-duplication. Callers pass name-matched values; the floor lives
+ * here so it cannot diverge between env and MCP sources.
+ */
 function addSecretValues(secrets: string[], values: readonly string[]): void {
   for (const value of values) {
-    if (value.length >= 4 && !secrets.includes(value)) {
+    if (isRedactableSecretValue(value) && !secrets.includes(value)) {
       secrets.push(value);
     }
   }
 }
 
+/**
+ * Name-matched secret values declared on MCP servers. These carry header and
+ * per-server env values that never enter the child environment, so `env`-derived
+ * redaction would miss them. Length filtering and dedup happen in
+ * `addSecretValues`.
+ */
 function mcpSecretValues(servers: DeepseekProcessInput['mcpServers']): string[] {
-  const secrets: string[] = [];
+  const values: string[] = [];
   for (const server of servers) {
     if ('headers' in server) {
       for (const header of server.headers) {
-        if (isDeepseekSecretName(header.name) && !secrets.includes(header.value)) {
-          secrets.push(header.value);
-        }
+        if (isDeepseekSecretName(header.name)) values.push(header.value);
       }
     }
     if ('env' in server) {
       for (const entry of server.env) {
-        if (isDeepseekSecretName(entry.name) && !secrets.includes(entry.value)) {
-          secrets.push(entry.value);
-        }
+        if (isDeepseekSecretName(entry.name)) values.push(entry.value);
       }
     }
   }
-  return secrets;
+  return values;
 }
 
 function requireModelForCustomRoute(
@@ -188,6 +196,7 @@ export class DeepseekProvider implements IAgentProvider {
         dshEntrypoint,
         profile: config.profile ?? DEFAULT_DEEPSEEK_PROFILE,
         env: childEnv,
+        secretValues: secrets,
       };
 
       yield* withResumedOutcome(runTurn(input), resumedOutcome(resumeSessionId, true));

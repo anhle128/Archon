@@ -26,7 +26,12 @@ const SENSITIVE_ENV_NAME_PATTERN =
   /(?:API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH(?:ORIZATION)?|COOKIE)/i;
 const MIN_SECRET_LENGTH = 4;
 
-function isRedactableSecret(value: string | undefined): value is string {
+/**
+ * Whether a value is worth redacting. Values shorter than the floor are skipped:
+ * a 2-3 character "secret" matches ordinary output and would shred every message
+ * it appeared in while protecting nothing real.
+ */
+export function isRedactableSecretValue(value: string | undefined): value is string {
   return value !== undefined && value.length >= MIN_SECRET_LENGTH;
 }
 
@@ -37,7 +42,7 @@ export function isDeepseekSecretName(name: string): boolean {
 export function collectDeepseekSecretValues(env: Record<string, string | undefined>): string[] {
   const secrets: string[] = [];
   for (const [name, value] of Object.entries(env)) {
-    if (isDeepseekSecretName(name) && isRedactableSecret(value) && !secrets.includes(value)) {
+    if (isDeepseekSecretName(name) && isRedactableSecretValue(value) && !secrets.includes(value)) {
       secrets.push(value);
     }
   }
@@ -46,7 +51,9 @@ export function collectDeepseekSecretValues(env: Record<string, string | undefin
 
 export function redactDeepseekSecrets(message: string, secrets: readonly string[]): string {
   let redacted = message;
-  for (const secret of secrets) {
+  // Longest first: redacting a shorter secret that is a prefix of a longer one
+  // would leave the longer secret's remainder exposed.
+  for (const secret of [...secrets].sort((a: string, b: string) => b.length - a.length)) {
     if (secret.length === 0) continue;
     redacted = redacted.split(secret).join('[REDACTED]');
   }

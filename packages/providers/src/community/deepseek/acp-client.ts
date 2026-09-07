@@ -48,6 +48,13 @@ export interface DeepseekProcessInput extends DeepseekAcpTurnInput {
   dshEntrypoint: string;
   profile: 'acp';
   env: Record<string, string>;
+  /**
+   * Extra secret values to redact from error output, supplied by the caller that
+   * knows more than this module can derive from `env` alone — notably MCP header
+   * and env values, which never appear in the child environment. Unioned with the
+   * env-derived set so a direct caller still gets env redaction for free.
+   */
+  secretValues?: readonly string[];
 }
 
 export interface DeepseekProcessDependencies {
@@ -122,47 +129,78 @@ function waitMs(ms: number): Promise<void> {
   });
 }
 
-function toSpawnFailed(
-  error: unknown,
-  stderrText: string,
-  secrets: readonly string[]
-): DeepseekProviderError {
-  const base = redactDeepseekSecrets(errorMessage(error), secrets);
-  const excerpt = redactedStderrExcerpt(stderrText, secrets);
+/**
+ * Raw stderr plus the facts needed to bound it safely. `truncated` records that
+ * accumulation stopped at the cap, which is the only case where a secret can be
+ * split across the boundary and leave an unredactable fragment behind.
+ */
+interface StderrEvidence {
+  readonly text: string;
+  readonly truncated: boolean;
+  readonly secrets: readonly string[];
+}
+
+/**
+ * Length of the longest secret prefix a redacted tail still ends with.
+ *
+ * Truncation can cut a secret in half. The surviving head is not a whole
+ * secret, so redaction cannot match it and it would be emitted verbatim. This
+ * runs AFTER full-match redaction on purpose: measuring against the raw text
+ * lets one secret's prefix match across the boundary of another, and trimming
+ * that many characters would cut into an already-complete secret and expose its
+ * own head. Complete matches are removed first, then the leftover fragment is
+ * measured and dropped, so only the artifact disappears.
+ */
+function trailingSecretFragmentLength(redacted: string, secrets: readonly string[]): number {
+  let longest = 0;
+  for (const secret of secrets) {
+    const maxPrefix = Math.min(secret.length - 1, redacted.length);
+    for (let length = maxPrefix; length > longest; length--) {
+      if (redacted.endsWith(secret.slice(0, length))) {
+        longest = length;
+        break;
+      }
+    }
+  }
+  return longest;
+}
+
+function toSpawnFailed(error: unknown, stderr: StderrEvidence): DeepseekProviderError {
+  const base = redactDeepseekSecrets(errorMessage(error), stderr.secrets);
+  const excerpt = redactedStderrExcerpt(stderr);
   const message = excerpt.length > 0 ? `${base}\n${excerpt}` : base;
   return new DeepseekProviderError('deepseek_spawn_failed', message, { cause: error });
 }
 
-function toAcpFailed(
-  error: unknown,
-  stderrText: string,
-  secrets: readonly string[]
-): DeepseekProviderError {
+function toAcpFailed(error: unknown, stderr: StderrEvidence): DeepseekProviderError {
   return withStderr(
     new DeepseekProviderError(
       'deepseek_acp_error',
-      redactDeepseekSecrets(errorMessage(error), secrets),
+      redactDeepseekSecrets(errorMessage(error), stderr.secrets),
       { cause: error }
     ),
-    stderrText,
-    secrets
+    stderr
   );
 }
 
-function redactedStderrExcerpt(stderrText: string, secrets: readonly string[]): string {
-  return redactDeepseekSecrets(stderrText, secrets).slice(0, STDERR_CAP);
+function redactedStderrExcerpt(stderr: StderrEvidence): string {
+  const { text, secrets } = stderr;
+  // Order is load-bearing: redact complete matches first, then drop the trailing
+  // fragment truncation left behind, then cap. See `trailingSecretFragmentLength`.
+  const redacted = redactDeepseekSecrets(text, secrets);
+  const fragment = stderr.truncated ? trailingSecretFragmentLength(redacted, secrets) : 0;
+  const safe = fragment > 0 ? redacted.slice(0, redacted.length - fragment) : redacted;
+  return safe.slice(0, STDERR_CAP);
 }
 
-function withStderr(
-  error: DeepseekProviderError,
-  stderrText: string,
-  secrets: readonly string[]
-): DeepseekProviderError {
-  if (stderrText.length === 0) return error;
+function withStderr(error: DeepseekProviderError, stderr: StderrEvidence): DeepseekProviderError {
+  if (stderr.text.length === 0) return error;
   return new DeepseekProviderError(
     error.subtype,
-    `${error.message}\n${redactedStderrExcerpt(stderrText, secrets)}`,
-    { cause: error }
+    `${error.message}\n${redactedStderrExcerpt(stderr)}`,
+    {
+      cause: error,
+    }
   );
 }
 
@@ -353,7 +391,13 @@ export async function* runDeepseekAcpTurn(
 ): AsyncGenerator<MessageChunk> {
   const spawnFn = dependencies?.spawn ?? spawn;
   const terminateGraceMs = dependencies?.terminateGraceMs ?? DEFAULT_TERMINATE_GRACE_MS;
-  const secrets = collectDeepseekSecretValues(input.env);
+  const secrets = [
+    ...new Set([...collectDeepseekSecretValues(input.env), ...(input.secretValues ?? [])]),
+  ];
+  // Headroom beyond the output cap: redaction replaces each secret with
+  // `[REDACTED]`, so keeping extra raw bytes lets the redacted excerpt still
+  // reach STDERR_CAP. A secret split by this cap leaves a fragment redaction
+  // cannot match; `redactedStderrExcerpt` drops it after redacting.
   const stderrBufferCap =
     STDERR_CAP + Math.max(0, ...secrets.map((secret: string) => secret.length));
 
@@ -365,15 +409,22 @@ export async function* runDeepseekAcpTurn(
       stdio: ['pipe', 'pipe', 'pipe'],
     });
   } catch (error) {
-    throw toSpawnFailed(error, '', secrets);
+    throw toSpawnFailed(error, { text: '', truncated: false, secrets });
   }
 
   let stderrText = '';
+  let stderrTruncated = false;
   if (child.stderr !== null) {
     child.stderr.on('data', (chunk: Buffer | string) => {
-      if (stderrText.length >= stderrBufferCap) return;
+      if (stderrText.length >= stderrBufferCap) {
+        stderrTruncated = true;
+        return;
+      }
       stderrText += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      if (stderrText.length > stderrBufferCap) stderrText = stderrText.slice(0, stderrBufferCap);
+      if (stderrText.length > stderrBufferCap) {
+        stderrText = stderrText.slice(0, stderrBufferCap);
+        stderrTruncated = true;
+      }
     });
   }
 
@@ -428,19 +479,20 @@ export async function* runDeepseekAcpTurn(
     finished = true;
   } catch (error) {
     finished = true;
+    const stderr: StderrEvidence = { text: stderrText, truncated: stderrTruncated, secrets };
     if (spawnError !== undefined || error instanceof Error) {
       const early =
         spawnError !== undefined ||
         (error instanceof Error &&
           error.message.startsWith('DSH process exited before the ACP turn completed'));
       if (early) {
-        throw toSpawnFailed(spawnError ?? error, stderrText, secrets);
+        throw toSpawnFailed(spawnError ?? error, stderr);
       }
     }
     if (error instanceof DeepseekProviderError) {
-      throw withStderr(error, stderrText, secrets);
+      throw withStderr(error, stderr);
     }
-    throw toAcpFailed(error, stderrText, secrets);
+    throw toAcpFailed(error, stderr);
   } finally {
     finished = true;
     try {

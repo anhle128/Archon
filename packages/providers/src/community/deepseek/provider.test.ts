@@ -503,6 +503,11 @@ describe('DeepseekProvider', () => {
     );
 
     expect(calls).toHaveLength(1);
+    // The runner is what accumulates and redacts child stderr, so it must be
+    // handed the combined set: the env key plus MCP header values, which never
+    // enter the child environment.
+    expect(calls[0]?.secretValues).toContain(headerSecret);
+    expect(calls[0]?.secretValues).toContain(API_KEY);
     expect(chunks).toEqual([
       {
         type: 'result',

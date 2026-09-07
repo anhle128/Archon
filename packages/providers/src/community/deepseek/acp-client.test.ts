@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { ChildProcess, SpawnOptions } from 'node:child_process';
+import type { ChildProcess, spawn, SpawnOptions } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Readable, Writable } from 'node:stream';
 import {
@@ -597,7 +597,7 @@ describe('runDeepseekAcpTurn', () => {
       recorded.push({ command, args, options });
       attachAgent(child, fake);
       return child as unknown as ChildProcess;
-    }) as typeof import('node:child_process').spawn;
+    }) as typeof spawn;
 
     const input = processInput();
     await collect(runDeepseekAcpTurn(input, { spawn: spawnImpl, terminateGraceMs: 0 }));
@@ -620,7 +620,7 @@ describe('runDeepseekAcpTurn', () => {
       const spawnImpl = ((_command: string, _args: readonly string[]): ChildProcess => {
         attachAgent(child, fake);
         return child as unknown as ChildProcess;
-      }) as typeof import('node:child_process').spawn;
+      }) as typeof spawn;
       void drive;
       await collect(runDeepseekAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 }));
       return child.signals;
@@ -636,7 +636,7 @@ describe('runDeepseekAcpTurn', () => {
     const protocolSpawn = ((_command: string): ChildProcess => {
       attachAgent(protocolChild, protocolFake);
       return protocolChild as unknown as ChildProcess;
-    }) as typeof import('node:child_process').spawn;
+    }) as typeof spawn;
     await collect(
       runDeepseekAcpTurn(processInput({ model: 'deepseek-chat' }), {
         spawn: protocolSpawn,
@@ -652,7 +652,7 @@ describe('runDeepseekAcpTurn', () => {
     const abortSpawn = ((_command: string): ChildProcess => {
       attachAgent(abortChild, abortFake);
       return abortChild as unknown as ChildProcess;
-    }) as typeof import('node:child_process').spawn;
+    }) as typeof spawn;
     const controller = new AbortController();
     const abortGen = runDeepseekAcpTurn(processInput({ abortSignal: controller.signal }), {
       spawn: abortSpawn,
@@ -684,7 +684,7 @@ describe('runDeepseekAcpTurn', () => {
     const earlySpawn = ((_command: string): ChildProcess => {
       attachAgent(earlyChild, earlyFake);
       return earlyChild as unknown as ChildProcess;
-    }) as typeof import('node:child_process').spawn;
+    }) as typeof spawn;
     const earlyGen = runDeepseekAcpTurn(processInput(), {
       spawn: earlySpawn,
       terminateGraceMs: 0,
@@ -702,7 +702,7 @@ describe('runDeepseekAcpTurn', () => {
     const spawnImpl = ((_command: string): ChildProcess => {
       attachAgent(child, fake);
       return child as unknown as ChildProcess;
-    }) as typeof import('node:child_process').spawn;
+    }) as typeof spawn;
     await collect(runDeepseekAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 }));
     expect(child.signals).toEqual(['SIGTERM', 'SIGKILL']);
   });
@@ -710,7 +710,7 @@ describe('runDeepseekAcpTurn', () => {
   test('spawn error surfaces deepseek_spawn_failed without the API key', async () => {
     const spawnImpl = (() => {
       throw new Error('ENOENT node sk-live-secret');
-    }) as unknown as typeof import('node:child_process').spawn;
+    }) as unknown as typeof spawn;
     const error = await collect(
       runDeepseekAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 })
     ).catch((caught: unknown) => caught);
@@ -727,7 +727,7 @@ describe('runDeepseekAcpTurn', () => {
         child.stdout.destroy(new Error('stream exploded'));
       });
       return child as unknown as ChildProcess;
-    }) as typeof import('node:child_process').spawn;
+    }) as typeof spawn;
 
     const error = await collect(
       runDeepseekAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 })
@@ -746,7 +746,7 @@ describe('runDeepseekAcpTurn', () => {
     const spawnImpl = ((_command: string): ChildProcess => {
       queueMicrotask(() => child.crash(1, long));
       return child as unknown as ChildProcess;
-    }) as typeof import('node:child_process').spawn;
+    }) as typeof spawn;
     const error = await collect(
       runDeepseekAcpTurn(
         processInput({
@@ -775,7 +775,7 @@ describe('runDeepseekAcpTurn', () => {
     const spawnImpl = ((_command: string): ChildProcess => {
       queueMicrotask(() => child.crash(1, long));
       return child as unknown as ChildProcess;
-    }) as typeof import('node:child_process').spawn;
+    }) as typeof spawn;
 
     const error = await collect(
       runDeepseekAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 })
@@ -786,5 +786,107 @@ describe('runDeepseekAcpTurn', () => {
     expect((error as DeepseekProviderError).subtype).toBe('deepseek_spawn_failed');
     expect(message).not.toContain(secret);
     expect(message).not.toContain(secret.slice(0, 6));
+  });
+
+  test('a secret repeated until the cap leaks no fragment of itself', async () => {
+    // Truncation splits the final copy in half; the surviving head is not a whole
+    // secret, so redaction cannot match it. The excerpt must still drop it.
+    const secret = 'sk-live-secret';
+    const child = new FakeChild();
+    const spawnImpl = ((_command: string): ChildProcess => {
+      queueMicrotask(() => child.crash(1, secret.repeat(1000)));
+      return child as unknown as ChildProcess;
+    }) as typeof spawn;
+
+    const error = await collect(
+      runDeepseekAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 })
+    ).catch((caught: unknown) => caught);
+
+    const message = (error as DeepseekProviderError).message;
+    expect(error).toBeInstanceOf(DeepseekProviderError);
+    expect(message).toContain('[REDACTED]');
+    // Any prefix of 4+ characters is a real leak; assert every one is absent.
+    for (let length = 4; length <= secret.length; length++) {
+      expect(message).not.toContain(secret.slice(0, length));
+    }
+    expect(message.slice(message.indexOf('[REDACTED]')).length).toBeLessThanOrEqual(4096);
+  });
+
+  test('trimming a truncated tail never cuts into a complete secret', async () => {
+    // The raw tail ends with `ecretsk-live-`, a prefix of the SECOND secret.
+    // Measuring the trim against raw text eats 13 characters back into the
+    // first, already-complete secret and exposes `sk-live-s`. Redaction must run
+    // before the trim so only the truncation artifact disappears.
+    const secret = 'sk-live-secret';
+    const crossSecret = 'ecretsk-live-AAAA';
+    // Mirrors the runner's buffer cap: output cap plus the longest secret.
+    const bufferCap = 4096 + crossSecret.length;
+    const splitFragment = 'sk-live-';
+    const fillerCount = Math.floor((bufferCap - 3 - splitFragment.length) / secret.length);
+    const padding = bufferCap - fillerCount * secret.length - splitFragment.length;
+    // Land `splitFragment` exactly at the cap, then overflow so truncation bites.
+    const stderrText =
+      'x'.repeat(padding) + secret.repeat(fillerCount) + splitFragment + 'y'.repeat(100);
+    expect(stderrText.length).toBeGreaterThan(bufferCap);
+    expect(stderrText.slice(0, bufferCap).endsWith(crossSecret.slice(0, 13))).toBeTrue();
+
+    const child = new FakeChild();
+    const spawnImpl = ((_command: string): ChildProcess => {
+      queueMicrotask(() => child.crash(1, stderrText));
+      return child as unknown as ChildProcess;
+    }) as typeof spawn;
+
+    const error = await collect(
+      runDeepseekAcpTurn(processInput({ secretValues: [crossSecret] }), {
+        spawn: spawnImpl,
+        terminateGraceMs: 0,
+      })
+    ).catch((caught: unknown) => caught);
+
+    const message = (error as DeepseekProviderError).message;
+    expect(error).toBeInstanceOf(DeepseekProviderError);
+    expect(message).not.toContain(secret);
+    expect(message).not.toContain(crossSecret);
+    // Every 4+ character prefix of the real secret would be a genuine leak.
+    for (let length = 4; length <= secret.length; length++) {
+      expect(message).not.toContain(secret.slice(0, length));
+    }
+  });
+
+  test('caller-supplied secretValues reach the runner and are redacted', async () => {
+    // MCP header values never enter the child environment, so env-derived
+    // redaction cannot see them — they must arrive through `secretValues`.
+    // The header sits early in stderr so it is inside every possible buffer cap;
+    // the overflow filler only forces truncation. Boundary splitting is covered
+    // by the two tests above.
+    const headerSecret = 'Bearer static-mcp-header-token';
+    const envSecret = 'sk-live-secret';
+    const stderrText = `${headerSecret} failed\n${'v'.repeat(6000)}`;
+
+    const child = new FakeChild();
+    const spawnImpl = ((_command: string): ChildProcess => {
+      queueMicrotask(() => child.crash(1, stderrText));
+      return child as unknown as ChildProcess;
+    }) as typeof spawn;
+
+    const error = await collect(
+      runDeepseekAcpTurn(
+        processInput({
+          env: { DEEPSEEK_API_KEY: envSecret, PATH: '/usr/bin' },
+          secretValues: [headerSecret],
+        }),
+        { spawn: spawnImpl, terminateGraceMs: 0 }
+      )
+    ).catch((caught: unknown) => caught);
+
+    const message = (error as DeepseekProviderError).message;
+    expect(error).toBeInstanceOf(DeepseekProviderError);
+    // Sanity: without `secretValues` the header would survive verbatim, because
+    // its name is not an env var name the collector can match.
+    expect(stderrText).toContain(headerSecret);
+    expect(message).toContain('[REDACTED]');
+    expect(message).not.toContain(headerSecret);
+    expect(message).not.toContain('Bearer');
+    expect(message).not.toContain(envSecret);
   });
 });
