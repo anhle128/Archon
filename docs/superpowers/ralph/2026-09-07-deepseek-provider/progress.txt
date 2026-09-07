@@ -1,5 +1,11 @@
 ## Codebase Patterns
 
+### Community provider registration without eager ACP
+- **Where**: `packages/providers/src/community/deepseek/registration.ts`, `packages/providers/src/registry.ts`
+- **Pattern**: Idempotent `isRegisteredProvider('deepseek')` guard, `builtIn: false`, vendor `deepseek` API-key spec. One import + `registerDeepseekProvider()` in `registerCommunityProviders()` immediately before the env-gated fake. Root and community barrels re-export `DeepseekProvider`, `parseDeepseekConfig`, `registerDeepseekProvider`, `DEEPSEEK_CAPABILITIES`, and `DeepseekProviderDefaults`. Lazy-load test mocks only `@agentclientprotocol/sdk` with a factory counter (do not mock `@deepseek-ai/dsh`), then dynamically imports registration/provider and instantiates — never `sendQuery()`. `provider-lazy-load.test.ts` is its own last DeepSeek `bun test` invocation. Loader tests register in the case and restore `registerBuiltinProviders()` + `registerOmpProvider()` in `finally` after `clearRegistry()`.
+- **Example**: `registerDeepseekProvider()` / `new DeepseekProvider()` leaves ACP SDK load count at 0
+
+
 ### DeepSeek provider error-as-result + lazy ACP import
 - **Where**: `packages/providers/src/community/deepseek/provider.ts`
 - **Pattern**: Store injected `DeepseekProviderDependencies` only. Check `abortSignal.aborted` before parse/env/MCP/runner. Capture the resolved API key for redaction after `buildDeepseekChildEnv`. Dynamic `import('./acp-client')` happens after preflight when `runTurn` is not injected — type-only `DeepseekProcessInput` import is erased. Wrap the runner with `withResumedOutcome(stream, resumedOutcome(resumeSessionId, true))`; resume failures throw `deepseek_resume_failed` and the outer catch yields one error result (never `session/new`). Dedup MCP `missingVars` into one system warning.
@@ -263,5 +269,35 @@
 - Type-only import of `DeepseekProcessInput` from `acp-client.ts` is erased at runtime; keep the value import as `await import('./acp-client')` after preflight.
 - `requestOptions?.nodeConfig?.mcp` does not narrow `requestOptions`; use `requestOptions?.env` when passing the MCP env source.
 - Duplicate `$VAR` expansions in one MCP file are pushed repeatedly by `loadMcpConfig`; dedup before the system warning.
+
+---
+
+## 2026-09-07 — US-009: Register provider, export public surface, and prove lazy loading and workflow selection
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/registration.ts` — idempotent `registerDeepseekProvider()` with `builtIn: false` and vendor `deepseek`
+- `packages/providers/src/community/deepseek/index.ts` — public barrel re-exports
+- `packages/providers/src/community/deepseek/provider-lazy-load.test.ts` — ACP SDK factory-count stays zero on import/instantiate
+- `packages/providers/src/registry.ts` — `registerCommunityProviders()` calls `registerDeepseekProvider()` before the e2e fake
+- `packages/providers/src/registry.test.ts` — aggregator presence/count plus metadata, capabilities, credentials, idempotence
+- `packages/providers/src/index.ts` — re-exports the public DeepSeek surface
+- `packages/providers/package.json` — `./community/deepseek` export and 12 isolated DeepSeek test invocations (lazy-load last)
+- `packages/workflows/src/loader.test.ts` — `provider: deepseek` parses after registration
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/registration.ts exports registerDeepseekProvider(), registering id 'deepseek', displayName 'DeepSeek Harness (community)', builtIn: false, and vendor 'deepseek'.
+- [x] packages/providers/src/registry.ts invokes registerDeepseekProvider() inside registerCommunityProviders().
+- [x] packages/providers/src/community/deepseek/index.ts and packages/providers/src/index.ts re-export DeepseekProvider, parseDeepseekConfig, registerDeepseekProvider, DEEPSEEK_CAPABILITIES, and DeepseekProviderDefaults.
+- [x] packages/providers/package.json exports ./community/deepseek and lists all 12 DeepSeek test files as explicit test script invocations, with provider-lazy-load.test.ts placed in an isolated final invocation.
+- [x] packages/providers/src/community/deepseek/provider-lazy-load.test.ts proves importing registration and instantiating DeepseekProvider evaluates @agentclientprotocol/sdk zero times.
+- [x] packages/workflows/src/loader.test.ts verifies a workflow with provider: deepseek passes parseWorkflowYaml() when registered.
+- [x] packages/providers/src/registry.test.ts asserts registration metadata, capabilities, credentials, and idempotence.
+- [x] Tests pass via bun test src/registry.test.ts, bun test src/community/deepseek/provider-lazy-load.test.ts in packages/providers, and bun test src/loader.test.ts in packages/workflows.
+
+**Learnings**:
+- Plan Task 8 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1004-1144` (prd.md line numbers are stale).
+- Do not use line-anchored patch tools on large files in this harness — `registry.test.ts` was truncated that way; prefer exact-string Python edits that assert original length.
+- `json.dumps` of `package.json` can stay a 3-line git diff if you mutate `exports`/`scripts` in place rather than rewriting unrelated keys.
 
 ---
