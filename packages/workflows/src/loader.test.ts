@@ -3757,7 +3757,7 @@ nodes:
       expect(nodes.has('speckit-converge-exhausted')).toBe(false);
     });
 
-    it('loads pr-e2e-verify with AXI plan-tests artifacts and an unchanged Playwright run-e2e gate', async () => {
+    it('loads pr-e2e-verify with issue authority and a bounded diagnosis and repair route', async () => {
       const workflowPath = join(
         import.meta.dir,
         '..',
@@ -3778,30 +3778,43 @@ nodes:
       if (!planTests || !isPromptNode(planTests)) {
         throw new Error('pr-e2e-verify plan-tests prompt node missing');
       }
-      expect(planTests.skills).toEqual(['web-automation-test-pr', 'chrome-devtools-axi']);
-      expect(planTests.prompt).toContain('npx -y chrome-devtools-axi');
-      expect(planTests.prompt).toContain('$ARTIFACTS_DIR/plan-tests/');
-      expect(planTests.output_format).toMatchObject({
-        type: 'object',
-        required: ['pr', 'spec_file', 'mocked_externals', 'artifacts'],
+      expect(result.workflow?.inputs).toMatchObject({
+        pr: { required: true },
+        issue: { required: true },
       });
-      const artifactItems = (
-        planTests.output_format as {
-          properties?: { artifacts?: { items?: { properties?: Record<string, unknown> } } };
-        }
-      ).properties?.artifacts?.items;
-      expect(artifactItems).toMatchObject({
-        type: 'object',
-        required: ['kind', 'path', 'purpose'],
+      expect(planTests.depends_on).toEqual(['initialize']);
+      expect(planTests.prompt).toContain('ENTIRE issue');
+      expect(planTests.prompt).toContain('meaningful RED tests');
+      expect(nodes.get('freeze-contract')?.depends_on).toEqual(['audit-contract']);
+      expect(nodes.get('repair')).toMatchObject({
+        provider: 'claude',
+        model: 'claude-sonnet-5',
+        depends_on: ['diagnose'],
       });
-
-      const runE2e = nodes.get('run-e2e');
-      expect(runE2e && isBashNode(runE2e)).toBe(true);
-      if (!runE2e || !isBashNode(runE2e)) {
-        throw new Error('pr-e2e-verify run-e2e bash node missing');
+      expect(nodes.get('verify')).toMatchObject({
+        provider: 'codex',
+        model: 'gpt-5.6-sol',
+        context: 'fresh',
+        depends_on: ['run-checks'],
+      });
+      expect(nodes.get('gate')).toMatchObject({
+        depends_on: ['acceptance'],
+        route_loop: {
+          condition: "$acceptance.output == 'true'",
+          max_iterations: 5,
+          routes: { positive: 'publish', negative: 'diagnose', exhausted: 'exhausted' },
+        },
+      });
+      expect(nodes.get('run-checks')).toMatchObject({
+        depends_on: ['freeze-contract', 'repair'],
+        trigger_rule: 'one_success',
+      });
+      const exhausted = nodes.get('exhausted');
+      if (!exhausted || !isBashNode(exhausted)) {
+        throw new Error('pr-e2e-verify exhausted bash node missing');
       }
-      expect(runE2e.bash).toContain('npm run test:ui');
-      expect(runE2e.bash).not.toContain('chrome-devtools-axi');
+      expect(exhausted.bash).toContain('controller.mjs" exhausted');
+      expect(exhausted.bash).not.toContain('|| true');
     });
 
     it('loads the native Ralph Speckit workflow with fail-fast preflights', async () => {

@@ -1,370 +1,288 @@
 name: pr-e2e-verify
 description: >-
-  For a ready PR, check out the PR head in an isolated worktree, write and run
-  an end-to-end user-story test (Lane B), and gate on real third-party contract
-  coverage (Lane A). A route_loop self-heals missing coverage: an agent resolves
-  the gaps, then the gate re-checks; on exhaustion it comments the gaps on the PR.
+  Verify and repair a UI PR against its complete issue and pinned plan/mockup sources.
+  Freeze full acceptance tests, then repeat real E2E, independent image/browser review,
+  and third-party coverage after each Claude Sonnet 5 repair. Publish only a verified
+  candidate. Exhaustion fails with retained evidence. Requires explicit PR and issue URLs.
 requires: [github]
+inputs:
+  pr:
+    required: true
+    description: Full GitHub pull request URL.
+  issue:
+    required: true
+    description: Full GitHub issue URL with pinned source document links.
 provider: claude
 worktree:
   enabled: true
 mutates_checkout: true
 
 nodes:
-  # Resolve the PR number/repo from $ARGUMENTS (URL or number). Same contract
-  # as harness-validate-feature-pr: an explicit GitHub PR URL wins.
-  - id: fetch-pr
+  - id: initialize
     bash: |
       set -euo pipefail
+      bun install --frozen-lockfile >&2
+      export UI_VERIFY_RUN_ID="$WORKFLOW_ID"
+      bun .archon/scripts/ui-verification.ts initialize
+    timeout: 300000
 
-      PR_REPO=""
-      PR_URL=$(printf '%s\n' "$ARGUMENTS" | grep -oE 'https://github.com/[^/]+/[^/]+/pull/[0-9]+' | head -1 || true)
-      if [ -n "$PR_URL" ]; then
-        PR_REPO=$(printf '%s\n' "$PR_URL" | sed -E 's|https://github.com/([^/]+/[^/]+)/pull/[0-9]+|\1|')
-      fi
-      if [ -z "$PR_REPO" ]; then
-        PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
-      fi
-      if [ -z "$PR_REPO" ]; then
-        echo "ERROR: could not resolve the PR target repository" >&2
-        exit 1
-      fi
-
-      PR_NUMBER=$(printf '%s\n' "$ARGUMENTS" | grep -oE '/pull/[0-9]+' | grep -oE '[0-9]+' | head -1 || true)
-      if [ -z "$PR_NUMBER" ]; then
-        PR_NUMBER=$(printf '%s\n' "$ARGUMENTS" | grep -oE '[0-9]+' | head -1 || true)
-      fi
-      if [ -z "$PR_NUMBER" ]; then
-        HEAD_BRANCH=$(git branch --show-current)
-        ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
-        ORIGIN_OWNER=${ORIGIN_REPO%%/*}
-        if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
-          PR_HEAD="$HEAD_BRANCH"
-        else
-          PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
-        fi
-        PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number' || true)
-      fi
-      if [ "$PR_NUMBER" = "null" ]; then
-        PR_NUMBER=""
-      fi
-
-      if [ -z "$PR_NUMBER" ]; then
-        echo "ERROR: No PR number found in arguments: $ARGUMENTS" >&2
-        exit 1
-      fi
-
-      echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"
-      echo "$PR_REPO" > "$ARTIFACTS_DIR/.pr-repo"
-
-      gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json number,title,body,url,headRefName,baseRefName,files,additions,deletions,changedFiles,state,author,labels,isDraft
-
-  # Move the engine-owned worktree onto the PR head. Isolation starts from the
-  # project's default branch (often dev); without this, later nodes read the
-  # wrong tree. Pattern copied from harness-validate-feature-pr resolve-paths.
-  - id: resolve-paths
-    depends_on: [fetch-pr]
-    bash: |
-      set -euo pipefail
-      CANONICAL_REPO=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||')
-      WORKTREE_PATH=$(pwd)
-
-      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
-      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
-      PR_HEAD=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefName -q '.headRefName')
-      PR_BASE=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
-      PR_HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefOid -q .headRefOid)
-      PR_HEAD_SHA=$(printf '%s' "$PR_HEAD_SHA" | tr -d '[:space:]')
-
-      PR_GIT_URL=$(gh repo view "$PR_REPO" --json sshUrl -q .sshUrl)
-      if [ -z "$PR_GIT_URL" ] || [ "$PR_GIT_URL" = "null" ]; then
-        PR_GIT_URL=$(gh repo view "$PR_REPO" --json url -q .url)
-      fi
-      echo "Fetching PR #$PR_NUMBER head $PR_HEAD_SHA from $PR_REPO ($PR_GIT_URL)"
-      git fetch --force "$PR_GIT_URL" "pull/${PR_NUMBER}/head:refs/archon/pr-head"
-      if ! git cat-file -e "${PR_HEAD_SHA}^{commit}" 2>/dev/null; then
-        git fetch --force "$PR_GIT_URL" "$PR_HEAD_SHA" || git fetch --force "$PR_REMOTE" "$PR_HEAD_SHA"
-      fi
-      git checkout --force --detach "$PR_HEAD_SHA"
-      LOCAL_SHA=$(git rev-parse HEAD)
-
-      echo "$CANONICAL_REPO" > "$ARTIFACTS_DIR/.canonical-repo"
-      echo "$WORKTREE_PATH" > "$ARTIFACTS_DIR/.worktree-path"
-      echo "$PR_HEAD" > "$ARTIFACTS_DIR/.feature-branch"
-      echo "$PR_HEAD" > "$ARTIFACTS_DIR/.pr-head"
-      echo "$PR_BASE" > "$ARTIFACTS_DIR/.pr-base"
-      echo "$PR_HEAD_SHA" > "$ARTIFACTS_DIR/.pr-head-sha"
-      echo "$LOCAL_SHA" > "$ARTIFACTS_DIR/.local-head-sha"
-      if [ "$PR_HEAD_SHA" != "$LOCAL_SHA" ]; then
-        echo "ERROR: failed to check out PR head: HEAD ($LOCAL_SHA) != PR head ($PR_HEAD_SHA)" >&2
-        exit 1
-      fi
-
-      echo "CANONICAL_REPO=$CANONICAL_REPO"
-      echo "WORKTREE_PATH=$WORKTREE_PATH"
-      echo "FEATURE_BRANCH=$PR_HEAD (detached at $PR_HEAD_SHA)"
-      echo "PR_HEAD=$PR_HEAD"
-      echo "PR_BASE=$PR_BASE"
-
-  # Lane B authoring — AXI live drive + screenshot evidence, then crystallize
-  # Playwright specs. run-e2e (Playwright npm run test:ui) stays the regression gate.
   - id: plan-tests
-    depends_on: [resolve-paths]
-    skills:
-      - web-automation-test-pr
-      - chrome-devtools-axi
+    depends_on: [initialize]
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    context: fresh
     prompt: |
-      The PR to verify is #$ARGUMENTS.
-      This worktree is already detached at the PR head SHA (see $resolve-paths.output).
-      Read files from the current checkout. Do NOT switch to the project's default
-      branch (dev/main).
-      Read the PR: `gh pr view $ARGUMENTS` for the description, and list its changed
-      files with `gh pr view $ARGUMENTS --json files -q '.files[].path'` (do NOT
-      use `gh pr diff` — it fails with HTTP 406 on large PRs; read a file's change
-      with `gh pr diff $ARGUMENTS -- <path>` or at HEAD).
-      Follow web-automation-test-pr and chrome-devtools-axi:
-      - Boot/use the real app from this PR-head worktree (isolated ARCHON_HOME;
-        poll readiness). Record PIDs you start.
-      - Drive the UI with `npx -y chrome-devtools-axi` and
-        `CHROME_DEVTOOLS_AXI_SESSION=$WORKFLOW_ID`: open → snapshot → click/fill →
-        screenshot. On STALE_REF, re-snapshot and retry; do not invent refs.
-      - Write screenshots under `$ARTIFACTS_DIR/plan-tests/`. Read each image and
-        judge the visible UX before writing Playwright asserts.
-      - Crystallize durable specs under `e2e/ui/` (`trace:'on-first-retry'`,
-        `screenshot:'only-on-failure'`, `[P0]/[P1]/[P2]` tags).
-      - List every external service the tests mock as a third-party requirement.
-      - If this PR touches UI/UX (frontend/web/CSS/layout/copy-visible),
-        `artifacts` MUST include at least one screenshot. If capture fails after
-        two retries, FAIL this node and explain why — do not claim plan-tests done.
-      Write ONLY new test files (specs, helpers, fixtures) under `e2e/`. Do NOT
-      modify the workflow YAML, provider/model settings, or any other config —
-      your job is the tests, nothing else.
-      Cleanup: `npx -y chrome-devtools-axi stop` with the same session env; kill
-      only recorded PIDs. Never `pkill chrome` or `pkill node`.
-    provider: claude
-    model: "claude-opus-4-8[1M]"
-    effort: high
+      Author complete acceptance for $ARTIFACTS_DIR/ui-verification/issue.md.
+      Read the ENTIRE issue, pr.json, authority.json and every preserved source under
+      sources/. Old completion boxes are claims, not proof. The helper checked out
+      the exact PR head and locked authority BEFORE this node. Do not change product,
+      source authority, workflow/gate, dependencies, commands or provider settings.
+      Read docs/ui-verification-workflow.md and .archon/scripts/ui-verification.ts
+      for the manifest/report contracts. Write manifest.json in that artifact directory.
+      Map EVERY observable UI and behavior requirement in the complete issue/plan/mockup
+      sources to manifest criteria and exact runnable test file/full-title pairs
+      (describe titles joined with ' › ', excluding the file). Include both surfaces,
+      all room types, history, all retained controls including Terminal, required
+      states, responsive and accessibility behavior. Delivery and workflow constraints
+      remain binding outside the UI manifest: record each constraint, its existing
+      deterministic workflow/helper/contract-test owners, validation checks and current
+      evidence in author-notes.md. Do not invent browser criteria for model selection,
+      routing or Git publication rules, or claim future publication already passed.
+      Visual criteria
+      specify source, matched state, surface, viewport, and actual/reference PNG paths
+      relative to UI_VERIFY_EVIDENCE_DIR. Cover 1440x1000, 1280x900, 390x844 and
+      768x1024 for Console and Legacy. Responsive rules govern narrow views; do not
+      approve a broken mobile mockup. No skipped or N/A requirements.
+      This bugfix scope overrides skill rules requiring only new tests or green
+      authoring: meaningful RED tests are required before repair. Add/edit e2e/ui
+      specs, e2e/lib helpers, e2e/fixtures and e2e/playwright.config.ts. Correct existing
+      unit tests that explicitly assert behavior rejected by the issue; list their
+      exact paths in manifest.unitTests. Do not weaken other regression coverage.
+      Use the fixture-owned isolated runtime, real DB/server/executor and authorized
+      pause/answer/resume journey. Build web before browser drive; stop owned runtime
+      and browsers in finally. Never use the user's server or DB. Capture fresh images
+      beneath UI_VERIFY_EVIDENCE_DIR (testInfo.outputPath when absent in normal CI).
+      Never catch mockup-capture failure and pass. Match node, run state and viewport.
+      Inspect images and run meaningful red tests before product repair. Save exact
+      failing observations to author-notes.md in the artifact directory. Product test
+      failures are expected here. Record every mocked external in mockedExternals;
+      the fake provider alone is not a real contract anchor. Report any coverage/source
+      gap explicitly; never fabricate acceptance. Do not commit or push.
+      Reference capture must use an allowed source; do not evade a browser policy
+      block with another URL or tool. Never write into tracked plans/captures.
+      Extend legitimate workflow fixtures for room types absent from the current
+      three-node fixture; do not fake product API responses to manufacture coverage.
+
+  - id: audit-contract
+    depends_on: [plan-tests]
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    context: fresh
+    prompt: |
+      Independently audit the COMPLETE contract before repair. Read
+      $ARTIFACTS_DIR/ui-verification/issue.md, all authority.json sources, manifest.json,
+      authored tests/helpers/fixtures and author-notes.md. Compare EVERY observable UI
+      and behavior requirement in the complete sources to manifest assertions. Check
+      both surfaces, every room type, history scoping, all retained controls including
+      Terminal, required states, dimensions, responsive and accessibility cases.
+      Separately audit every delivery/workflow constraint recorded in author-notes.md
+      against its existing deterministic owners, checks and current evidence. Missing
+      enforcement or a failed applicable check is a gap; later publication remains
+      subject to its final checks and must not be claimed complete here. Verify correct
+      reference states, real browser actions and meaningful red-test evidence.
+      Do not edit. A small passing subset is incomplete. Return complete=false and
+      missing items on any gap. Return all authority.files sourcePaths and manifest
+      UI criterionIds only after reading each. Freeze checks both sets exactly and
+      freezes author-notes.md with the contract.
     output_format:
       type: object
-      required: [pr, spec_file, mocked_externals, artifacts]
+      additionalProperties: false
+      required: [complete, missing, sourcePaths, criterionIds]
       properties:
-        pr:
-          type: string
-        spec_file:
-          type: string
-        mocked_externals:
-          type: array
-          items:
-            type: string
-        ui_touched:
-          type: boolean
-        artifacts:
+        complete: { type: boolean }
+        missing: { type: array, items: { type: string } }
+        sourcePaths: { type: array, items: { type: string } }
+        criterionIds: { type: array, items: { type: string } }
+
+  - id: freeze-contract
+    depends_on: [audit-contract]
+    bash: |
+      set -euo pipefail
+      export UI_VERIFY_REVIEW=$audit-contract.output
+      export UI_VERIFY_AUTHORITY=$initialize.output
+      bun "$ARTIFACTS_DIR/ui-verification/controller.mjs" freeze
+
+  - id: run-checks
+    depends_on: [freeze-contract, repair]
+    trigger_rule: one_success
+    bash: |
+      set -euo pipefail
+      export UI_VERIFY_AUTHORITY=$initialize.output
+      export UI_VERIFY_LOCK=$freeze-contract.output
+      bun "$ARTIFACTS_DIR/ui-verification/controller.mjs" checks
+    timeout: 3600000
+
+  - id: verify
+    depends_on: [run-checks]
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    context: fresh
+    prompt: |
+      Independently review the CURRENT candidate. Do not edit checkout or saved evidence.
+      Read $ARTIFACTS_DIR/ui-verification/current.json, its checks.json/logs, manifest.json,
+      issue.md, FULL sources and failed findings. Use its exact candidate and round tokens.
+      Failed commands remain failed, including failures you think are unrelated.
+      For EVERY criterion, drive actual app behavior through a real browser AND open
+      every required actual/reference image with your image tool. Use createArchonRuntime
+      in e2e/lib/playwright/archon-runtime.ts with a free deterministic worker slot;
+      check the port first, record PID/command/port/worktree, and close browser/runtime
+      in finally. The checks rebuilt this candidate. Do not use a stale running server.
+      Keep extra browser evidence in this round. Compare matched states, dimensions,
+      spacing, type, content, controls and responsive behavior against the full sources.
+      Screenshot existence, CSS and passing tests are not visual acceptance. Reject
+      missing images, wrong reference states, inaccessible controls, clipping, overflow
+      or any source mismatch. Return every criterion exactly once with concrete
+      observations. browserVerified means you drove its interactions; imagesViewed
+      means you opened its actual/reference pair. Incomplete review is rejection.
+      Repeat third-party coverage on THIS candidate: manifest.mockedExternals UNION
+      external surfaces in the candidate diff against PR base (pr.json). Inspect all
+      changed/new provider files. Require real recorded fixtures, live/contract tests
+      or satisfies assertions importing real SDK types. Handmade fixtures and the fake
+      runtime are not anchors. List service, anchor paths and reasoning; put all gaps
+      in unticked. Never reuse a past candidate's verdict. Failures route to repair.
+    output_format:
+      type: object
+      additionalProperties: false
+      required: [candidate, round, criteria, thirdParty, findings]
+      properties:
+        candidate: { type: string }
+        round: { type: string }
+        criteria:
           type: array
           items:
             type: object
-            required: [kind, path, purpose]
+            additionalProperties: false
+            required: [id, passed, browserVerified, imagesViewed, observations]
             properties:
-              kind:
-                type: string
-                enum: [screenshot, other]
-              path:
-                type: string
-              purpose:
-                type: string
+              id: { type: string }
+              passed: { type: boolean }
+              browserVerified: { type: boolean }
+              imagesViewed: { type: boolean }
+              observations: { type: string }
+        thirdParty:
+          type: object
+          additionalProperties: false
+          required: [allTicked, unticked, anchors]
+          properties:
+            allTicked: { type: boolean }
+            unticked: { type: array, items: { type: string } }
+            anchors:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [service, paths, reasoning]
+                properties:
+                  service: { type: string }
+                  paths: { type: array, items: { type: string } }
+                  reasoning: { type: string }
+        findings: { type: array, items: { type: string } }
 
-  # Lane A gate — is every mocked external anchored by a real contract test?
-  # Re-entered after each `resolve` (loop-back) via one_success on [plan-tests, resolve].
-  - id: verify
-    depends_on: [plan-tests, resolve]
-    trigger_rule: one_success
-    skills:
-      - verify-thirdparties-e2e-test-pr
-    prompt: |
-      Gate PR #$ARGUMENTS on third-party contract coverage.
-      This worktree is already detached at the PR head. Read the current checkout.
-      Requirements = the mocked externals from plan-tests
-      ($plan-tests.output.mocked_externals) UNION the third-party surfaces in the
-      PR's changed files (`gh pr view $ARGUMENTS --json files -q '.files[].path'`;
-      do NOT use `gh pr diff` — HTTP 406 on large PRs). For each, check the source has a REAL
-      anchor (a recorded-real fixture, a live/contract test, or a `satisfies <SDK
-      type>` assertion) — a hand-written fixture does NOT count. Emit the verdict.
+  - id: acceptance
+    depends_on: [verify]
+    bash: |
+      set -euo pipefail
+      export UI_VERIFY_REVIEW=$verify.output
+      export UI_VERIFY_AUTHORITY=$initialize.output
+      export UI_VERIFY_LOCK=$freeze-contract.output
+      export UI_VERIFY_CHECKS=$run-checks.output
+      bun "$ARTIFACTS_DIR/ui-verification/controller.mjs" gate
+
+  - id: gate
+    depends_on: [acceptance]
+    route_loop:
+      condition: "$acceptance.output == 'true'"
+      max_iterations: 5
+      routes:
+        positive: publish
+        negative: diagnose
+        exhausted: exhausted
+
+  - id: diagnose
     provider: codex
-    model: "gpt-5.6-sol"
+    model: gpt-5.6-sol
     effort: xhigh
+    context: fresh
+    prompt: |
+      Explain what is wrong and how to fix it before implementation starts.
+      Read $ARTIFACTS_DIR/ui-verification/current.json, the round gate.json,
+      review.json, checks.json/logs, manifest.json, full issue and approved sources.
+      Inspect every relevant caller and source owner to prove causes. Do not edit.
+      For each failure, report criterion/source, expected behavior, actual behavior,
+      concrete evidence, root cause and owning file, proposed change, and the exact
+      regression check. Include every unresolved third-party gap. Do not prescribe
+      weaker frozen tests or authority changes. Identify contract gaps explicitly.
+      The visible node output is the fix plan consumed by the Sonnet repair node.
     output_format:
       type: object
-      required: [allTicked, unticked]
+      additionalProperties: false
+      required: [problems]
       properties:
-        allTicked:
-          type: boolean
-        unticked:
+        problems:
           type: array
           items:
-            type: string
+            type: object
+            additionalProperties: false
+            required: [criterion, source, expected, actual, evidence, cause, owner, fix, regression]
+            properties:
+              criterion: { type: string }
+              source: { type: string }
+              expected: { type: string }
+              actual: { type: string }
+              evidence: { type: string }
+              cause: { type: string }
+              owner: { type: string }
+              fix: { type: string }
+              regression: { type: string }
 
-  # Self-heal gate. positive/exhausted are exit paths; only negative loops back.
-  - id: gate
-    depends_on: [verify]
-    route_loop:
-      condition: "$verify.output.allTicked == true"
-      max_iterations: 3
-      routes:
-        positive: run-e2e
-        negative: resolve
-        exhausted: comment-pr
-
-  # negative — an agent resolves the missing anchors, then the loop re-checks.
-  # No depends_on: activated only when the gate routes here.
-  - id: resolve
-    prompt: |
-      Third-party contract coverage is INCOMPLETE for PR #$ARGUMENTS.
-      Missing anchors: $verify.output.unticked
-
-      This worktree is already detached at the PR head. Resolve each missing
-      anchor there. Resolve each one by adding a REAL anchor so the corresponding mock is tied
-      to reality: capture a recorded fixture from real provider output, or add a
-      `satisfies <SDK type>` test. You may run the provider / read on-disk output
-      to capture a real sample. NEVER fabricate a hand-written fixture — that is
-      the drift this whole gate exists to prevent. Commit the new test files into
-      the checkout so the next verify pass can see them.
-    provider: grok
-    model: "grok-4.5"
+  - id: repair
+    depends_on: [diagnose]
+    provider: claude
+    model: claude-sonnet-5
     effort: high
-    
+    context: fresh
+    prompt: |
+      Repair implementation to satisfy the FULL issue and approved sources.
+      Read $ARTIFACTS_DIR/ui-verification/issue.md in full, authority.json and every
+      source, manifest.json, current.json and latest gate.json/checks/logs/review.
+      Implement the source-backed diagnosis and fix plan: $diagnose.output
+      Use literal Claude Sonnet 5; no model or provider fallback. This isolated
+      worktree holds the PR candidate. Fix root causes on BOTH surfaces and every
+      source criterion, not only the first failure. Preserve controls, auth and data.
+      Diagnose with real browser observations. Inspect rendered changes. Use fixture-owned
+      runtime only, and close owned processes and browsers in finally.
+      Source authority, manifest, frozen E2E specs/helpers/fixtures/config, corrected
+      unit tests, commands, dependency locks, workflow and gate are IMMUTABLE. Never
+      change, skip, rename, filter, soften or delete them; never update their baselines.
+      Do not edit authority/lock/check/review artifacts. Each pass rebuilds and checks
+      the full candidate and rejects any lock mutation. You may add genuine provider
+      contract anchors (real recorded provenance or real SDK types), not fake responses.
+      No new dependencies. Do not commit, push, switch branch, reset or edit canonical
+      checkout. A frozen test/source gap needs an explicit failed finding in current
+      round repair-notes.md, not changed acceptance. A new authorized run can revise
+      the contract before its lock. Do not fabricate acceptance to finish a round.
 
-  # positive — run the crystallized Playwright specs against the real app.
-  # Captures the outcome (never hard-fails) so report-pr always runs and posts it.
-  - id: run-e2e
-    bash: |
-      set -uo pipefail
-      mkdir -p "$ARTIFACTS_DIR"
-      # Isolated worktree already detached at the PR head — no e2e deps, no
-      # browser, and no built web bundle until we set them up.
-      bun run build:web > "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
-      cd e2e
-      npm ci >> "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
-      npx playwright install chromium >> "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
-      if npm run test:ui > "$ARTIFACTS_DIR/e2e-result.log" 2>&1; then
-        echo passed > "$ARTIFACTS_DIR/e2e-status.txt"
-      else
-        echo failed > "$ARTIFACTS_DIR/e2e-status.txt"
-      fi
-      cat "$ARTIFACTS_DIR/e2e-status.txt"
-
-  # Persist the authored evidence durably: commit the test files the run wrote
-  # and push them onto the PR head branch, so the PR carries a real commit — not
-  # just a verdict comment. The engine's per-node auto-checkpoints keep the spec
-  # only on a detached HEAD that garbage-collects at worktree teardown, so
-  # without this step the evidence never reaches the PR. Non-fatal: a push
-  # failure still leaves a local commit and the full log in report-pr.
-  - id: commit-evidence
-    depends_on: [run-e2e]
-    bash: |
-      set -uo pipefail
-      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
-      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
-      PR_HEAD=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-head")
-      PR_HEAD_SHA=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-head-sha")
-
-      # Reuse the PR head's committer identity so the evidence commit is not
-      # authored by an anonymous default.
-      git config user.email "$(git log -1 --format='%ae' 2>/dev/null || echo archon@local)" 2>/dev/null || true
-      git config user.name "$(git log -1 --format='%an' 2>/dev/null || echo archon)" 2>/dev/null || true
-
-      # Unwind the engine's per-node auto-checkpoints back to the PR head, keeping
-      # the working tree, so the evidence lands as ONE clean, well-named commit.
-      git reset -q "$PR_HEAD_SHA" || true
-
-      # Stage ONLY the test SOURCE the run authored (git ignores node_modules and
-      # test-results). Never `git add -A` — that would sweep build output onto the PR.
-      git add -- e2e/ui e2e/lib e2e/fixtures 2>/dev/null || true
-      git add -- e2e/playwright.config.ts e2e/package.json e2e/bun.lock 2>/dev/null || true
-      # Self-heal (resolve) may add provider contract anchors — stage only tests/fixtures.
-      git ls-files -o -m --exclude-standard -- 'packages/*' 2>/dev/null \
-        | grep -E '(\.test\.ts$|/__fixtures__/)' \
-        | while IFS= read -r f; do git add -- "$f"; done || true
-
-      if git diff --cached --quiet; then
-        echo "none" > "$ARTIFACTS_DIR/.evidence-status"
-        echo "no new evidence files to commit"
-        exit 0
-      fi
-
-      git commit -q -m "test(e2e): pr-e2e-verify evidence for PR #$PR_NUMBER"
-      EVID_SHA=$(git rev-parse --short HEAD)
-
-      PR_GIT_URL=$(gh repo view "$PR_REPO" --json sshUrl -q .sshUrl 2>/dev/null || true)
-      if [ -z "$PR_GIT_URL" ] || [ "$PR_GIT_URL" = "null" ]; then
-        PR_GIT_URL=$(gh repo view "$PR_REPO" --json url -q .url 2>/dev/null || true)
-      fi
-
-      if [ -n "$PR_GIT_URL" ] && git push "$PR_GIT_URL" "HEAD:refs/heads/$PR_HEAD" > "$ARTIFACTS_DIR/.evidence-push.log" 2>&1; then
-        echo "pushed $EVID_SHA" > "$ARTIFACTS_DIR/.evidence-status"
-        echo "evidence pushed: $EVID_SHA -> $PR_REPO@$PR_HEAD"
-      else
-        echo "local $EVID_SHA" > "$ARTIFACTS_DIR/.evidence-status"
-        echo "evidence committed locally ($EVID_SHA); push failed (see .evidence-push.log)"
-      fi
-
-  # Always report the e2e verdict back to the PR — pass means the feature works
-  # end-to-end; fail means it has issues. The full Playwright output and the
-  # evidence commit sha are attached so the PR carries the proof, not just a tick.
-  - id: report-pr
-    depends_on: [commit-evidence]
+  - id: publish
     bash: |
       set -euo pipefail
-      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
-      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
-      status=$(cat "$ARTIFACTS_DIR/e2e-status.txt" 2>/dev/null || echo unknown)
-      evid=$(cat "$ARTIFACTS_DIR/.evidence-status" 2>/dev/null || echo unknown)
-      # Cap the embedded log so a verbose failure cannot exceed GitHub's comment limit.
-      log=$(tail -c 40000 "$ARTIFACTS_DIR/e2e-result.log" 2>/dev/null || echo "(no e2e output captured)")
-      # AXI authoring screenshots live in the run artifacts dir (not committed).
-      axi_shots=""
-      if [ -d "$ARTIFACTS_DIR/plan-tests" ]; then
-        axi_shots=$(find "$ARTIFACTS_DIR/plan-tests" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.webp' \) | sort || true)
-      fi
+      export UI_VERIFY_AUTHORITY=$initialize.output
+      export UI_VERIFY_LOCK=$freeze-contract.output
+      export UI_VERIFY_CHECKS=$run-checks.output
+      bun "$ARTIFACTS_DIR/ui-verification/controller.mjs" publish
+    timeout: 300000
 
-      case "$evid" in
-        pushed\ *) evid_line="📌 Evidence committed & pushed to this branch: \`${evid#pushed }\`" ;;
-        local\ *)  evid_line="📌 Evidence committed locally as \`${evid#local }\` — push to the PR branch failed (no write access?). Full test output below." ;;
-        none)      evid_line="ℹ️ No new test files to commit — the evidence is already on the branch." ;;
-        *)         evid_line="⚠️ Evidence commit status unknown." ;;
-      esac
-
-      body_file="$ARTIFACTS_DIR/.report-body.md"
-      if [ "$status" = passed ]; then
-        {
-          printf '✅ **E2E verify passed** — the feature works end-to-end as the user story expects (third-party coverage anchored, Playwright specs green).\n\n'
-          printf '%s\n\n' "$evid_line"
-          if [ -n "$axi_shots" ]; then
-            printf '### AXI authoring screenshots\n\n'
-            printf '%s\n' "$axi_shots" | while IFS= read -r f; do
-              printf -- '- `%s`\n' "${f#"$ARTIFACTS_DIR"/}"
-            done
-            printf '\nThese files live in this run'\''s `$ARTIFACTS_DIR/plan-tests/` (reviewer evidence; not committed). Playwright specs under `e2e/ui/` are the durable gate.\n\n'
-          fi
-          printf '<details><summary>Playwright output</summary>\n\n```\n%s\n```\n</details>\n' "$log"
-        } > "$body_file"
-      else
-        {
-          printf '❌ **E2E verify FAILED** — the feature has issues end-to-end.\n\n'
-          printf '%s\n\n' "$evid_line"
-          if [ -n "$axi_shots" ]; then
-            printf '### AXI authoring screenshots\n\n'
-            printf '%s\n' "$axi_shots" | while IFS= read -r f; do
-              printf -- '- `%s`\n' "${f#"$ARTIFACTS_DIR"/}"
-            done
-            printf '\n'
-          fi
-          printf '<details open><summary>Playwright output</summary>\n\n```\n%s\n```\n</details>\n' "$log"
-        } > "$body_file"
-      fi
-
-      gh pr comment "$PR_NUMBER" --repo "$PR_REPO" --body-file "$body_file"
-
-  # exhausted — could not self-heal within max_iterations; escalate to the PR.
-  - id: comment-pr
-    bash: |
-      set -euo pipefail
-      gh pr comment "$ARGUMENTS" --body "PR e2e verify could not self-heal third-party contract coverage within 3 attempts. Missing anchors: $verify.output.unticked. A real anchor (recorded fixture or SDK-type assertion) must be added by the implementer before the mocked e2e tests can be trusted."
+  - id: exhausted
+    bash: bun "$ARTIFACTS_DIR/ui-verification/controller.mjs" exhausted

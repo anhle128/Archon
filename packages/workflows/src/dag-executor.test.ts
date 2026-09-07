@@ -125,6 +125,8 @@ import { buildAiProfile } from './model-validation';
 import {
   AskHumanNoStarterError,
   AskHumanPauseFailedError,
+  type IAgentProvider,
+  type MessageChunk,
   type SendQueryOptions,
 } from '@archon/providers/types';
 import * as plannotatorGateExecutor from './plannotator-gate-executor';
@@ -11485,6 +11487,144 @@ describe('executeDagWorkflow -- route_loop end-to-end TDD', () => {
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
+
+  for (const accepted of [true, false]) {
+    it(`runs the parsed pr-e2e-verify graph with acceptance=${String(accepted)}`, async (): Promise<void> => {
+      const workflowPath = join(import.meta.dir, '../../../.archon/workflows/pr-e2e-verify.yaml');
+      const parsed = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
+      expect(parsed.error).toBeNull();
+      const workflow = parsed.workflow;
+      if (!workflow) throw new Error('Missing pr-e2e-verify workflow');
+      const controller = workflow.nodes.find(node => node.id === 'gate');
+      expect(controller).toMatchObject({ route_loop: { max_iterations: 5 } });
+
+      const store = createMockStore();
+      const started: string[] = [];
+      store.createWorkflowEvent = mock((event: WorkflowEventData): Promise<void> => {
+        if (event.event_type === 'node_started' && event.step_name !== 'gate') {
+          started.push(event.step_name ?? '');
+        }
+        return Promise.resolve();
+      });
+      const outputs: Record<string, Record<string, unknown>> = {
+        'audit-contract': { complete: true, missing: [], sourcePaths: [], criterionIds: [] },
+        verify: {
+          candidate: 'test-candidate',
+          round: 'test-round',
+          criteria: [],
+          thirdParty: { allTicked: true, unticked: [], anchors: [] },
+          findings: [],
+        },
+        diagnose: { problems: [] },
+      };
+      const deps = createMockDeps(store);
+      deps.getAgentProvider = mock(
+        (): IAgentProvider => ({
+          async *sendQuery(
+            _prompt: string,
+            _cwd: string,
+            _resumeSessionId?: string,
+            options?: SendQueryOptions
+          ): AsyncGenerator<MessageChunk> {
+            const nodeId = options?.nodeConfig?.nodeId;
+            if (typeof nodeId !== 'string') throw new Error('Missing provider node id');
+            const structuredOutput = outputs[nodeId];
+            yield {
+              type: 'assistant',
+              content: structuredOutput ? JSON.stringify(structuredOutput) : `${nodeId} complete`,
+            };
+            yield { type: 'result', sessionId: `${nodeId}-session`, structuredOutput };
+          },
+          getType: (): string => 'claude',
+          getCapabilities: mockClaudeCapabilities,
+        })
+      );
+      // Keep the parsed graph intact; intercept every command before any process can start.
+      const execSpy = spyOn(git, 'execFileAsync').mockImplementation(
+        async (command: string, args: string[]): Promise<{ stdout: string; stderr: string }> => {
+          expect(command).toBe(git.resolveBashPath());
+          const script = args[0] === '-c' ? args[1] : await readFile(args[0] as string, 'utf8');
+          if (script?.trim().endsWith(' exhausted')) {
+            throw Object.assign(new Error('Repair budget exhausted'), { code: 1 });
+          }
+          return {
+            stdout: script?.trim().endsWith(' gate') ? String(accepted) : 'complete',
+            stderr: '',
+          };
+        }
+      );
+      const run = makeWorkflowRun('pr-e2e-verify-routing', { workflow_name: workflow.name });
+      try {
+        await executeDagWorkflow(
+          deps,
+          createMockPlatform(),
+          'conv-pr-e2e-verify',
+          testDir,
+          workflow,
+          run,
+          'claude',
+          undefined,
+          join(testDir, 'artifacts'),
+          join(testDir, 'state'),
+          join(testDir, 'logs'),
+          'develop',
+          'docs/',
+          minimalConfig
+        );
+      } finally {
+        execSpy.mockRestore();
+      }
+
+      const initialPass = [
+        'initialize',
+        'plan-tests',
+        'audit-contract',
+        'freeze-contract',
+        'run-checks',
+        'verify',
+        'acceptance',
+      ];
+      const routeDecisions = (
+        store.persistRouteDecisionTransition as ReturnType<typeof mock>
+      ).mock.calls.map(
+        call =>
+          (call[0] as Parameters<IWorkflowStore['persistRouteDecisionTransition']>[0]).event.data
+      );
+      if (accepted) {
+        expect(started).toEqual([...initialPass, 'publish']);
+        expect(routeDecisions.map(decision => decision.outcome)).toEqual(['positive']);
+        expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      } else {
+        expect(started).toEqual([
+          ...initialPass,
+          ...Array.from({ length: 5 }, (): string[] => [
+            'diagnose',
+            'repair',
+            'run-checks',
+            'verify',
+            'acceptance',
+          ]).flat(),
+          'exhausted',
+        ]);
+        expect(routeDecisions.map(decision => decision.outcome)).toEqual([
+          ...Array.from({ length: 5 }, (): string => 'negative'),
+          'exhausted',
+        ]);
+        expect(routeDecisions.at(-1)).toMatchObject({
+          to: 'exhausted',
+          negative_count: 6,
+          max_iterations: 5,
+        });
+        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+        expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(store.failWorkflowRun).toHaveBeenCalledWith(
+          run.id,
+          expect.stringContaining('exhausted')
+        );
+      }
+    });
+  }
 
   it('serializes parallel route_loop decisions against the latest execution sequence', async () => {
     const store = createMockStore();
