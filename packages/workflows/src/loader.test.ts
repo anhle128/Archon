@@ -35,7 +35,13 @@ registerBuiltinProviders();
 registerOmpProvider();
 
 import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
-import { isBashNode, isCancelNode, isLoopNode, isPlannotatorGateNode } from './schemas';
+import {
+  isBashNode,
+  isCancelNode,
+  isLoopNode,
+  isPlannotatorGateNode,
+  isPromptNode,
+} from './schemas';
 import { parseWorkflow } from './loader';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 import { workflowDefinitionSchema } from './schemas/workflow';
@@ -3724,6 +3730,53 @@ nodes:
       });
       expect(nodes.get('create-pull-request')?.depends_on).toEqual(['update-bmad-sprint-status']);
       expect(nodes.has('speckit-converge-exhausted')).toBe(false);
+    });
+
+    it('loads pr-e2e-verify with AXI plan-tests artifacts and an unchanged Playwright run-e2e gate', async () => {
+      const workflowPath = join(
+        import.meta.dir,
+        '..',
+        '..',
+        '..',
+        '.archon',
+        'workflows',
+        'pr-e2e-verify.yaml'
+      );
+      const result = parseWorkflow(await readFile(workflowPath, 'utf8'), basename(workflowPath));
+
+      expect(result.error).toBeNull();
+      expect(result.workflow).not.toBeNull();
+      const nodes = new Map(result.workflow?.nodes.map(node => [node.id, node]));
+
+      const planTests = nodes.get('plan-tests');
+      expect(planTests && isPromptNode(planTests)).toBe(true);
+      if (!planTests || !isPromptNode(planTests)) {
+        throw new Error('pr-e2e-verify plan-tests prompt node missing');
+      }
+      expect(planTests.skills).toEqual(['web-automation-test-pr', 'chrome-devtools-axi']);
+      expect(planTests.prompt).toContain('npx -y chrome-devtools-axi');
+      expect(planTests.prompt).toContain('$ARTIFACTS_DIR/plan-tests/');
+      expect(planTests.output_format).toMatchObject({
+        type: 'object',
+        required: ['pr', 'spec_file', 'mocked_externals', 'artifacts'],
+      });
+      const artifactItems = (
+        planTests.output_format as {
+          properties?: { artifacts?: { items?: { properties?: Record<string, unknown> } } };
+        }
+      ).properties?.artifacts?.items;
+      expect(artifactItems).toMatchObject({
+        type: 'object',
+        required: ['kind', 'path', 'purpose'],
+      });
+
+      const runE2e = nodes.get('run-e2e');
+      expect(runE2e && isBashNode(runE2e)).toBe(true);
+      if (!runE2e || !isBashNode(runE2e)) {
+        throw new Error('pr-e2e-verify run-e2e bash node missing');
+      }
+      expect(runE2e.bash).toContain('npm run test:ui');
+      expect(runE2e.bash).not.toContain('chrome-devtools-axi');
     });
 
     it('loads the native Ralph Speckit workflow with fail-fast preflights', async () => {
