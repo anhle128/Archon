@@ -50,6 +50,14 @@ Typed usage-breakdown map, keyed `"<provider>/<model>"`:
 
 Own pricing catalog; new budget/quota enforcement; backfill of historical runs; per-user billing.
 
+## Related Run View Work
+
+The [Workflow Run HITL Mockup Alignment plan](../260907-1454-workflow-run-hitl-mockup-alignment/plan.md) also touches the run header, node dividers, and executor transcript paths.
+It preserves the current usage-ledger contract and display controls.
+No plan requires new output from the other, so this is a coordination dependency without a blocking order.
+Before executing either plan, read the current usage code and reconcile overlapping file edits against that code.
+This note does not change this plan's implementation status.
+
 ## Unresolved questions
 
 - Phase 4 path: transcript-read (self-contained today) vs upstream oh-my-pi event (cleaner long-term). Default = transcript-read; user may choose to also file the upstream request.

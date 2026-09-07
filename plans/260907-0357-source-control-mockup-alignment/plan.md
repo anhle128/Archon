@@ -46,6 +46,11 @@ Keep all later accepted Source Control capabilities that are not present in the 
 
 The pending Node Cost Model Breakdown plan changes the Console run view and does not block this legacy Source Control work.
 
+The [Workflow Run HITL Mockup Alignment plan](../260907-1454-workflow-run-hitl-mockup-alignment/plan.md) changes the surrounding run screen and preserves this Source Control tab.
+There is no blocking dependency between the plans.
+Its final checks must include switching into Source Control after a node panel was open, with no leaked panel width or styles.
+This link does not close the remaining validation gate in this plan.
+
 ## Phases
 
 | #   | Phase                                                                                        | Status    | Effort |
