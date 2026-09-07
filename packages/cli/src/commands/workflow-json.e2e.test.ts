@@ -250,6 +250,28 @@ function queryNodeEventCount(runId: string, eventType: string, nodeId: string): 
   }
 }
 
+function queryLatestNodeOutput(runId: string, nodeId: string): string | null {
+  const db = new Database(join(isolatedHome, 'archon.db'), { readonly: true });
+  try {
+    const row = db
+      .query(
+        `SELECT data FROM remote_agent_workflow_events
+         WHERE workflow_run_id = ? AND event_type = 'node_completed' AND step_name = ?
+         ORDER BY created_at DESC, event_order DESC
+         LIMIT 1`
+      )
+      .get(runId, nodeId) as { data: string } | undefined;
+    if (!row?.data) return null;
+    const parsed = JSON.parse(row.data) as { node_output?: unknown };
+    return typeof parsed.node_output === 'string' ? parsed.node_output : null;
+  } catch (error) {
+    if (isSqliteBusyError(error)) return null;
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 function installWorkflowFixture(
   repoPath: string,
   fileName: string,
@@ -1966,11 +1988,15 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
 
     // Keep the log assertion as a secondary diagnostic, but it is no longer the
     // proof oracle: file creation alone cannot establish successful execution.
+    // The worker redirects stdout to this file; CLIAdapter prints the sink
+    // node's output (retry-worker-proof) via console.log AFTER
+    // completeWorkflowRun. Breaking on the first non-empty read raced the
+    // summary write and failed CI while the DAG had already completed.
     let logContent = '';
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 50; i++) {
       try {
         logContent = readFileSync(logPath, 'utf8');
-        if (logContent.length > 0) break;
+        if (logContent.includes('retry-worker-proof')) break;
       } catch {
         // log file may not be readable yet
       }
@@ -1983,6 +2009,7 @@ describe('R1-F30 — durable side-effect proofs (Story 3.3d)', () => {
       );
     }
 
+    expect(queryLatestNodeOutput(runId, 'retry-proof')).toContain('retry-worker-proof');
     expect(logContent).toContain('retry-worker-proof');
   });
 
