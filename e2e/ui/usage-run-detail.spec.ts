@@ -35,17 +35,18 @@ test('[P1] run detail shows the run node-level usage for its AI pass', async ({ 
   await expect(page.getByText('$0.42').first()).toBeVisible({ timeout: T.medium });
   await expect(page.getByText('direct', { exact: true })).toBeVisible();
 
-  // Node-level usage: the `emit-usage` node divider carries this node's own
-  // recorded cost. Scoped to the node's stable DOM anchor so it is the NODE row
-  // asserted, not the header total.
-  const nodeDivider = page.locator('#node-transition-emit-usage');
+  // Node-level usage: the log-row NodeDivider for `emit-usage` carries this
+  // node's own recorded cost. The scroll-anchor suffix is the log row id, not
+  // the node name (`#node-transition-<rowId>`), so match the divider by prefix
+  // + node text — not the header total.
+  const nodeDivider = page.locator('[id^="node-transition-"]').filter({ hasText: 'emit-usage' });
   await expect(nodeDivider).toBeVisible();
   await expect(nodeDivider).toContainText('emit-usage');
   await expect(nodeDivider).toContainText('$0.42');
 
-  // Expand the node to prove the per-node provider/model breakdown, not just a
-  // rolled-up number: the node name is the expander button.
-  await nodeDivider.getByRole('button', { name: /emit-usage/ }).click();
+  // Expand the chevron to prove the per-node provider/model breakdown, not
+  // just a rolled-up number.
+  await nodeDivider.getByRole('button', { name: 'Show usage breakdown for this node' }).click();
   await expect(page.getByText('Usage · emit-usage')).toBeVisible({ timeout: T.medium });
   await expect(page.getByText(/anthropic\/claude-sonnet-4/).first()).toBeVisible();
 });
