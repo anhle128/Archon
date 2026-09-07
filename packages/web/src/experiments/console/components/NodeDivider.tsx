@@ -8,6 +8,8 @@ import {
 import { useStreamContext } from '../lib/stream-context';
 import type { UsageMetrics, UsageReport, UsageReportGroup } from '../skills/usage';
 import { UsageBreakdownTable } from './UsageBreakdownTable';
+import type { InspectStatus } from './inspect/inspect-status';
+import { inspectStatusLabel } from './inspect/inspect-status';
 
 interface NodeDividerProps {
   /** Selectable log-row identity — also the scroll-anchor suffix. */
@@ -18,7 +20,7 @@ interface NodeDividerProps {
   selected: boolean;
   onSelect: (rowId: string, nodeId: string) => void;
   /** Folded lifecycle status; `running` = the node is still in-flight. */
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  status: InspectStatus;
   durationMs: number | null;
   timestamp: string;
   /** From `node_completed` — legacy per-node spend when ledger has no row. */
@@ -88,20 +90,13 @@ export function buildNodeLedgerUsageReport(args: {
   };
 }
 
-const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
-  pending: 'pending',
-  running: 'running',
-  completed: 'completed',
-  failed: 'failed',
-  skipped: 'skipped',
-};
-
-const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
+const STATUS_COLOR: Record<InspectStatus, string> = {
   pending: 'text-text-tertiary',
   running: 'text-[color:var(--running)]',
   completed: 'text-success',
   failed: 'text-error',
   skipped: 'text-text-tertiary',
+  awaiting: 'text-[color:var(--running)]',
 };
 
 /**
@@ -228,7 +223,7 @@ export function NodeDivider({
             aria-hidden
           />
           <span className={`font-mono text-[11.5px] ${STATUS_COLOR[status]}`}>
-            {STATUS_LABEL[status]}
+            {inspectStatusLabel(status)}
             {dur}
             {cost}
             {turns}

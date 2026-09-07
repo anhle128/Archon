@@ -10,8 +10,8 @@ describe('inspectStatus', () => {
     });
   }
 
-  test('maps typed awaiting to running', () => {
-    expect(inspectStatus('awaiting')).toBe('running');
+  test('passes typed awaiting through', () => {
+    expect(inspectStatus('awaiting')).toBe('awaiting');
   });
 
   test('maps other strings to pending', () => {
@@ -30,8 +30,8 @@ describe('inspectStatusLabel', () => {
     });
   }
 
-  test('maps typed awaiting to running', () => {
-    expect(inspectStatusLabel('awaiting')).toBe('running');
+  test('labels typed awaiting as waiting on you', () => {
+    expect(inspectStatusLabel('awaiting')).toBe('waiting on you');
   });
 
   test('passes arbitrary transcript status strings through except awaiting', () => {

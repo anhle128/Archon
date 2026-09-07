@@ -45,6 +45,9 @@ export function resolveInitialInspectSelection(input: {
     return { nodeId: requestedNodeId, logRowId: null };
   }
 
+  const awaiting = nodeStates.find(state => inspectStatus(state.status) === 'awaiting');
+  if (awaiting !== undefined) return selectionForNode(awaiting.nodeId, rows);
+
   const running = nodeStates.find(state => inspectStatus(state.status) === 'running');
   if (running !== undefined) return selectionForNode(running.nodeId, rows);
 

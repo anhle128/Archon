@@ -99,7 +99,7 @@ describe('buildRunGraphInput', () => {
     ]);
   });
 
-  test('normalizes awaiting to running before layout', () => {
+  test('passes awaiting through to layout as on-path', () => {
     const dagNodes: DagNode[] = [
       { id: 'a', prompt: 'n' },
       { id: 'b', depends_on: ['a'], prompt: 'n' },
@@ -108,8 +108,7 @@ describe('buildRunGraphInput', () => {
       nodeState('a', 'completed'),
       nodeState('b', 'awaiting'),
     ]);
-    expect(model.nodes.map(node => node.nodeState)).toEqual(['completed', 'running']);
-    expect(model.nodes.some(node => node.nodeState === 'awaiting')).toBe(false);
+    expect(model.nodes.map(node => node.nodeState)).toEqual(['completed', 'awaiting']);
     const incoming = model.routes.find(route => route.target === 'b');
     expect(incoming?.taken).toBe(true);
   });
