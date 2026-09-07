@@ -8,6 +8,10 @@ import { formatCommitTime } from './format-commit-time';
 export const COMMIT_ROW_HEIGHT = 32;
 export const LANE_WIDTH = 12;
 
+export function graphColumnWidth(laneCount: number): number {
+  return Math.max(LANE_WIDTH, laneCount * LANE_WIDTH);
+}
+
 function laneX(lane: number): number {
   return lane * LANE_WIDTH + LANE_WIDTH / 2;
 }
@@ -55,9 +59,9 @@ export function CommitGraphRow(props: CommitGraphRowProps): ReactElement {
     >
       <svg
         aria-hidden="true"
-        width={Math.max(LANE_WIDTH, props.laneCount * LANE_WIDTH)}
+        width={graphColumnWidth(props.laneCount)}
         height={COMMIT_ROW_HEIGHT}
-        viewBox={`0 0 ${String(Math.max(LANE_WIDTH, props.laneCount * LANE_WIDTH))} ${String(COMMIT_ROW_HEIGHT)}`}
+        viewBox={`0 0 ${String(graphColumnWidth(props.laneCount))} ${String(COMMIT_ROW_HEIGHT)}`}
       >
         {props.layout.throughLanes.map(lane => (
           <line
@@ -108,5 +112,36 @@ export function CommitGraphRow(props: CommitGraphRowProps): ReactElement {
         {props.commit.authorName} · <time dateTime={props.commit.authorDate}>{relativeTime}</time>
       </span>
     </button>
+  );
+}
+
+export function CommitLaneContinuation(props: {
+  layout: LaneRow;
+  laneCount: number;
+  height: number;
+}): ReactElement {
+  const width = graphColumnWidth(props.laneCount);
+  const lanes = [...new Set([...props.layout.throughLanes, ...props.layout.parentLanes])];
+  return (
+    <svg
+      aria-hidden="true"
+      data-lane-continuation=""
+      width={width}
+      height={props.height}
+      viewBox={`0 0 ${String(width)} ${String(props.height)}`}
+    >
+      {lanes.map(lane => (
+        <line
+          key={`continue-${String(lane)}`}
+          data-edge="through"
+          x1={laneX(lane)}
+          y1={0}
+          x2={laneX(lane)}
+          y2={props.height}
+          className="stroke-text-secondary"
+          strokeWidth="1.5"
+        />
+      ))}
+    </svg>
   );
 }

@@ -12,8 +12,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { GitChangedFile, GitLogCommit } from '@/lib/api';
 
 import { ChangedFilesList } from './changed-files-list';
-import { assignCommitLanes } from './commit-lanes';
-import { CommitGraphRow, COMMIT_ROW_HEIGHT, LANE_WIDTH } from './commit-graph-row';
+import { assignCommitLanes, type LaneRow } from './commit-lanes';
+import { CommitGraphRow, CommitLaneContinuation, COMMIT_ROW_HEIGHT } from './commit-graph-row';
 
 export function nextCommitIndex(key: string, currentIndex: number, commitCount: number): number {
   if (commitCount <= 0) return 0;
@@ -160,47 +160,82 @@ export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement
                 }}
               />
               {expanded ? (
-                commitFilesLoadState === 'loading' ? (
-                  <p role="status" className="h-9 px-3 py-2 text-[0.8125rem] text-text-tertiary">
-                    Loading files
-                  </p>
-                ) : commitFilesLoadState === 'error' && commitFiles.length === 0 ? (
-                  <p role="status" className="h-9 px-3 py-2 text-[0.8125rem] text-text-tertiary">
-                    Could not refresh files.
-                  </p>
-                ) : commitFiles.length === 0 ? (
-                  <p role="status" className="h-9 px-3 py-2 text-[0.8125rem] text-text-tertiary">
-                    No file changes
-                  </p>
-                ) : (
-                  <div
-                    className="flex min-h-0 flex-col"
-                    style={{
-                      height: Math.min(240, commitFiles.length * 32 + 8),
-                      paddingLeft: Math.max(LANE_WIDTH, graph.laneCount * LANE_WIDTH) + 8,
-                    }}
-                  >
-                    {commitFilesLoadState === 'error' ? (
-                      <p role="status" className="px-3 pb-1 text-[0.75rem] text-text-tertiary">
-                        Could not refresh files.
-                      </p>
-                    ) : null}
-                    <ChangedFilesList
-                      files={commitFiles}
-                      activeIndex={commitFileActiveIndex}
-                      onActiveIndexChange={setCommitFileActiveIndex}
-                      selectedPath={props.selectedPath}
-                      onOpenFile={props.onOpenFile}
-                      ariaLabel="Commit files"
-                      idPrefix={`sc-commit-${commit.oid}-file`}
-                    />
-                  </div>
-                )
+                <ExpandedCommitFiles
+                  layout={layout}
+                  laneCount={graph.laneCount}
+                  extraHeight={expandedExtraHeight(commitFilesLoadState, commitFiles.length)}
+                  commitFiles={commitFiles}
+                  commitFilesLoadState={commitFilesLoadState}
+                  commitFileActiveIndex={commitFileActiveIndex}
+                  onCommitFileActiveIndexChange={setCommitFileActiveIndex}
+                  selectedPath={props.selectedPath}
+                  onOpenFile={props.onOpenFile}
+                  commitOid={commit.oid}
+                />
               ) : null}
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function ExpandedCommitFiles(props: {
+  layout: LaneRow;
+  laneCount: number;
+  extraHeight: number;
+  commitFiles: readonly GitChangedFile[];
+  commitFilesLoadState: 'idle' | 'loading' | 'error';
+  commitFileActiveIndex: number;
+  onCommitFileActiveIndexChange: (index: number) => void;
+  selectedPath?: string | null;
+  onOpenFile?: (file: GitChangedFile) => void;
+  commitOid: string;
+}): ReactElement {
+  const body =
+    props.commitFilesLoadState === 'loading' ? (
+      <p role="status" className="h-9 px-2 py-2 text-[0.8125rem] text-text-tertiary">
+        Loading files
+      </p>
+    ) : props.commitFilesLoadState === 'error' && props.commitFiles.length === 0 ? (
+      <p role="status" className="h-9 px-2 py-2 text-[0.8125rem] text-text-tertiary">
+        Could not refresh files.
+      </p>
+    ) : props.commitFiles.length === 0 ? (
+      <p role="status" className="h-9 px-2 py-2 text-[0.8125rem] text-text-tertiary">
+        No file changes
+      </p>
+    ) : (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {props.commitFilesLoadState === 'error' ? (
+          <p role="status" className="px-2 pb-1 text-[0.75rem] text-text-tertiary">
+            Could not refresh files.
+          </p>
+        ) : null}
+        <ChangedFilesList
+          files={props.commitFiles}
+          activeIndex={props.commitFileActiveIndex}
+          onActiveIndexChange={props.onCommitFileActiveIndexChange}
+          selectedPath={props.selectedPath}
+          onOpenFile={props.onOpenFile}
+          ariaLabel="Commit files"
+          idPrefix={`sc-commit-${props.commitOid}-file`}
+          compact
+        />
+      </div>
+    );
+
+  return (
+    <div className="flex min-h-0" style={{ height: props.extraHeight }}>
+      <div className="flex shrink-0 items-stretch pl-3">
+        <CommitLaneContinuation
+          layout={props.layout}
+          laneCount={props.laneCount}
+          height={props.extraHeight}
+        />
+      </div>
+      {body}
     </div>
   );
 }

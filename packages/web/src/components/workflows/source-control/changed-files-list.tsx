@@ -27,6 +27,7 @@ export interface ChangedFilesListProps {
   ariaLabel?: string;
   idPrefix?: string;
   listRef?: Ref<HTMLDivElement | null>;
+  compact?: boolean;
 }
 
 export function ChangedFilesList(props: ChangedFilesListProps): ReactElement {
@@ -89,6 +90,7 @@ export function ChangedFilesList(props: ChangedFilesListProps): ReactElement {
       file={file}
       active={index === props.activeIndex}
       selected={file.path === selectedPath}
+      compact={props.compact}
       onSelect={(): void => {
         parentRef.current?.focus();
         props.onActiveIndexChange(index);

@@ -110,6 +110,8 @@ describe('CommitHistoryGraph', () => {
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain('aria-label="Commit files"');
     expect(html).toContain('src/from-commit.ts');
+    expect(html).toContain('from-commit.ts');
+    expect(html).toContain('data-lane-continuation');
     expect(html).toContain('sc-commit-' + D + '-file-0');
     expect(html).toContain('>M<');
     expect(html).not.toContain('Back');
@@ -126,6 +128,7 @@ describe('CommitHistoryGraph', () => {
       />
     );
     expect(loading).toContain('Loading files');
+    expect(loading).toContain('data-lane-continuation');
     expect(loading).toContain('height:164px');
     const failed = renderToStaticMarkup(
       <CommitHistoryGraph
