@@ -1,10 +1,11 @@
-# plan-tests AXI authoring (steps A+B)
+# plan-tests AXI authoring (steps A+B) + CI auto-trigger (C)
 
 - **Date:** 2026-09-07
-- **Scope:** A+B only. Playwright `run-e2e` stays the durable gate.
-- **Out of scope:** step C (hard CI required-check wiring), step D / closed PR #124
-  (stock `archon-validate-pr-e2e-*` / validate-ui / replicate-issue / Docker
-  agent-browser → AXI).
+- **Scope:** A+B (AXI + screenshots) plus C (auto-run `pr-e2e-verify` on UI PRs).
+  Playwright `run-e2e` stays the durable regression gate inside the DAG.
+- **Out of scope:** step D / closed PR #124 (stock `archon-validate-pr-e2e-*` /
+  validate-ui / replicate-issue / Docker agent-browser → AXI). Closed PR #126 /
+  `e2e-ui.yml` is intentionally not used — one gate, not a second Playwright GHA.
 
 ## Locked decisions
 
@@ -24,6 +25,9 @@ archon workflow run pr-e2e-verify <pr-number-or-url>
 # from source:
 bun run cli workflow run pr-e2e-verify <pr-number-or-url>
 ```
+
+CI auto-invokes that command on non-draft PRs into `dev` that touch UI paths.
+Check name: **`PR E2E Verify`**. See `e2e/README.md`.
 
 ## Evidence to expect
 
