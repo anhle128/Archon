@@ -106,6 +106,65 @@ describe('getRun inspect boundary', () => {
     expect(result.usage).toBeNull();
   });
 
+  test('keeps pending interactions, viewer presentation, and string metadata error', async () => {
+    const pending: components['schemas']['PendingInteraction'] = {
+      id: 'pi-1',
+      workflow_run_id: 'run/1',
+      node_id: 'review',
+      tool_use_id: 'toolu_1',
+      kind: 'ask',
+      status: 'pending',
+      envelope: {
+        questions: [
+          { id: 'q1', prompt: 'Ship?', selection: 'single', options: ['yes'], allowOther: false },
+        ],
+      },
+      answer: null,
+      provider_session_id: 'sess-1',
+      created_at: '2026-09-07T00:00:00.000Z',
+      resolved_at: null,
+      resolved_by: null,
+    };
+    stubFetch(() =>
+      jsonResponse({
+        run: {
+          ...detailRun('run/1'),
+          user_id: 'user-1',
+          metadata: { error: 'AskHuman is not supported by provider: grok' },
+        },
+        events: [],
+        nodeStates: [],
+        pending_interactions: [pending],
+        usage: null,
+        viewer_is_starter: true,
+        starter_display_name: 'Avery',
+      } satisfies RunDetailResponse)
+    );
+    const result = await getRun('run/1');
+    expect(result.pendingInteractions).toEqual([pending]);
+    expect(result.viewerIsStarter).toBe(true);
+    expect(result.starterDisplayName).toBe('Avery');
+    expect(result.runError).toBe('AskHuman is not supported by provider: grok');
+
+    fetchSpy?.mockRestore();
+    stubFetch(() =>
+      jsonResponse({
+        run: { ...detailRun('run/1'), metadata: { error: { unsafe: true } } },
+        events: [],
+        nodeStates: [],
+        pending_interactions: [],
+        usage: null,
+        viewer_is_starter: false,
+        starter_display_name: null,
+      } satisfies RunDetailResponse)
+    );
+    const nonStringError = await getRun('run/1');
+    expect(nonStringError.pendingInteractions).toEqual([]);
+    expect(nonStringError.viewerIsStarter).toBe(false);
+    expect(nonStringError.starterDisplayName).toBeNull();
+    expect(nonStringError.runError).toBeNull();
+  });
+
   test('rejects a non-2xx getRun response through requestJson', async () => {
     ensureWindow();
     stubFetch(url => {
