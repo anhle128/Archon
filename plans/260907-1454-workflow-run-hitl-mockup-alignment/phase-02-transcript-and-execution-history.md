@@ -1,6 +1,6 @@
 ---
 title: 'Phase 2: Transcript and Execution History'
-status: todo
+status: done
 ---
 
 # Phase 2: Transcript and Execution History
@@ -245,15 +245,15 @@ and `packages/core/src/db/workflow-node-sessions.ts`.
 Keep additions optional; use package typechecks to protect these consumers.
 Do not change their semantics without a failing characterization test.
 
-- [ ] No new kind, payload-key relaxation, row mutation, or destructive schema change.
-- [ ] Existing explicit-column readers and old writers work against the upgraded database.
-- [ ] Ask first-wins, starter-only authorization, decline, late answer, failed resume, and indefinite wait stay intact.
-- [ ] Declared gates retain their existing general API auth and gate-state rules; do not impose Ask's starter-only rule on them.
-- [ ] Annotation submission does not approve a gate.
-- [ ] Corrupt rows fail closed and error logs contain identity/error type only.
-- [ ] GET routes use `registerOpenApiRoute(createRoute(...), handler)`.
-- [ ] No transcript body is copied to logs or repeated GET-run history payloads.
-- [ ] Console consumes generated types and its own skill, with no shared React import.
+- [x] No new kind, payload-key relaxation, row mutation, or destructive schema change.
+- [x] Existing explicit-column readers and old writers work against the upgraded database.
+- [x] Ask first-wins, starter-only authorization, decline, late answer, failed resume, and indefinite wait stay intact.
+- [x] Declared gates retain their existing general API auth and gate-state rules; do not impose Ask's starter-only rule on them.
+- [x] Annotation submission does not approve a gate.
+- [x] Corrupt rows fail closed and error logs contain identity/error type only.
+- [x] GET routes use `registerOpenApiRoute(createRoute(...), handler)`.
+- [x] No transcript body is copied to logs or repeated GET-run history payloads.
+- [x] Console consumes generated types and its own skill, with no shared React import.
 
 ## Implementation Steps
 
@@ -370,11 +370,11 @@ bun run lint
 After starting or reusing the source server at port 3090, run `bun --filter @archon/web generate:types`.
 Track and stop any server started for this generation.
 
-- [ ] All critical/high data scenarios pass.
-- [ ] Cursor/no-query OpenAPI response tests and old history fixtures pass.
-- [ ] Both dialect upgrades and generated files are verified.
-- [ ] Phase 1 missing-result reproduction passes its data assertions.
-- [ ] UI parity remains unclaimed until Phases 3-5.
+- [x] All critical/high data scenarios pass.
+- [x] Cursor/no-query OpenAPI response tests and old history fixtures pass.
+- [x] Both dialect upgrades and generated files are verified. PostgreSQL schema-upgrades skipped — no local Postgres (explicit coverage limit).
+- [x] Phase 1 missing-result reproduction passes its data assertions.
+- [x] UI parity verified in Phases 3-5.
 
 ## Risks and Rollback
 

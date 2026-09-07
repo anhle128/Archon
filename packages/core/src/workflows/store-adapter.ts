@@ -383,6 +383,8 @@ export function createWorkflowStore(): IWorkflowStore {
     setWorkflowRunEnvOverlay: workflowDb.setWorkflowRunEnvOverlay,
     resolveApprovalGate: workflowDb.resolveApprovalGate,
     transitionPlannotatorGate: workflowDb.transitionPlannotatorGate,
+    submitReviewFeedback: workflowDb.submitReviewFeedback,
+    claimGateDecision: workflowDb.claimGateDecision,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,
     // DB returns string | null; IWorkflowStore declares WorkflowRunStatus | null.
     // The remote_agent_workflow_runs.status column is constrained to valid enum values

@@ -35,6 +35,7 @@ describe('GrokEventParser', () => {
         toolCallId: 'call-1',
         toolOutput: '{"lines":3}',
         toolOutcome: 'success',
+        outputState: 'full',
       },
     ]);
     expect(
@@ -80,6 +81,7 @@ describe('GrokEventParser', () => {
         toolCallId: 'call-1',
         toolOutput: 'Grok ended before reporting a tool result.',
         toolOutcome: 'unknown',
+        outputState: 'unknown',
       },
     ]);
   });

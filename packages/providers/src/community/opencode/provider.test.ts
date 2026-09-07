@@ -216,8 +216,8 @@ describe('OpencodeProvider', () => {
 
     expect(error).toBeUndefined();
     expect(chunks).toEqual([
-      { type: 'assistant', content: 'Hello' },
-      { type: 'assistant', content: ' world' },
+      { type: 'assistant', content: 'Hello', textMode: 'delta' },
+      { type: 'assistant', content: ' world', textMode: 'delta' },
       { type: 'result', sessionId: 'session-1' },
     ]);
   });
@@ -279,6 +279,7 @@ describe('OpencodeProvider', () => {
         toolOutput: 'file contents',
         toolCallId: 'tool-1',
         toolOutcome: 'success',
+        outputState: 'full',
       },
       { type: 'result', sessionId: 'session-1' },
     ]);

@@ -160,6 +160,9 @@ export {
   isRunBlockedOnChild,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
+  reviewFeedbackReceiptStatusSchema,
+  reviewFeedbackSubmissionSchema,
+  reviewFeedbackTextSchema,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -174,6 +177,8 @@ export type {
   ArtifactType,
   ApprovalContext,
   LoopGateRunMetadata,
+  ReviewFeedbackReceiptStatus,
+  ReviewFeedbackSubmission,
 } from './workflow-run';
 
 // Per-node persisted provider sessions
@@ -248,4 +253,5 @@ export type { WorkflowDefinition as DagWorkflow } from './workflow';
 
 // Per-node transcript rows + pending-interaction embed contract
 export * from './node-message';
+export * from './node-execution';
 export * from './pending-interaction';

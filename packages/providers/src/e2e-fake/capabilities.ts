@@ -3,15 +3,17 @@ import type { ProviderCapabilities } from '../types';
 /**
  * Capabilities for the E2E fake provider.
  *
- * Deliberately minimal: the fake exists only to drive the workflow usage-record
- * path deterministically without a paid AI call. It advertises no optional
- * feature, so a workflow node that relies on one is warned by the dag-executor
- * exactly as it would be for any provider lacking that capability. `structuredOutput`
- * is `false` — the fake does not honor `output_format`; usage is supplied through
- * the prompt directive, not a schema.
+ * The fake exists to drive real executor paths without a paid AI call.
+ * Usage still comes from the prompt directive. `nativeTools`, `askHuman`, and
+ * `sessionResume` are on only because the implementation in `provider.ts`
+ * actually calls `NativeTool.handler`, propagates `AskHumanAwaitingError`, and
+ * consumes `resumeInteractions`. Other optional features stay off so a workflow
+ * node that relies on one is warned exactly as it would be for any provider
+ * lacking that capability. `structuredOutput` is `false` — the fake does not
+ * honor `output_format`.
  */
 export const E2E_FAKE_CAPABILITIES: ProviderCapabilities = {
-  sessionResume: false,
+  sessionResume: true,
   mcp: false,
   hooks: false,
   skills: false,
@@ -25,7 +27,7 @@ export const E2E_FAKE_CAPABILITIES: ProviderCapabilities = {
   fallbackModel: false,
   sandbox: false,
   settingSources: false,
-  nativeTools: false,
+  nativeTools: true,
   containerExec: false,
-  askHuman: false,
+  askHuman: true,
 };

@@ -1697,7 +1697,16 @@ describe('SqliteAdapter', () => {
     test('workflow node messages table mirrors the Postgres contract', async () => {
       db = createTestDb();
       expect(raw_pragma(currentDbPath, 'remote_agent_workflow_node_messages').sort()).toEqual(
-        ['created_at', 'id', 'kind', 'node_id', 'payload', 'seq', 'workflow_run_id'].sort()
+        [
+          'created_at',
+          'id',
+          'kind',
+          'metadata',
+          'node_id',
+          'payload',
+          'seq',
+          'workflow_run_id',
+        ].sort()
       );
       const indexes = raw_indexes(currentDbPath);
       expect(indexes.some(name => name.includes('workflow_node_messages'))).toBe(true);
@@ -1712,6 +1721,7 @@ describe('SqliteAdapter', () => {
           'answer',
           'created_at',
           'envelope',
+          'execution_scope',
           'id',
           'kind',
           'node_id',

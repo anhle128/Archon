@@ -243,7 +243,11 @@ describe('CodexProvider', () => {
         })()
       ).rejects.toThrow('include_instructions');
 
-      expect(chunks).toContainEqual({ type: 'assistant', content: 'already emitted' });
+      expect(chunks).toContainEqual({
+        type: 'assistant',
+        content: 'already emitted',
+        textMode: 'complete',
+      });
       expect(MockCodex).toHaveBeenCalledTimes(1);
       expect(mockLogger.warn).not.toHaveBeenCalledWith(
         expect.anything(),
@@ -286,7 +290,11 @@ describe('CodexProvider', () => {
       }
 
       expect(chunks).toHaveLength(2);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Hello from Codex!' });
+      expect(chunks[0]).toEqual({
+        type: 'assistant',
+        content: 'Hello from Codex!',
+        textMode: 'complete',
+      });
       expect(chunks[1]).toEqual({
         type: 'result',
         sessionId: 'new-thread-id',
@@ -424,6 +432,7 @@ describe('CodexProvider', () => {
         toolCallId: 'cmd-1',
         toolOutcome: 'success',
         exitCode: 0,
+        outputState: 'full',
       });
     });
 
@@ -460,6 +469,7 @@ describe('CodexProvider', () => {
         toolCallId: 'cmd-2',
         toolOutcome: 'error',
         exitCode: 1,
+        outputState: 'full',
       });
     });
 
@@ -491,6 +501,7 @@ describe('CodexProvider', () => {
         toolOutput: 'partial output',
         toolCallId: 'cmd-unknown',
         toolOutcome: 'unknown',
+        outputState: 'full',
       });
     });
 
@@ -544,6 +555,7 @@ describe('CodexProvider', () => {
         toolOutput: '',
         toolCallId: 'search-1',
         toolOutcome: 'unknown',
+        outputState: 'missing',
       });
     });
 
@@ -789,6 +801,7 @@ describe('CodexProvider', () => {
         toolOutput: '',
         toolCallId: 'mcp-1',
         toolOutcome: 'success',
+        outputState: 'full',
       });
       expect(chunks[2]).toEqual({
         type: 'tool',
@@ -801,6 +814,7 @@ describe('CodexProvider', () => {
         toolOutput: '\u274C Error: Permission denied',
         toolCallId: 'mcp-2',
         toolOutcome: 'error',
+        outputState: 'full',
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ server: 'fs', tool: 'readFile' }),
@@ -855,6 +869,7 @@ describe('CodexProvider', () => {
         toolOutput: '',
         toolCallId: 'mcp-tool',
         toolOutcome: 'success',
+        outputState: 'full',
       });
       expect(chunks[2]).toEqual({
         type: 'tool',
@@ -867,6 +882,7 @@ describe('CodexProvider', () => {
         toolOutput: '',
         toolCallId: 'mcp-server',
         toolOutcome: 'success',
+        outputState: 'full',
       });
       expect(chunks[4]).toEqual({
         type: 'tool',
@@ -879,6 +895,7 @@ describe('CodexProvider', () => {
         toolOutput: '',
         toolCallId: 'mcp-unknown',
         toolOutcome: 'success',
+        outputState: 'full',
       });
     });
 
@@ -919,6 +936,7 @@ describe('CodexProvider', () => {
         toolOutput: '\u274C Error: MCP tool failed',
         toolCallId: 'mcp-failure',
         toolOutcome: 'error',
+        outputState: 'full',
       });
     });
 
@@ -961,6 +979,7 @@ describe('CodexProvider', () => {
         toolOutput: JSON.stringify([{ type: 'text', text: 'file contents' }]),
         toolCallId: 'mcp-completed',
         toolOutcome: 'success',
+        outputState: 'full',
       });
       expect(chunks[2]).toEqual({
         type: 'result',
@@ -1580,7 +1599,11 @@ describe('CodexProvider', () => {
 
       // Only first message and result should be yielded
       expect(chunks).toHaveLength(2);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Before turn' });
+      expect(chunks[0]).toEqual({
+        type: 'assistant',
+        content: 'Before turn',
+        textMode: 'complete',
+      });
       expect(chunks[1]).toMatchObject({ type: 'result', sessionId: 'new-thread-id' });
     });
 
@@ -1629,6 +1652,7 @@ describe('CodexProvider', () => {
         toolOutput: '',
         toolCallId: 'item-1',
         toolOutcome: 'unknown',
+        outputState: 'full',
       });
     });
 
@@ -1700,6 +1724,7 @@ describe('CodexProvider', () => {
         toolCallId: 'cmd-completed-only',
         toolOutcome: 'success',
         exitCode: 0,
+        outputState: 'full',
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         { itemId: 'cmd-completed-only', itemType: 'command_execution' },

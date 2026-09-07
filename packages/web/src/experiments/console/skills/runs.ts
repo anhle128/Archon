@@ -66,6 +66,7 @@ export type WorkflowEvent = components['schemas']['WorkflowEvent'];
 export type WorkflowNodeState = components['schemas']['WorkflowNodeState'];
 export type WorkflowNodeMessage = components['schemas']['WorkflowNodeMessage'];
 export type WorkflowNodeMessagesResponse = components['schemas']['WorkflowNodeMessagesResponse'];
+export type NodeExecution = components['schemas']['NodeExecution'];
 
 export type PendingInteraction = components['schemas']['PendingInteraction'];
 export type AskAnswerBody = components['schemas']['AskAnswerBody'];
@@ -82,6 +83,7 @@ export interface ConsoleRunDetail {
   viewerIsStarter: boolean;
   starterDisplayName: string | null;
   runError: string | null;
+  nodeExecutions?: NodeExecution[];
 }
 
 export async function getRun(id: string): Promise<ConsoleRunDetail> {
@@ -101,15 +103,28 @@ export async function getRun(id: string): Promise<ConsoleRunDetail> {
     viewerIsStarter: res.viewer_is_starter === true,
     starterDisplayName: res.starter_display_name,
     runError: typeof metadataError === 'string' ? metadataError : null,
+    nodeExecutions: res.nodeExecutions,
   };
 }
 
 export async function listNodeMessages(
   runId: string,
-  nodeId: string
+  nodeId: string,
+  options?: {
+    afterSeq?: number;
+    limit?: number;
+    occurrenceId?: string;
+    attemptId?: string;
+  }
 ): Promise<WorkflowNodeMessagesResponse> {
+  const qs = new URLSearchParams();
+  if (options?.afterSeq !== undefined) qs.set('afterSeq', String(options.afterSeq));
+  if (options?.limit !== undefined) qs.set('limit', String(options.limit));
+  if (options?.occurrenceId !== undefined) qs.set('occurrenceId', options.occurrenceId);
+  if (options?.attemptId !== undefined) qs.set('attemptId', options.attemptId);
+  const query = qs.size > 0 ? `?${qs.toString()}` : '';
   return requestJson<WorkflowNodeMessagesResponse>(
-    `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/messages`
+    `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/messages${query}`
   );
 }
 
@@ -155,6 +170,23 @@ export async function answerAskHuman(
 ): Promise<WorkflowRunActionResponse> {
   return requestJson<WorkflowRunActionResponse>(
     `/api/workflows/runs/${encodeURIComponent(runId)}/ask/${encodeURIComponent(requestId)}/answer`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+export type ReviewFeedbackRequest = components['schemas']['ReviewFeedbackBody'];
+export type ReviewFeedbackResponse = components['schemas']['ReviewFeedbackResponse'];
+
+export async function submitRunReviewFeedback(
+  runId: string,
+  body: ReviewFeedbackRequest
+): Promise<ReviewFeedbackResponse> {
+  return requestJson<ReviewFeedbackResponse>(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/review-feedback`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -1,6 +1,6 @@
 ---
 title: 'Phase 1: Visual Contract and Red E2E'
-status: todo
+status: done
 ---
 
 # Phase 1: Visual Contract and Red E2E
@@ -134,13 +134,13 @@ No product UI changes occur in this phase.
 
 ## Protection Checklist
 
-- [ ] `createArchonRuntime` retains isolated `ARCHON_HOME`, DB and current usage behavior.
-- [ ] Existing `ArchonRuntime.runWorkflow` remains available; live start is an added capability.
-- [ ] `E2eFakeProvider.sendQuery` retains no-directive and usage-directive behavior.
-- [ ] Registration stays gated by `ARCHON_E2E_FAKE_PROVIDER`.
-- [ ] Ask uses `NativeTool.handler` and actual resume data.
-- [ ] No process outside the fixture is terminated.
-- [ ] Replay/view-as stay test-only under the proposed decision.
+- [x] `createArchonRuntime` retains isolated `ARCHON_HOME`, DB and current usage behavior.
+- [x] Existing `ArchonRuntime.runWorkflow` remains available; live start is an added capability.
+- [x] `E2eFakeProvider.sendQuery` retains no-directive and usage-directive behavior.
+- [x] Registration stays gated by `ARCHON_E2E_FAKE_PROVIDER`.
+- [x] Ask uses `NativeTool.handler` and actual resume data.
+- [x] No process outside the fixture is terminated.
+- [x] Replay/view-as stay test-only under the proposed decision.
 
 ## Scenario Matrix
 
@@ -172,10 +172,10 @@ Do not hand-edit generated files.
 
 ## Exit and Rollback
 
-- [ ] Complete inventory and red reproduction are attached.
-- [ ] Real Ask flow is available to later phases.
-- [ ] Visual evidence limits are explicit.
-- [ ] No parity claim rests only on source comparison.
+- [x] Complete inventory and red reproduction are attached.
+- [x] Real Ask flow is available to later phases.
+- [x] Visual evidence limits are explicit.
+- [x] No parity claim rests only on source comparison.
 
 Advertised but missing fake-provider behavior produces false confidence.
 Tie capability flags to runnable checks.

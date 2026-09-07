@@ -195,7 +195,11 @@ describe('ClaudeProvider', () => {
       }
 
       expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Hello, world!' });
+      expect(chunks[0]).toEqual({
+        type: 'assistant',
+        content: 'Hello, world!',
+        textMode: 'complete',
+      });
     });
 
     test('yields tool events from tool_use blocks', async () => {
@@ -493,9 +497,17 @@ describe('ClaudeProvider', () => {
       }
 
       expect(chunks).toHaveLength(3);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'I will run a command.' });
+      expect(chunks[0]).toEqual({
+        type: 'assistant',
+        content: 'I will run a command.',
+        textMode: 'complete',
+      });
       expect(chunks[1]).toEqual({ type: 'tool', toolName: 'Bash', toolInput: { command: 'ls' } });
-      expect(chunks[2]).toEqual({ type: 'assistant', content: 'Command completed.' });
+      expect(chunks[2]).toEqual({
+        type: 'assistant',
+        content: 'Command completed.',
+        textMode: 'complete',
+      });
     });
 
     test('passes correct options to SDK', async () => {
@@ -1015,7 +1027,11 @@ describe('ClaudeProvider', () => {
 
       // Only the assistant message should be yielded
       expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Real response' });
+      expect(chunks[0]).toEqual({
+        type: 'assistant',
+        content: 'Real response',
+        textMode: 'complete',
+      });
     });
 
     test('enriches and logs error on SDK failure', async () => {
@@ -1173,7 +1189,7 @@ describe('ClaudeProvider', () => {
       // Should succeed on the 3rd attempt
       expect(callCount).toBe(3);
       expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Recovered!' });
+      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Recovered!', textMode: 'complete' });
     }, 5_000);
 
     test('classifies auth errors as fatal (no retry)', async () => {
@@ -1786,7 +1802,11 @@ describe('ClaudeProvider', () => {
 
       // Empty text should be filtered out
       expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Real content' });
+      expect(chunks[0]).toEqual({
+        type: 'assistant',
+        content: 'Real content',
+        textMode: 'complete',
+      });
     });
   });
 });
@@ -2045,7 +2065,7 @@ describe('sendQuery decomposition behaviors', () => {
     abortController.abort();
     await consuming;
 
-    expect(chunks).toEqual([{ type: 'assistant', content: 'first' }]);
+    expect(chunks).toEqual([{ type: 'assistant', content: 'first', textMode: 'complete' }]);
     expect(close).toHaveBeenCalledTimes(1);
   });
 
@@ -2106,6 +2126,7 @@ describe('sendQuery decomposition behaviors', () => {
         toolOutput: 'ok',
         toolCallId: 'success-id',
         toolOutcome: 'success',
+        outputState: 'full',
       },
       {
         type: 'tool_result',
@@ -2113,6 +2134,7 @@ describe('sendQuery decomposition behaviors', () => {
         toolOutput: '❌ Error: exit 1',
         toolCallId: 'error-id',
         toolOutcome: 'error',
+        outputState: 'full',
       },
       {
         type: 'tool_result',
@@ -2120,6 +2142,7 @@ describe('sendQuery decomposition behaviors', () => {
         toolOutput: '⚠️ Interrupted: stopped',
         toolCallId: 'interrupt-id',
         toolOutcome: 'interrupted',
+        outputState: 'full',
       },
     ]);
   });
@@ -2144,6 +2167,7 @@ describe('sendQuery decomposition behaviors', () => {
       toolOutput: 'ok',
       toolCallId: 'late-id',
       toolOutcome: 'success',
+      outputState: 'full',
     });
   });
 

@@ -326,6 +326,8 @@ export class OmpEventParser {
       toolName,
       toolOutput: serializeToolResult(event.result),
       toolCallId,
+      toolOutcome: event.isError === true ? 'error' : 'success',
+      outputState: 'full' as const,
     });
     return result;
   }

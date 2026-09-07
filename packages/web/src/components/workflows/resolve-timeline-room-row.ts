@@ -5,10 +5,16 @@ import { resolveGraphRoomRow, type GraphRoomLiveStatus } from './resolve-graph-r
 function selectionsEqual(left: LogRowSelection, right: LogRowSelection): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind === 'node') return true;
-  if (left.kind === 'loop_iteration') {
-    return right.kind === 'loop_iteration' && left.iteration === right.iteration;
+  if (left.kind === 'loop_iteration' && right.kind === 'loop_iteration') {
+    return left.iteration === right.iteration;
   }
-  return right.kind === 'route_iteration' && left.executionSeq === right.executionSeq;
+  if (left.kind === 'route_iteration' && right.kind === 'route_iteration') {
+    return left.executionSeq === right.executionSeq;
+  }
+  if (left.kind === 'occurrence' && right.kind === 'occurrence') {
+    return left.occurrenceId === right.occurrenceId && left.attemptId === right.attemptId;
+  }
+  return false;
 }
 
 export function resolveTimelineRoomRow(input: {

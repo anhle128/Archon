@@ -68,6 +68,54 @@ jobs:
       - name: Run tests
         run: bun run test
 
+  e2e-hitl:
+    # Standalone Playwright HITL journey. Root `bun run validate` does not run
+    # this package; without this job the mockup-alignment contract has no CI gate.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install monorepo dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build web UI
+        run: bun run build:web
+
+      - name: Install standalone Playwright package
+        run: npm ci --prefix e2e
+
+      - name: Install Chromium
+        run: npm exec --prefix e2e -- playwright install chromium --with-deps
+
+      - name: Typecheck E2E
+        run: bun run --cwd e2e typecheck
+
+      - name: Run HITL Playwright specs
+        run: bun run --cwd e2e test:ui:hitl
+
+      - name: Upload HITL evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-hitl-evidence
+          if-no-files-found: ignore
+          path: |
+            e2e/ui/reports/
+            plans/260907-1454-workflow-run-hitl-mockup-alignment/reports/captures/
+
   schema-upgrade:
     # Nothing else in CI applies migrations/000_combined.sql to a real database,
     # and every test that touches a schema starts from an empty one. That blind

@@ -1,8 +1,10 @@
 /**
- * Query boundary for a selected node transcript: fetch once per run/node and
- * poll only while the enclosing run is live.
+ * Query boundary for a selected node transcript: fetch once per run/node/scope
+ * and poll only while the enclosing run is live. On terminal status, drain
+ * remaining messages up to the server's scoped high-watermark before stopping.
  */
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import {
   getWorkflowNodeMessages,
@@ -17,7 +19,7 @@ import type { WorkflowRunStatus } from '@/lib/types';
 import { AskCard, InvalidAskCard } from './AskCard';
 import type { AskActionStateByRequest } from './ask-answer-controller';
 import { resolveAskCardPresentation } from './ask-card-presentation';
-import type { LogRow } from './build-log-rows';
+import type { LogRow, LogRowSelection } from './build-log-rows';
 import { selectVisibleNodeAskInteractions } from './merge-agent-room-items';
 import { NodeRoom, selectNodeRoomMessages } from './NodeRoom';
 import { parseAskEnvelope } from './parse-ask-envelope';
@@ -33,6 +35,17 @@ export function transcriptRefetchInterval(status: WorkflowRunStatus): 1000 | fal
     case 'cancelled':
       return false;
   }
+}
+
+/** Stable scope options derived from a row selection — stable ref for cache keys. */
+function scopeFromSelection(selection: LogRowSelection | null): {
+  occurrenceId: string | undefined;
+  attemptId: string | undefined;
+} {
+  if (selection?.kind === 'occurrence') {
+    return { occurrenceId: selection.occurrenceId, attemptId: selection.attemptId };
+  }
+  return { occurrenceId: undefined, attemptId: undefined };
 }
 
 export interface NodeTranscriptPaneProps {
@@ -70,15 +83,54 @@ export function NodeTranscriptPane({
   nodeState,
   onSubmitAsk,
 }: NodeTranscriptPaneProps): React.ReactElement {
+  const queryClient = useQueryClient();
+  const nodeId = row?.nodeId ?? null;
+  const { occurrenceId, attemptId } = scopeFromSelection(row?.selection ?? null);
+
+  // Cache key includes scope so switching between occurrences of the same node
+  // fetches distinct pages and never shares stale data.
+  const queryKey = [
+    'workflowNodeMessages',
+    runId,
+    nodeId,
+    occurrenceId ?? null,
+    attemptId ?? null,
+  ] as const;
+
   const query = useQuery({
-    queryKey: ['workflowNodeMessages', runId, row?.nodeId],
-    queryFn: (): Promise<WorkflowNodeMessagesResponse> => loadMessages(runId, row?.nodeId ?? ''),
-    enabled: row !== null,
+    queryKey,
+    queryFn: (): Promise<WorkflowNodeMessagesResponse> =>
+      loadMessages(runId, nodeId ?? '', { occurrenceId, attemptId }),
+    enabled: nodeId !== null,
     refetchInterval: transcriptRefetchInterval(runStatus),
   });
 
+  // Drain any remaining messages after the run reaches a terminal state.
+  // We fire one additional fetch when the run terminates and the last response
+  // indicates there may be more messages (hasMore) or provides a highWatermark
+  // we have not reached yet.
+  const drainedRef = useRef(false);
+  const drainKeyRef = useRef<string>('');
+  const drainKey = `${runId}:${nodeId ?? ''}:${occurrenceId ?? ''}:${attemptId ?? ''}`;
+
+  useEffect(() => {
+    const isTerminal =
+      runStatus === 'completed' || runStatus === 'failed' || runStatus === 'cancelled';
+    if (!isTerminal || nodeId === null) {
+      drainedRef.current = false;
+      return;
+    }
+    if (drainedRef.current && drainKeyRef.current === drainKey) return;
+    drainedRef.current = true;
+    drainKeyRef.current = drainKey;
+
+    // Invalidate once to trigger a final fetch now that the run is terminal.
+    void queryClient.invalidateQueries({ queryKey: [...queryKey] });
+  }, [runStatus, nodeId, drainKey, queryClient, queryKey]);
+
   const allMessages = query.error ? [] : (query.data?.messages ?? []);
-  const visibleMessages = row === null ? [] : selectNodeRoomMessages(allMessages, row.selection);
+  const selection = row?.selection ?? null;
+  const visibleMessages = selection === null ? [] : selectNodeRoomMessages(allMessages, selection);
   const visibleAsks =
     row === null
       ? []
@@ -122,7 +174,7 @@ export function NodeTranscriptPane({
 
   const nowMs = Date.now();
   const agentDisplayName = row?.label ?? '';
-  const nodeId = row?.nodeId ?? '';
+  const displayNodeId = row?.nodeId ?? '';
 
   const renderAskCard = (interaction: PendingInteraction): React.ReactElement => {
     const questions = parseAskEnvelope(interaction.envelope);
@@ -132,7 +184,7 @@ export function NodeTranscriptPane({
           key={interaction.id}
           interaction={interaction}
           agentDisplayName={agentDisplayName}
-          nodeId={nodeId}
+          nodeId={displayNodeId}
         />
       );
     }
@@ -152,9 +204,10 @@ export function NodeTranscriptPane({
         viewerIsStarter={viewerIsStarter}
         starterDisplayName={starterDisplayName}
         agentDisplayName={agentDisplayName}
-        nodeId={nodeId}
+        nodeId={displayNodeId}
         autoFocus={interaction.id === firstActionableId}
         nowMs={nowMs}
+        mountContext="room"
         onSubmit={(body): void => {
           void onSubmitAsk(requestId, body);
         }}

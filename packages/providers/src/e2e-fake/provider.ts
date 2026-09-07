@@ -6,6 +6,7 @@ import type {
   IAgentProvider,
   MessageChunk,
   ModelUsageEntry,
+  NativeTool,
   ProviderCapabilities,
   SendQueryOptions,
   UsageBreakdown,
@@ -17,6 +18,38 @@ const log = createLogger('provider.e2e-fake');
 
 const DIRECTIVE_OPEN = '<<E2E_USAGE>>';
 const DIRECTIVE_CLOSE = '<</E2E_USAGE>>';
+const SCENARIO_OPEN = '<<E2E_SCENARIO>>';
+const SCENARIO_CLOSE = '<</E2E_SCENARIO>>';
+
+/** Deterministic tool card content for HITL e2e assertions. */
+export const E2E_FAKE_TOOL_NAME = 'Read';
+export const E2E_FAKE_TOOL_INPUT = { path: 'HITL_TOOL_INPUT.txt' } as const;
+export const E2E_FAKE_TOOL_OUTPUT = 'HITL_TOOL_OUTPUT_VISIBLE';
+export const E2E_FAKE_LOOP_DONE = 'E2E_LOOP_DONE';
+export const E2E_FAKE_TOOL_PASS_TEXT = '[e2e-fake] tool pass';
+
+const ASK_HUMAN_TOOL_NAME = 'AskHuman';
+
+const DEFAULT_ASK_QUESTIONS = [
+  {
+    id: 'proceed',
+    prompt: 'Should the HITL fixture continue?',
+    selection: 'single' as const,
+    options: ['yes', 'no'],
+    allowOther: true,
+  },
+];
+
+const scenarioSchema = z
+  .object({
+    emitTool: z.boolean().optional(),
+    askHuman: z.boolean().optional(),
+    delayMs: z.number().int().nonnegative().optional(),
+    doneWhenPromptIncludes: z.string().min(1).optional(),
+  })
+  .strict();
+
+type E2eScenario = z.infer<typeof scenarioSchema>;
 
 // ---------------------------------------------------------------------------
 // Usage directive schema
@@ -128,29 +161,77 @@ type EntryTypeMatchesContract = AssertTrue<
 // Exported so `noUnusedLocals` cannot drop the assertion silently.
 export type E2eFakeContractChecks = [EntryTypeMatchesContract];
 
-/**
- * Extract the usage directive JSON from a node prompt.
- * Returns `undefined` when no `<<E2E_USAGE>>...<</E2E_USAGE>>` block is present
- * — the caller reads that as the intentional "emit no usage" scenario.
- */
-function extractUsageDirective(prompt: string): string | undefined {
-  const start = prompt.indexOf(DIRECTIVE_OPEN);
+function extractDelimitedBlock(
+  prompt: string,
+  open: string,
+  close: string,
+  label: string
+): string | undefined {
+  const start = prompt.indexOf(open);
   if (start === -1) return undefined;
-  const from = start + DIRECTIVE_OPEN.length;
-  const end = prompt.indexOf(DIRECTIVE_CLOSE, from);
+  const from = start + open.length;
+  const end = prompt.indexOf(close, from);
   if (end === -1) {
-    throw new Error(
-      `e2e-fake: found ${DIRECTIVE_OPEN} without a closing ${DIRECTIVE_CLOSE} in the prompt`
-    );
+    throw new Error(`e2e-fake: found ${open} without a closing ${close} in the ${label}`);
   }
   return prompt.slice(from, end).trim();
 }
 
-/**
- * Parse + validate a usage directive, throwing loudly on any malformed input.
- * A throw here is the whole point: it prevents a directive typo from silently
- * degrading into zero recorded rows.
- */
+/** Drop a delimited directive so its JSON body cannot satisfy `doneWhenPromptIncludes`. */
+function stripDelimitedBlock(prompt: string, open: string, close: string): string {
+  const start = prompt.indexOf(open);
+  if (start === -1) return prompt;
+  const from = start + open.length;
+  const end = prompt.indexOf(close, from);
+  if (end === -1) return prompt;
+  return prompt.slice(0, start) + prompt.slice(end + close.length);
+}
+
+function parseScenarioDirective(directive: string): E2eScenario {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(directive);
+  } catch (err) {
+    throw new Error(
+      `e2e-fake: scenario directive is not valid JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+  const result = scenarioSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`e2e-fake: scenario directive failed validation: ${result.error.message}`);
+  }
+  return result.data;
+}
+
+function findAskHumanTool(nativeTools: NativeTool[] | undefined): NativeTool {
+  const tool = nativeTools?.find(candidate => candidate.name === ASK_HUMAN_TOOL_NAME);
+  if (!tool) {
+    throw new Error(
+      'e2e-fake: askHuman scenario requires the registered AskHuman native tool on sendQuery options'
+    );
+  }
+  return tool;
+}
+
+async function waitUnlessAborted(delayMs: number, abortSignal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(new Error('Query aborted'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      abortSignal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new Error('Query aborted'));
+    };
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 function parseUsageDirective(directive: string): UsageBreakdown {
   let parsed: unknown;
   try {
@@ -168,13 +249,12 @@ function parseUsageDirective(directive: string): UsageBreakdown {
 }
 
 /**
- * A net-new, env-gated fake agent provider used only by end-to-end tests that
- * must exercise the real workflow usage-record path (executor -> usage recorder
- * -> usage_ledger) without a paid AI call. It emits exactly the usage the test
- * asks for through a prompt directive, and nothing else.
+ * Env-gated fake agent provider for end-to-end tests.
  *
- * Registered ONLY when `ARCHON_E2E_FAKE_PROVIDER` is set (see registration.ts),
- * so production never sees it.
+ * Usage still comes only from `<<E2E_USAGE>>` (unchanged contract). Optional
+ * `<<E2E_SCENARIO>>` JSON drives typed tool / AskHuman / delay / loop-done
+ * behavior by calling the real native-tool handler and emitting `tool` +
+ * `tool_result` chunks. Registered ONLY when `ARCHON_E2E_FAKE_PROVIDER` is set.
  */
 export class E2eFakeProvider implements IAgentProvider {
   getType(): string {
@@ -193,30 +273,92 @@ export class E2eFakeProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     if (requestOptions?.abortSignal?.aborted) throw new Error('Query aborted');
 
-    const directive = extractUsageDirective(prompt);
+    const usageDirective = extractDelimitedBlock(
+      prompt,
+      DIRECTIVE_OPEN,
+      DIRECTIVE_CLOSE,
+      'usage directive'
+    );
+    const scenarioDirective = extractDelimitedBlock(
+      prompt,
+      SCENARIO_OPEN,
+      SCENARIO_CLOSE,
+      'scenario directive'
+    );
+    const scenario: E2eScenario =
+      scenarioDirective === undefined ? {} : parseScenarioDirective(scenarioDirective);
     const sessionId = resumeSessionId ?? `e2e-fake-${Date.now().toString(36)}`;
+    const resumed = resumeSessionId !== undefined ? true : undefined;
 
-    yield { type: 'assistant', content: '[e2e-fake] deterministic response' };
+    await waitUnlessAborted(scenario.delayMs ?? 0, requestOptions?.abortSignal);
+    if (requestOptions?.abortSignal?.aborted) throw new Error('Query aborted');
 
-    if (directive === undefined) {
-      // No directive block -> intentional "no usage" scenario: emit a terminal
-      // result with no usageBreakdown so the recorder writes zero rows.
-      log.info({ sessionId }, 'e2e-fake.query_completed_no_usage');
+    const usageBreakdown =
+      usageDirective === undefined ? undefined : parseUsageDirective(usageDirective);
+
+    const resumeInteractions = requestOptions?.resumeInteractions;
+    if (resumeInteractions !== undefined && resumeInteractions.length > 0) {
+      const first = resumeInteractions[0];
+      const resumeText = first.declined
+        ? '[e2e-fake] ask declined'
+        : `[e2e-fake] ask answered ${JSON.stringify(first.payload)}`;
+      yield { type: 'assistant', content: resumeText };
+      log.info({ sessionId, resumed: true }, 'e2e-fake.query_completed_resume');
       yield {
         type: 'result',
         sessionId,
-        resumed: resumeSessionId !== undefined ? true : undefined,
+        ...(usageBreakdown !== undefined ? { usageBreakdown } : {}),
+        resumed: true,
       };
       return;
     }
 
-    const usageBreakdown = parseUsageDirective(directive);
+    if (scenario.emitTool === true) {
+      const toolCallId = `e2e-fake-tool-${sessionId}`;
+      yield { type: 'assistant', content: E2E_FAKE_TOOL_PASS_TEXT };
+      yield {
+        type: 'tool',
+        toolName: E2E_FAKE_TOOL_NAME,
+        toolInput: { ...E2E_FAKE_TOOL_INPUT },
+        toolCallId,
+      };
+      yield {
+        type: 'tool_result',
+        toolName: E2E_FAKE_TOOL_NAME,
+        toolOutput: E2E_FAKE_TOOL_OUTPUT,
+        toolCallId,
+        toolOutcome: 'success',
+      };
+    } else {
+      yield { type: 'assistant', content: '[e2e-fake] deterministic response' };
+    }
+
+    const promptOutsideDirectives = stripDelimitedBlock(
+      stripDelimitedBlock(prompt, SCENARIO_OPEN, SCENARIO_CLOSE),
+      DIRECTIVE_OPEN,
+      DIRECTIVE_CLOSE
+    );
+    if (
+      scenario.doneWhenPromptIncludes !== undefined &&
+      promptOutsideDirectives.includes(scenario.doneWhenPromptIncludes)
+    ) {
+      yield { type: 'assistant', content: E2E_FAKE_LOOP_DONE };
+    }
+
+    if (scenario.askHuman === true) {
+      const askTool = findAskHumanTool(requestOptions?.nativeTools);
+      const toolUseId = `e2e-fake-ask-${sessionId}`;
+      await askTool.handler({ questions: DEFAULT_ASK_QUESTIONS }, { toolUseId, sessionId });
+      throw new Error('e2e-fake: AskHuman handler returned without pausing the run');
+    }
+
+    if (usageBreakdown === undefined) {
+      log.info({ sessionId }, 'e2e-fake.query_completed_no_usage');
+      yield { type: 'result', sessionId, resumed };
+      return;
+    }
+
     log.info({ sessionId, entries: usageBreakdown.length }, 'e2e-fake.query_completed');
-    yield {
-      type: 'result',
-      sessionId,
-      usageBreakdown,
-      resumed: resumeSessionId !== undefined ? true : undefined,
-    };
+    yield { type: 'result', sessionId, usageBreakdown, resumed };
   }
 }

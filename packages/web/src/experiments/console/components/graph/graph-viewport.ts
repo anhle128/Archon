@@ -1,7 +1,6 @@
 import type { Point } from '@/lib/run-graph';
+import { NODE_HEIGHT, NODE_WIDTH } from '@/lib/run-graph/constants';
 
-const NODE_WIDTH = 180;
-const NODE_HEIGHT = 80;
 const CANVAS_PADDING = 64;
 const DEFAULT_FIT_PADDING = 24;
 const MIN_FIT_SCALE = 0.25;

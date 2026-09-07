@@ -699,17 +699,31 @@ export async function getWorkflowRunGitFile(
 export type WorkflowNodeStateResponse = components['schemas']['WorkflowNodeState'];
 export type WorkflowNodeMessageResponse = components['schemas']['WorkflowNodeMessage'];
 export type WorkflowNodeMessagesResponse = components['schemas']['WorkflowNodeMessagesResponse'];
+export type NodeExecution = components['schemas']['NodeExecution'];
 
 export async function getWorkflowNodeMessages(
   runId: string,
-  nodeId: string
+  nodeId: string,
+  options?: {
+    afterSeq?: number;
+    limit?: number;
+    occurrenceId?: string;
+    attemptId?: string;
+  }
 ): Promise<WorkflowNodeMessagesResponse> {
+  const qs = new URLSearchParams();
+  if (options?.afterSeq !== undefined) qs.set('afterSeq', String(options.afterSeq));
+  if (options?.limit !== undefined) qs.set('limit', String(options.limit));
+  if (options?.occurrenceId !== undefined) qs.set('occurrenceId', options.occurrenceId);
+  if (options?.attemptId !== undefined) qs.set('attemptId', options.attemptId);
+  const query = qs.size > 0 ? `?${qs.toString()}` : '';
   return fetchJSON(
     '/api/workflows/runs/' +
       encodeURIComponent(runId) +
       '/nodes/' +
       encodeURIComponent(nodeId) +
-      '/messages'
+      '/messages' +
+      query
   );
 }
 export async function getWorkflowRunByWorker(
@@ -840,6 +854,23 @@ export async function deleteCodebaseEnvVar(
   return fetchJSON<{ success: boolean }>(
     `/api/codebases/${encodeURIComponent(codebaseId)}/env/${encodeURIComponent(key)}`,
     { method: 'DELETE' }
+  );
+}
+
+export type ReviewFeedbackRequest = components['schemas']['ReviewFeedbackBody'];
+export type ReviewFeedbackResponse = components['schemas']['ReviewFeedbackResponse'];
+
+export async function submitWorkflowRunReviewFeedback(
+  runId: string,
+  body: ReviewFeedbackRequest
+): Promise<ReviewFeedbackResponse> {
+  return fetchJSON<ReviewFeedbackResponse>(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/review-feedback`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
   );
 }
 

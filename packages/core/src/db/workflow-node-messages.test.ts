@@ -38,6 +38,8 @@ const {
   appendNodeMessage,
   isNodeMessageSequenceConflict,
   listNodeMessages,
+  getNodeMessage,
+  getNodeMessageHighWatermark,
   WorkflowNodeMessageCorruptRowError,
 } = await import('./workflow-node-messages');
 
@@ -145,6 +147,57 @@ describe('workflow-node-messages persistence', () => {
       }),
     ]);
     expect([a.seq, b.seq].sort((left, right) => left - right)).toEqual([1, 2]);
+  });
+
+  test('applies occurrence and sequence predicates before LIMIT', async () => {
+    const occurrence = '11111111-1111-4111-8111-111111111111';
+    const other = '33333333-3333-4333-8333-333333333333';
+    const attempt = '22222222-2222-4222-8222-222222222222';
+    await appendNodeMessage({
+      workflow_run_id: 'run-1',
+      node_id: 'scoped',
+      kind: 'text',
+      payload: { text: 'one' },
+      metadata: { execution: { occurrence_id: occurrence, attempt_id: attempt } },
+    });
+    await appendNodeMessage({
+      workflow_run_id: 'run-1',
+      node_id: 'scoped',
+      kind: 'text',
+      payload: { text: 'two' },
+      metadata: { execution: { occurrence_id: occurrence, attempt_id: attempt } },
+    });
+    await appendNodeMessage({
+      workflow_run_id: 'run-1',
+      node_id: 'scoped',
+      kind: 'text',
+      payload: { text: 'other-occurrence' },
+      metadata: { execution: { occurrence_id: other, attempt_id: attempt } },
+    });
+    const page = await listNodeMessages('run-1', 'scoped', {
+      occurrenceId: occurrence,
+      afterSeq: 1,
+      limit: 1,
+    });
+    expect(page.map(row => row.payload)).toEqual([{ text: 'two' }]);
+    expect(await getNodeMessageHighWatermark('run-1', 'scoped', { occurrenceId: occurrence })).toBe(
+      2
+    );
+    const full = await getNodeMessage('run-1', 'scoped', page[0]?.id ?? '');
+    expect(full?.payload).toEqual({ text: 'two' });
+  });
+
+  test('allows one row above the public 500 maximum so cursor hasMore can be true', async () => {
+    for (let seq = 1; seq <= 501; seq += 1) {
+      await appendNodeMessage({
+        workflow_run_id: 'run-1',
+        node_id: 'limit',
+        kind: 'text',
+        payload: { text: String(seq) },
+      });
+    }
+    const page = await listNodeMessages('run-1', 'limit', { limit: 501 });
+    expect(page).toHaveLength(501);
   });
 });
 

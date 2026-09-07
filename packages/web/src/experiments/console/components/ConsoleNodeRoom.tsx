@@ -2,12 +2,14 @@
  * Console-owned inspect room: one persistent surface for every Story 5.5
  * node body, with Ask cards inline at agent tool invocations.
  */
-import { useEffect, useRef, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
+import { formatToolIo, projectToolTranscript } from '@/lib/pair-tool-transcript';
+import { projectTextTranscript } from '@/lib/project-text-transcript';
 import type { Run } from '../primitives/run';
 import type {
   AskAnswerBody,
@@ -17,6 +19,7 @@ import type {
   WorkflowNodeMessagesResponse,
   WorkflowNodeState,
 } from '../skills/runs';
+import { submitRunReviewFeedback } from '../skills/runs';
 import type { DagNode } from '../skills/workflows';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
@@ -53,7 +56,11 @@ export interface ConsoleNodeRoomProps {
   events: readonly WorkflowEvent[];
   approval: unknown;
   isLive: boolean;
-  loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+  loadMessages: (
+    runId: string,
+    nodeId: string,
+    options?: { occurrenceId?: string; attemptId?: string }
+  ) => Promise<WorkflowNodeMessagesResponse>;
   onClose: () => void;
   pendingInteractions: readonly PendingInteraction[];
   viewerIsStarter: boolean;
@@ -200,10 +207,6 @@ function RoomHeader({
   );
 }
 
-function formattedJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
-
 function AgentTranscript({
   messages,
   renderAfterMessage,
@@ -222,12 +225,63 @@ function AgentTranscript({
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
-      {messages.map(message => (
-        <div key={message.id}>
-          {renderTranscriptItem(message)}
-          {renderAfterMessage?.(message)}
-        </div>
-      ))}
+      {projectToolTranscript(projectTextTranscript(messages)).map(item => {
+        if (item.kind === 'tool-card') {
+          const outcomeParts: string[] = [];
+          if (item.pending) outcomeParts.push('pending');
+          else {
+            if (item.outcome !== undefined) outcomeParts.push(item.outcome);
+            if (item.exitCode !== undefined) outcomeParts.push(`exit ${String(item.exitCode)}`);
+            if (item.truncated === true || item.outputState === 'truncated') {
+              outcomeParts.push('truncated');
+            }
+            if (item.outputState === 'missing') outcomeParts.push('missing output');
+          }
+          return (
+            <div key={item.id}>
+              <div className="ptool rounded-[var(--radius)] border border-border bg-surface-inset px-2.5 py-2">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-[11.5px] font-bold text-accent-bright">{item.name}</span>
+                  {outcomeParts.length > 0 ? (
+                    <span className="text-[11px] text-text-secondary">
+                      {outcomeParts.join(' · ')}
+                    </span>
+                  ) : null}
+                </div>
+                {item.input !== undefined ? (
+                  <div className="mt-1.5">
+                    <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
+                      Input
+                    </div>
+                    <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
+                      {formatToolIo(item.input)}
+                    </pre>
+                  </div>
+                ) : null}
+                {item.output !== undefined ? (
+                  <div className="mt-1.5">
+                    <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
+                      Output
+                    </div>
+                    <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
+                      {formatToolIo(item.output)}
+                    </pre>
+                  </div>
+                ) : item.pending ? (
+                  <div className="mt-1.5 text-[11px] text-text-secondary">Output unavailable</div>
+                ) : null}
+              </div>
+              {item.messages.map(message => renderAfterMessage?.(message))}
+            </div>
+          );
+        }
+        return (
+          <div key={item.message.id}>
+            {renderTranscriptItem(item.message)}
+            {renderAfterMessage?.(item.message)}
+          </div>
+        );
+      })}
       {renderAtEnd}
     </div>
   );
@@ -260,25 +314,29 @@ function renderTranscriptItem(message: WorkflowNodeMessage): ReactElement {
     case 'tool': {
       const { name, input, output } = message.payload;
       return (
-        <div className="flex flex-col gap-1">
-          <span className="w-fit rounded-full bg-surface-elevated px-2 py-0.5 font-mono text-[11px] text-text-secondary">
-            {name}
-          </span>
+        <div className="ptool rounded-[var(--radius)] border border-border bg-surface-inset px-2.5 py-2">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[11.5px] font-bold text-accent-bright">{name}</span>
+          </div>
           {input !== undefined ? (
-            <details>
-              <summary className="cursor-pointer text-[11px] text-text-secondary">Input</summary>
-              <pre className="mt-1 overflow-x-auto rounded-md bg-background p-2 font-mono text-[11px] text-text-secondary">
-                {formattedJson(input)}
+            <div className="mt-1.5">
+              <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
+                Input
+              </div>
+              <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
+                {formatToolIo(input)}
               </pre>
-            </details>
+            </div>
           ) : null}
           {output !== undefined ? (
-            <details>
-              <summary className="cursor-pointer text-[11px] text-text-secondary">Output</summary>
-              <pre className="mt-1 overflow-x-auto rounded-md bg-background p-2 font-mono text-[11px] text-text-secondary">
-                {formattedJson(output)}
+            <div className="mt-1.5">
+              <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
+                Output
+              </div>
+              <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
+                {formatToolIo(output)}
               </pre>
-            </details>
+            </div>
           ) : null}
         </div>
       );
@@ -323,7 +381,19 @@ function StdoutBody({ stdout }: { stdout: StdoutView }): ReactElement {
   );
 }
 
-function GateBody({ chrome, run }: { chrome: GateChrome; run: Run }): ReactElement {
+function GateBody({
+  chrome,
+  run,
+  nodeId,
+}: {
+  chrome: GateChrome;
+  run: Run;
+  nodeId: string;
+}): ReactElement {
+  const [annotationDraft, setAnnotationDraft] = useState('');
+  const [annotationPending, setAnnotationPending] = useState(false);
+  const [annotationError, setAnnotationError] = useState<string | null>(null);
+  const [receiptStatus, setReceiptStatus] = useState<string | null>(chrome.feedbackReceiptStatus);
   return (
     <div className="space-y-3 p-4">
       {chrome.showInactiveNotice ? (
@@ -354,6 +424,60 @@ function GateBody({ chrome, run }: { chrome: GateChrome; run: Run }): ReactEleme
         >
           Open Plannotator
         </a>
+      ) : null}
+      {chrome.gateType === 'plannotator_gate' &&
+      chrome.canDecide &&
+      chrome.reviewSessionId !== null &&
+      chrome.gateId !== null ? (
+        <div className="space-y-2">
+          <input
+            type="text"
+            value={annotationDraft}
+            onChange={(event): void => {
+              setAnnotationDraft(event.target.value);
+            }}
+            placeholder="Annotations / comment…"
+            className="w-full rounded-md border border-border bg-surface-inset px-2 py-1.5 text-[13px] text-text-primary"
+            disabled={annotationPending}
+          />
+          <button
+            type="button"
+            disabled={annotationPending || annotationDraft.trim().length === 0}
+            className="rounded-md px-2 py-1 text-[12px] text-primary hover:bg-primary/10 disabled:opacity-50"
+            onClick={(): void => {
+              const gateId = chrome.gateId;
+              const reviewSessionId = chrome.reviewSessionId;
+              if (gateId === null || reviewSessionId === null) return;
+              void (async (): Promise<void> => {
+                setAnnotationError(null);
+                setAnnotationPending(true);
+                try {
+                  const receipt = await submitRunReviewFeedback(run.id, {
+                    nodeId,
+                    gateId,
+                    reviewSessionId,
+                    requestId: crypto.randomUUID(),
+                    feedback: annotationDraft.trim(),
+                  });
+                  setReceiptStatus(receipt.status);
+                  setAnnotationDraft('');
+                } catch (error: unknown) {
+                  setAnnotationError(error instanceof Error ? error.message : String(error));
+                } finally {
+                  setAnnotationPending(false);
+                }
+              })();
+            }}
+          >
+            Send annotations
+          </button>
+          {receiptStatus !== null ? (
+            <p className="text-[11px] text-text-secondary">Annotations {receiptStatus}</p>
+          ) : null}
+          {annotationError !== null ? (
+            <p className="text-[11px] text-error">{annotationError}</p>
+          ) : null}
+        </div>
       ) : null}
       {chrome.canDecide ? <ApprovalPanel run={run} /> : null}
     </div>
@@ -504,10 +628,18 @@ export function ConsoleNodeRoom({
     nodeId === null ? null : resolveRoomKind(nodeId, definitionNodes, events, approval);
   const waitingOnDefinition = definitionPending && isUnknownAgentFallback(resolution);
   const agentActive = nodeId !== null && isAgentKind(resolution?.kind) && !waitingOnDefinition;
+  const row = nodeId === null ? null : inspectRow(nodeId, selectedRow, nodeStates);
+  const occurrenceId =
+    row?.selection.kind === 'occurrence' ? row.selection.occurrenceId : undefined;
+  const attemptId = row?.selection.kind === 'occurrence' ? row.selection.attemptId : undefined;
   const messagesKey =
-    agentActive && nodeId !== null ? K.nodeMessages(run.id, nodeId) : IDLE_NODE_MESSAGES_KEY;
+    agentActive && nodeId !== null
+      ? `${K.nodeMessages(run.id, nodeId)}:${occurrenceId ?? ''}:${attemptId ?? ''}`
+      : IDLE_NODE_MESSAGES_KEY;
   const messagesQuery = useEntity<WorkflowNodeMessagesResponse>(messagesKey, () => {
-    if (agentActive && nodeId !== null) return loadMessages(run.id, nodeId);
+    if (agentActive && nodeId !== null) {
+      return loadMessages(run.id, nodeId, { occurrenceId, attemptId });
+    }
     return Promise.resolve({ messages: [] });
   });
   const refetchRef = useRef(messagesQuery.refetch);
@@ -523,7 +655,6 @@ export function ConsoleNodeRoom({
     };
   }, [isLive, agentActive, messagesKey]);
 
-  const row = nodeId === null ? null : inspectRow(nodeId, selectedRow, nodeStates);
   const headerLabel = row?.label ?? (nodeId === null ? 'Select a node' : nodeId);
   const headerStatus = row === null ? '' : inspectStatusLabel(row.status);
   const headerExtra = row === null ? null : selectionExtra(row);
@@ -602,6 +733,7 @@ export function ConsoleNodeRoom({
         nodeId={roomNodeId}
         autoFocus={interaction.id === firstActionableId}
         nowMs={nowMs}
+        mountContext="room"
         onSubmit={(body): void => {
           void onSubmitAsk(requestId, body);
         }}
@@ -661,6 +793,7 @@ export function ConsoleNodeRoom({
     body = (
       <GateBody
         run={run}
+        nodeId={row.nodeId}
         chrome={selectGateChrome({
           definitionNode: resolution.definitionNode,
           events,

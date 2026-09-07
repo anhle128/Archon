@@ -4015,6 +4015,17 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       tool_outcome: 'error',
       exit_code: 1,
     });
+    const toolRows = (await mockStore.listNodeMessages(workflowRun.id, 'my-cmd')).filter(
+      row => row.kind === 'tool'
+    );
+    expect(toolRows).toHaveLength(2);
+    expect(toolRows[0]?.payload).toMatchObject({ name: 'read_file', id: 'anonymous-1' });
+    expect(toolRows[0]?.payload).not.toHaveProperty('output');
+    expect(toolRows[1]?.payload).toMatchObject({
+      name: 'read_file',
+      id: 'anonymous-1',
+      output: 'contents',
+    });
   });
 
   it('correlates interleaved DAG tool lifecycles by toolCallId', async () => {
@@ -7196,6 +7207,17 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         duration_ms: 50,
         tool_call_id: 'anonymous-1',
         tool_outcome: 'success',
+      });
+      const toolRows = (await store.listNodeMessages(workflowRun.id, 'my-loop')).filter(
+        row => row.kind === 'tool'
+      );
+      expect(toolRows).toHaveLength(2);
+      expect(toolRows[0]?.payload).toMatchObject({ name: 'read_file', id: 'anonymous-1' });
+      expect(toolRows[0]?.payload).not.toHaveProperty('output');
+      expect(toolRows[1]?.payload).toMatchObject({
+        name: 'read_file',
+        id: 'anonymous-1',
+        output: 'contents',
       });
     });
 
@@ -24471,11 +24493,29 @@ describe('executeDagWorkflow -- command and prompt transcripts', () => {
     const workflowRun = await runNodes(store, [node]);
     const rows = await store.listNodeMessages(workflowRun.id, 'agent');
 
-    expect(transcriptTimeline(rows)).toEqual(['started', 'text', 'tool', 'text', 'completed']);
+    expect(transcriptTimeline(rows)).toEqual([
+      'started',
+      'text',
+      'tool',
+      'tool',
+      'text',
+      'completed',
+    ]);
     expect(rows.every(row => row.workflow_run_id === workflowRun.id)).toBe(true);
     expect(rows.every(row => row.node_id === 'agent')).toBe(true);
-    const toolRow = rows.find(row => row.kind === 'tool');
-    expect(toolRow?.payload).toEqual({ name: 'Read', id: 'tool-1', input: { path: 'a.ts' } });
+    const toolRows = rows.filter(row => row.kind === 'tool');
+    expect(toolRows.map(row => row.payload)).toEqual([
+      { name: 'Read', id: 'tool-1', input: { path: 'a.ts' } },
+      { name: 'Read', id: 'tool-1' },
+    ]);
+    expect(toolRows[0]?.metadata?.tool_phase).toBe('call');
+    expect(toolRows[1]?.metadata?.tool_phase).toBe('result');
+    expect(toolRows[0]?.metadata?.execution?.occurrence_id).toBe(
+      toolRows[1]?.metadata?.execution?.occurrence_id
+    );
+    expect(toolRows[0]?.metadata?.execution?.occurrence_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
     expect(
       rows.filter(row => row.kind === 'status' && row.payload.state === 'completed')
     ).toHaveLength(1);
@@ -25054,14 +25094,21 @@ describe('executeDagWorkflow -- AskHuman pause', () => {
       unsubscribe();
     }
 
-    expect(store.insertPendingInteraction).toHaveBeenCalledWith({
-      workflow_run_id: workflowRun.id,
-      node_id: 'review',
-      tool_use_id: 'toolu_1',
-      kind: 'ask',
-      envelope: { questions: askQuestions },
-      provider_session_id: 'sess-1',
-    });
+    expect(store.insertPendingInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow_run_id: workflowRun.id,
+        node_id: 'review',
+        tool_use_id: 'toolu_1',
+        kind: 'ask',
+        envelope: { questions: askQuestions },
+        provider_session_id: 'sess-1',
+        execution_scope: expect.objectContaining({
+          occurrence_id: expect.any(String),
+          attempt_id: expect.any(String),
+          retry_epoch: 0,
+        }),
+      })
+    );
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
     expect((store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0]).toEqual([
       workflowRun.id,
@@ -25395,14 +25442,22 @@ describe('executeDagWorkflow -- AskHuman pause', () => {
     expect((store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0]).toEqual([
       workflowRun.id,
     ]);
-    expect(store.insertPendingInteraction).toHaveBeenCalledWith({
-      workflow_run_id: workflowRun.id,
-      node_id: 'refine',
-      tool_use_id: 'toolu_1',
-      kind: 'ask',
-      envelope: { questions: askQuestions },
-      provider_session_id: 'sess-1',
-    });
+    expect(store.insertPendingInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow_run_id: workflowRun.id,
+        node_id: 'refine',
+        tool_use_id: 'toolu_1',
+        kind: 'ask',
+        envelope: { questions: askQuestions },
+        provider_session_id: 'sess-1',
+        execution_scope: expect.objectContaining({
+          occurrence_id: expect.any(String),
+          attempt_id: expect.any(String),
+          retry_epoch: 0,
+          loop_ancestry: [{ node_id: 'refine', iteration: 1 }],
+        }),
+      })
+    );
 
     const rows = await store.listNodeMessages(workflowRun.id, 'refine');
     expect(rows.some(row => row.kind === 'text' && row.payload.text === 'Need a decision.')).toBe(

@@ -12,6 +12,7 @@ import {
 } from 'react';
 
 import type { LayoutRoute, RouteOutcome } from '@/lib/run-graph';
+import { NODE_HEIGHT, NODE_WIDTH } from '@/lib/run-graph/constants';
 import type { WorkflowNodeState } from '../skills/runs';
 import type { DagNode } from '../skills/workflows';
 import { buildRunGraphInput } from './graph/build-run-graph-input';
@@ -28,8 +29,6 @@ export interface RunGraphPanelProps {
   onSelectNode: (nodeId: string) => void;
 }
 
-const NODE_WIDTH = 180;
-const NODE_HEIGHT = 80;
 const ORIGIN_TRANSLATION = 64;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 1.5;

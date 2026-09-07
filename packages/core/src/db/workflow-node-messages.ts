@@ -12,7 +12,7 @@ import {
   type NodeMessage,
 } from '@archon/workflows/schemas/node-message';
 import { workflowNodeMessageRowSchema } from '../schemas/workflow-node-message';
-import { getDatabase, getDialect, pool } from './connection';
+import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -20,7 +20,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-const COLUMNS = 'id, workflow_run_id, node_id, seq, kind, payload, created_at';
+const COLUMNS = 'id, workflow_run_id, node_id, seq, kind, payload, metadata, created_at';
 
 /** Stored payload/row failed JSON or schema normalization. Logs id only. */
 export class WorkflowNodeMessageCorruptRowError extends Error {
@@ -57,7 +57,10 @@ export function isNodeMessageSequenceConflict(error: unknown): boolean {
   ].every(column => columns.includes(column));
 }
 
-function throwCorrupt(messageId: string, reason: 'payload_json_parse' | 'row_schema'): never {
+function throwCorrupt(
+  messageId: string,
+  reason: 'payload_json_parse' | 'metadata_json_parse' | 'row_schema'
+): never {
   getLog().error({ messageId, reason }, 'db.workflow_node_message_corrupt_row');
   throw new WorkflowNodeMessageCorruptRowError(messageId);
 }
@@ -73,7 +76,15 @@ function parseNodeMessageRow(raw: unknown): NodeMessage {
       throwCorrupt(messageId, 'payload_json_parse');
     }
   }
-  const parsed = workflowNodeMessageRowSchema.safeParse({ ...row, payload });
+  let metadata = row.metadata;
+  if (typeof metadata === 'string') {
+    try {
+      metadata = JSON.parse(metadata) as unknown;
+    } catch {
+      throwCorrupt(messageId, 'metadata_json_parse');
+    }
+  }
+  const parsed = workflowNodeMessageRowSchema.safeParse({ ...row, payload, metadata });
   if (!parsed.success) throwCorrupt(messageId, 'row_schema');
   return parsed.data;
 }
@@ -89,8 +100,18 @@ async function appendOnce(input: AppendNodeMessageInput): Promise<NodeMessage> {
     const seq = Number(next.rows[0]?.next_seq ?? 1);
     const id = dialect.generateUuid();
     await query(
-      'INSERT INTO remote_agent_workflow_node_messages (id, workflow_run_id, node_id, seq, kind, payload) VALUES ($1, $2, $3, $4, $5, $6)',
-      [id, input.workflow_run_id, input.node_id, seq, input.kind, JSON.stringify(input.payload)]
+      'INSERT INTO remote_agent_workflow_node_messages (id, workflow_run_id, node_id, seq, kind, payload, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [
+        id,
+        input.workflow_run_id,
+        input.node_id,
+        seq,
+        input.kind,
+        JSON.stringify(input.payload),
+        input.metadata === undefined || input.metadata === null
+          ? null
+          : JSON.stringify(input.metadata),
+      ]
     );
     const inserted = await query<Record<string, unknown>>(
       `SELECT ${COLUMNS} FROM remote_agent_workflow_node_messages WHERE id = $1`,
@@ -110,16 +131,92 @@ export async function appendNodeMessage(input: AppendNodeMessageInput): Promise<
   }
 }
 
+export interface ListNodeMessagesQuery {
+  afterSeq?: number;
+  limit?: number;
+  occurrenceId?: string;
+  attemptId?: string;
+}
+
+function nodeMessageFilterSql(query: ListNodeMessagesQuery | undefined): {
+  extra: string;
+  params: unknown[];
+} {
+  const params: unknown[] = [];
+  const clauses: string[] = [];
+  const postgres = getDatabaseType() === 'postgresql';
+  const occurrenceSql = postgres
+    ? "(metadata->'execution'->>'occurrence_id') = $"
+    : "json_extract(metadata, '$.execution.occurrence_id') = $";
+  const attemptSql = postgres
+    ? "(metadata->'execution'->>'attempt_id') = $"
+    : "json_extract(metadata, '$.execution.attempt_id') = $";
+  if (query?.afterSeq !== undefined) {
+    params.push(query.afterSeq);
+    clauses.push(`seq > $${String(params.length + 2)}`);
+  }
+  if (query?.occurrenceId !== undefined) {
+    params.push(query.occurrenceId);
+    clauses.push(`${occurrenceSql}${String(params.length + 2)}`);
+  }
+  if (query?.attemptId !== undefined) {
+    params.push(query.attemptId);
+    clauses.push(`${attemptSql}${String(params.length + 2)}`);
+  }
+  return { extra: clauses.length > 0 ? ` AND ${clauses.join(' AND ')}` : '', params };
+}
+
 export async function listNodeMessages(
   workflowRunId: string,
-  nodeId: string
+  nodeId: string,
+  query?: ListNodeMessagesQuery
 ): Promise<NodeMessage[]> {
+  const filter = nodeMessageFilterSql(query);
+  const limit =
+    query?.limit !== undefined
+      ? Math.min(Math.max(query.limit, 1), 501) // public max 500 + 1 for hasMore
+      : query === undefined
+        ? undefined
+        : 100;
+  const limitSql = limit !== undefined ? ` LIMIT $${String(3 + filter.params.length)}` : '';
   const result = await pool.query<Record<string, unknown>>(
     `SELECT ${COLUMNS}
      FROM remote_agent_workflow_node_messages
-     WHERE workflow_run_id = $1 AND node_id = $2
-     ORDER BY seq ASC`,
-    [workflowRunId, nodeId]
+     WHERE workflow_run_id = $1 AND node_id = $2${filter.extra}
+     ORDER BY seq ASC${limitSql}`,
+    limit !== undefined
+      ? [workflowRunId, nodeId, ...filter.params, limit]
+      : [workflowRunId, nodeId, ...filter.params]
   );
   return result.rows.map(parseNodeMessageRow);
+}
+
+export async function getNodeMessageHighWatermark(
+  workflowRunId: string,
+  nodeId: string,
+  query?: Pick<ListNodeMessagesQuery, 'occurrenceId' | 'attemptId'>
+): Promise<number> {
+  const filter = nodeMessageFilterSql(query);
+  const result = await pool.query<{ max_seq: number | string | null }>(
+    `SELECT COALESCE(MAX(seq), 0) AS max_seq
+     FROM remote_agent_workflow_node_messages
+     WHERE workflow_run_id = $1 AND node_id = $2${filter.extra}`,
+    [workflowRunId, nodeId, ...filter.params]
+  );
+  return Number(result.rows[0]?.max_seq ?? 0);
+}
+
+export async function getNodeMessage(
+  workflowRunId: string,
+  nodeId: string,
+  messageId: string
+): Promise<NodeMessage | null> {
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT ${COLUMNS}
+     FROM remote_agent_workflow_node_messages
+     WHERE workflow_run_id = $1 AND node_id = $2 AND id = $3`,
+    [workflowRunId, nodeId, messageId]
+  );
+  const row = result.rows[0];
+  return row === undefined ? null : parseNodeMessageRow(row);
 }

@@ -252,7 +252,16 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
     case 'assistant.message_delta': {
       const content = event.data.deltaContent;
       if (!content) return [];
-      return [{ type: 'assistant', content }];
+      return [
+        {
+          type: 'assistant',
+          content,
+          textMode: 'delta',
+          ...(typeof event.data.messageId === 'string' && event.data.messageId.length > 0
+            ? { messageId: event.data.messageId }
+            : {}),
+        },
+      ];
     }
     case 'assistant.reasoning_delta': {
       const content = event.data.deltaContent;
@@ -295,6 +304,7 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
         toolOutput: success ? rawOutput : `❌ ${rawOutput}`,
         toolCallId,
         toolOutcome: success ? 'success' : 'error',
+        outputState: 'full' as const,
       });
       return chunks;
     }
@@ -481,7 +491,7 @@ export async function* bridgeSession(
     // content from sendAndWait's return value so the user doesn't lose output.
     if (!sawAssistantContent && sendResult?.data?.content) {
       if (wantsStructured) assistantBuffer += sendResult.data.content;
-      yield { type: 'assistant', content: sendResult.data.content };
+      yield { type: 'assistant', content: sendResult.data.content, textMode: 'complete' };
       sawAssistantContent = true;
     }
 

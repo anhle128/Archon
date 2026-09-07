@@ -32,8 +32,8 @@ describe('buildRoutes', () => {
     expect(routes[0].sourcePort).toBe('bottom');
     expect(routes[0].targetPort).toBe('top');
     expect(routes[0].backEdge).toBe(false);
-    expect(routes[0].path).toBe('M 90 80 C 90 116 90 124 90 160');
-    expect(routes[0].labelPosition).toEqual({ x: 98, y: 120 });
+    expect(routes[0].path).toBe('M 104 58 C 104 78.7 104 83.3 104 104');
+    expect(routes[0].labelPosition).toEqual({ x: 112, y: 81 });
   });
 
   test('vertically aligned multi-layer edge still enters the target top', () => {
@@ -45,8 +45,8 @@ describe('buildRoutes', () => {
     expect(routes).toHaveLength(1);
     expect(routes[0].sourcePort).toBe('bottom');
     expect(routes[0].targetPort).toBe('top');
-    expect(routes[0].path).toBe('M 90 80 C 90 188 90 212 90 320');
-    expect(routes[0].labelPosition).toEqual({ x: 98, y: 200 });
+    expect(routes[0].path).toBe('M 104 58 C 104 125.5 104 140.5 104 208');
+    expect(routes[0].labelPosition).toEqual({ x: 112, y: 133 });
   });
 
   test('long edge offset to the right leaves bottom and enters left', () => {
@@ -59,8 +59,8 @@ describe('buildRoutes', () => {
     expect(routes).toHaveLength(1);
     expect(routes[0].sourcePort).toBe('bottom');
     expect(routes[0].targetPort).toBe('left');
-    expect(routes[0].path).toBe('M 90 80 C 90 220 130 360 200 360');
-    expect(routes[0].labelPosition).toEqual({ x: 145, y: 212 });
+    expect(routes[0].path).toBe('M 104 58 C 104 147.5 130 237 200 237');
+    expect(routes[0].labelPosition).toEqual({ x: 152, y: 139.5 });
   });
 
   test('long edge offset to the left leaves bottom and enters right', () => {
@@ -72,8 +72,8 @@ describe('buildRoutes', () => {
     expect(routes).toHaveLength(1);
     expect(routes[0].sourcePort).toBe('bottom');
     expect(routes[0].targetPort).toBe('right');
-    expect(routes[0].path).toBe('M 290 80 C 290 220 250 360 180 360');
-    expect(routes[0].labelPosition).toEqual({ x: 235, y: 212 });
+    expect(routes[0].path).toBe('M 304 58 C 304 147.5 278 237 208 237');
+    expect(routes[0].labelPosition).toEqual({ x: 256, y: 139.5 });
   });
 
   test('retry back edge uses left-to-left ports and a left-flank lane', () => {
@@ -91,8 +91,8 @@ describe('buildRoutes', () => {
     expect(routes[0].backEdge).toBe(true);
     const lane = Math.min(source.x, target.x) - BACK_EDGE_GUTTER;
     expect(lane).toBe(-46);
-    expect(routes[0].path).toBe('M 0 360 C -46 360 -46 200 0 200');
-    expect(routes[0].labelPosition).toEqual({ x: -42, y: 280 });
+    expect(routes[0].path).toBe('M 0 237 C -46 237 -46 133 0 133');
+    expect(routes[0].labelPosition).toEqual({ x: -42, y: 185 });
   });
 
   test('self-edge emits a non-empty visible upper-left curve', () => {
@@ -106,7 +106,7 @@ describe('buildRoutes', () => {
     expect(routes[0].sourcePort).toBe('left');
     expect(routes[0].targetPort).toBe('top');
     expect(routes[0].backEdge).toBe(true);
-    expect(routes[0].path).toBe('M 0 40 C -46 40 -46 -46 90 0');
+    expect(routes[0].path).toBe('M 0 29 C -46 29 -46 -46 104 0');
     expect(routes[0].labelPosition).toEqual({ x: -46, y: -46 });
     expect(routes[0].path.startsWith('M ')).toBe(true);
     expect(routes[0].path.includes(' C ')).toBe(true);

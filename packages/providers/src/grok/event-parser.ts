@@ -103,6 +103,7 @@ export class GrokEventParser {
         toolCallId,
         toolOutput: 'Grok ended before reporting a tool result.',
         toolOutcome: 'unknown',
+        outputState: 'unknown' as const,
       });
     }
     this.activeTools.clear();
@@ -281,6 +282,7 @@ export class GrokEventParser {
         toolCallId,
         toolOutput: serialize(output),
         toolOutcome: status === 'completed' ? 'success' : 'error',
+        outputState: output !== null ? ('full' as const) : ('missing' as const),
       },
     ];
   }

@@ -24,6 +24,9 @@ function chrome(overrides: Partial<GateChrome> = {}): GateChrome {
     canDecide: false,
     showInactiveNotice: false,
     reviewUrl: null,
+    gateId: null,
+    reviewSessionId: null,
+    feedbackReceiptStatus: null,
     ...overrides,
   };
 }
@@ -40,6 +43,7 @@ function renderStatic(overrides: Partial<GateChrome> = {}): string {
   return renderToStaticMarkup(
     <GateRoom
       nodeId="review"
+      runId="run-1"
       chrome={chrome(overrides)}
       onApprove={async (): Promise<void> => undefined}
       onReject={async (): Promise<void> => undefined}
@@ -161,6 +165,16 @@ describe('GateRoom static markup', () => {
     expect(visibleText(markup)).not.toContain('waiting-on-you');
   });
 
+  test('renders Send annotations for an active Plannotator gate', () => {
+    const markup = renderStatic({
+      gateType: 'plannotator_gate',
+      canDecide: true,
+      gateId: 'gate-1',
+      reviewSessionId: '11111111-1111-4111-8111-111111111111',
+    });
+    expect(visibleText(markup)).toContain('Send annotations');
+  });
+
   test('renders a Plannotator document and a safe Open Plannotator link', () => {
     const markup = renderStatic({
       gateType: 'plannotator_gate',
@@ -232,6 +246,7 @@ describe('GateRoom actions', () => {
       root.render(
         createElement(GateRoom, {
           nodeId: 'review',
+          runId: 'run-1',
           chrome: args.chrome,
           onApprove: args.onApprove,
           onReject: args.onReject ?? (async (): Promise<void> => undefined),
@@ -301,6 +316,9 @@ describe('GateRoom actions', () => {
         canDecide: true,
         showInactiveNotice: false,
         reviewUrl: null,
+        gateId: null,
+        reviewSessionId: null,
+        feedbackReceiptStatus: null,
       },
       onApprove,
     });

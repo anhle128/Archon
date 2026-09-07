@@ -157,6 +157,8 @@ const mockListNodeMessages = mock(() => Promise.resolve([]));
 mock.module('../db/workflow-node-messages', () => ({
   appendNodeMessage: mockAppendNodeMessage,
   listNodeMessages: mockListNodeMessages,
+  getNodeMessage: mock(() => Promise.resolve(null)),
+  getNodeMessageHighWatermark: mock(() => Promise.resolve(0)),
 }));
 const mockInsertPendingInteraction = mock(() => Promise.resolve({ id: 'pend-1' }));
 const mockListPendingInteractions = mock(() => Promise.resolve([]));

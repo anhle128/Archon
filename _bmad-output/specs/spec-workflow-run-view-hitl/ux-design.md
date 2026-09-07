@@ -12,7 +12,8 @@ inputDocuments:
   - _bmad-output/project-context.md
 deliverables:
   - ux-design.md (this document)
-  - ux-prototype/index.html (interactive website — open in a browser)
+  - ux-mockup/ (canonical interactive mockup — open `index.html` / `console.html` in a browser)
+  - ux-prototype/index.html (superseded; not visual authority)
 ---
 
 # UX Design Specification — Workflow Run View: Node-Centric Graph + Interactive Per-Node HITL
@@ -279,7 +280,7 @@ Logs and Chat tabs remain as spec'd (Logs retained as-is; Chat becomes user turn
 
 ### Implementation Approach
 
-The interactive prototype (`ux-prototype/index.html`) implements Direction A end-to-end with simulated engine data, plus a **Console renderer** toggle demonstrating the same `pending_interaction` envelope in `/console`'s log-first idiom — proving the two-surfaces-one-contract claim visually.
+The canonical mockup (`ux-mockup/index.html` and `ux-mockup/console.html`) implements Direction A end-to-end with simulated engine data on both surfaces — proving the two-surfaces-one-contract claim visually. `ux-prototype/` is superseded and is not visual authority.
 
 ---
 
@@ -287,24 +288,25 @@ The interactive prototype (`ux-prototype/index.html`) implements Direction A end
 
 The mockup ships **both** surfaces running the identical simulation, switchable from the header: `ux-mockup/index.html` (Legacy: Graph / Logs / Chat tabs) and `ux-mockup/console.html` (Command Center: log-first stream + Graph view + composer). The rule: **one contract, one panel family, two layouts** — neither surface forks the interaction model, only the frame around it.
 
-### What the Command Center run detail has today (verified live)
+### What the Command Center run detail has today (production)
 
-- **Views:** `Log | Graph | Artifacts` in `StreamToolbar` — **no Chat view**; chat exists only as the inline `Reply…` composer + `Continue` button at the bottom of the Log view when a run is paused/awaiting.
-- **Log view:** `RunStream` — node sections (`NodeDivider`: name · status dot · `3/18` progress), inline tool calls, agent text; awaiting state = header pill + the reply composer area. No structured Ask card — free text only.
-- **Graph view:** `RunGraphPanel` — a single vertical pill chain; plain thin edges with **no arrowheads, no labels, no route colors, no pan/zoom**; clicking a node only jumps the stream filter.
-- **No per-node panel anywhere** — the "Filter stream by node" dropdown is the only per-node lens.
+- **Views:** `Log | Graph | Artifacts` in `StreamToolbar` — no Chat tab. Parent-conversation send is a distinct composer, never an Ask or gate channel.
+- **Inspect pane:** Console-owned right dock (`lg:w-[460px]`, clamp 320–720). Deep-link `?node=` opens the selected node's room. Not a shared React import from Legacy.
+- **Log view:** occurrence-keyed history when `nodeExecutions` is present; System filter remains off by default so lifecycle dividers stay optional.
+- **Graph view:** shared `packages/web/src/lib/run-graph/` geometry (208×58, gaps 34/46), pan/zoom/fit. Click opens the inspect pane.
+- **Ask:** structured card in the node room (and stream when that node is visible). Replay / view-as stay test-only.
 
 ### Element-by-element mapping
 
-| Design element                                                                                            | Legacy (`/legacy/workflows/runs/:id`)                     | Command Center (`/console`)                                                                                                                                                               |
-| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| HITL contract (`pending_interaction` envelope, Ask/Permission, `answer`/`confirm` API)                    | Shared backend                                            | Shared backend (identical)                                                                                                                                                                |
-| `NodePanel` (per-node room: agent room / stdout / route decision / gate / sub-run link, iteration chips)  | Right panel shared across Graph / Logs / Chat tabs        | Same panel component, docked right of the Log or Graph view                                                                                                                               |
-| Graph renderer (taken-path coloring, hover trace, distance-aware ports, loop-back edge, sharp arrowheads) | Replaces the React Flow canvas in `WorkflowExecution.tsx` | Ports into `RunGraphPanel`'s existing custom SVG `layout()` — same visual language; click opens the panel instead of only filtering the stream                                            |
-| Node-run history ("từng nốt không merge")                                                                 | Logs tab = chronological node-run rows, one per execution | Log view stays log-first: `NodeDivider` becomes per-run (loop iterations render as separate dividers, `↻ n`), click opens the panel                                                       |
-| HITL cards inline                                                                                         | Node room + Chat timeline                                 | Log view: the structured Ask card **replaces the free-text-only reply area** at the awaiting node's position (keeping `Reply…` as the free-text fallback); `PendingInputBanner` unchanged |
-| `awaiting` state                                                                                          | Graph node badge + run-status pill                        | Graph node badge + `NodeDivider` badge + `RunDetailHeader` pill (already present)                                                                                                         |
-| Chat surface (user turns + node-status chips as panel entry points)                                       | Chat tab                                                  | **None** — Command Center has no Chat view; the inline composer covers input, and run chips in `ChatStream` deep-link into the run detail with the panel pre-opened (`?node=<id>`)        |
+| Design element                                                                                            | Legacy (`/legacy/workflows/runs/:id`)                                                                                    | Command Center (`/console`)                                                                                                                                                                                |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HITL contract (`pending_interaction` envelope, Ask/Permission, `answer`/`confirm` API)                    | Shared backend                                                                                                           | Shared backend (identical)                                                                                                                                                                                 |
+| `NodePanel` (per-node room: agent room / stdout / route decision / gate / sub-run link, iteration chips)  | Right panel shared across Graph / Logs / Chat tabs                                                                       | Thin Console-owned inspect pane (not a shared React import from Legacy). Default width 460px, clamped 320–720px.                                                                                           |
+| Graph renderer (taken-path coloring, hover trace, distance-aware ports, loop-back edge, sharp arrowheads) | Custom SVG run graph: nodes **208×58**, gaps **34/46**. Keep React Flow only where the workflow _builder_ still uses it. | Ports into `RunGraphPanel`'s existing custom SVG using the same `packages/web/src/lib/run-graph/` geometry constants — click opens the inspect pane. Console does not share Legacy React graph components. |
+| Node-run history ("từng nốt không merge")                                                                 | Logs tab = chronological node-run rows, one per execution                                                                | Log view stays log-first: `NodeDivider` becomes per-run (loop iterations render as separate dividers, `↻ n`), click opens the panel                                                                        |
+| HITL cards inline                                                                                         | Node room + Chat timeline                                                                                                | Log view: the structured Ask card **replaces the free-text-only reply area** at the awaiting node's position (keeping `Reply…` as the free-text fallback); `PendingInputBanner` unchanged                  |
+| `awaiting` state                                                                                          | Graph node badge + run-status pill                                                                                       | Graph node badge + `NodeDivider` badge + `RunDetailHeader` pill (already present)                                                                                                                          |
+| Chat surface (user turns + node-status chips as panel entry points)                                       | Chat tab                                                                                                                 | **None** — Command Center has no Chat view; the inline composer covers input, and run chips in `ChatStream` deep-link into the run detail with the panel pre-opened (`?node=<id>`)                         |
 
 ### Command Center frame with the panel open
 
@@ -315,13 +317,13 @@ The mockup ships **both** surfaces running the identical simulation, switchable 
 │ StreamToolbar:  [ Log | Graph | Artifacts ] · toggles · filter   │
 ├────────────────────────────────────────────┬─────────────────────┤
 │                                            │                     │
-│  Log: RunStream (log-first, unchanged      │  NodePanel          │
-│  idiom)  — or —  Graph: RunGraphPanel      │  (shared component  │
-│                                            │   with legacy)      │
-│  · NodeDivider: per-run, awaiting badge,   │                     │
-│    click → panel                           │  agent room /       │
-│  · Ask card inline at the awaiting node,   │  stdout / route /   │
-│    above the Reply… composer               │  gate · iter chips  │
+│  Log: occurrence-keyed stream              │  Inspect pane       │
+│  — or —  Graph: 208×58 nodes, 34/46 gaps   │  (Console-owned;    │
+│                                            │   not shared React  │
+│  · row / divider click → pane              │   with Legacy)      │
+│  · Ask card in the selected node room      │  agent room /       │
+│    (stream copy shares the controller)     │  stdout / route /   │
+│                                            │  gate · iter chips  │
 │                                            │                     │
 ├────────────────────────────────────────────┴─────────────────────┤
 │ Reply… composer (free-text fallback) · Continue                  │
@@ -421,7 +423,7 @@ flowchart TD
 
 ### Design System Components (reused as-is)
 
-`Tabs`, `Card`, `Badge`, `Button`, `Textarea`, `ScrollArea`, `ResizablePanelGroup`, `Tooltip`, `Separator`, `AlertDialog` (Decline confirm), existing `StatusBadge`, `StatusIcon`, `WorkflowDagViewer` (React Flow) on legacy; `RunStream`, `NodeDivider`, `PendingInputBanner` idioms on console.
+`Tabs`, `Card`, `Badge`, `Button`, `Textarea`, `ScrollArea`, `ResizablePanelGroup`, `Tooltip`, `Separator`, `AlertDialog` (Decline confirm), existing `StatusBadge`, `StatusIcon`. Run views use the shared `packages/web/src/lib/run-graph/` geometry (208×58 nodes). The workflow _builder_ may still use React Flow; that canvas is not the run-view authority.
 
 ### Custom Components
 
@@ -472,8 +474,8 @@ flowchart TD
 
 ### Component Implementation Strategy
 
-- Both surfaces implement thin renderers over the shared envelope; `PendingInteractionCard` is specified once here and implemented per surface with identical states and copy.
-- Legacy keeps React Flow; console keeps dagre SVG — badge/pulse semantics are shared, canvas code is not.
+- Both surfaces implement thin renderers over the shared envelope; Ask cards are specified once here and implemented per surface with identical states and copy. Do not import a shared React panel across Console isolation.
+- Run-graph geometry is shared as pure constants (`NODE_WIDTH` 208, `NODE_HEIGHT` 58, `GAP_X` 34, `GAP_Y` 46). Legacy keeps its run-graph renderer; console keeps dagre SVG — badge/pulse semantics are shared, canvas code is not. Tool results render as inset `.ptool` cards with visible wrapping I/O, not pill chips.
 
 ### Implementation Roadmap
 
@@ -542,7 +544,7 @@ WCAG 2.1 AA target, consistent with the rest of the web app:
 
 - Component tests for card state machine (pending→sending→answered/declined/rejected-late/failed-resume) and validation rules (empty Other, empty multi-select).
 - Store/reducer tests for run-level awaiting roll-up (clears only when the last node resolves) and non-starter read-only mapping.
-- E2E: the spec's success signal (block → answer inline → resume) on both surfaces; screenshot verification for badge/panel/card states.
+- E2E: the spec's success signal (block → answer inline → resume) on both surfaces; screenshot verification for badge/panel/card states. A story is not done until mockup-vs-product reference comparison at 1440×1000 and 1280×900 (plus 390×844 / 768×1024 fallbacks) is recorded. App screenshots cannot approve themselves.
 - Keyboard-only and VoiceOver pass on the answer flow before ship.
 
 ### Implementation Guidelines
@@ -555,7 +557,7 @@ WCAG 2.1 AA target, consistent with the rest of the web app:
 
 ## Prototype Guide (what to click)
 
-Open `ux-prototype/index.html` in any browser.
+Open `ux-mockup/index.html` or `ux-mockup/console.html` in any browser. Do not use `ux-prototype/`.
 
 1. **Graph tab** — the demo run has two parallel `awaiting` nodes (amber, pulsing): `reproduce-bug` (single-select + Other) and `draft-tests` (multi-select).
 2. Click an amber node → its **agent room** opens with the Ask card inline; answer and Submit → watch the card stamp _Answered_, the badge flip to running, the header pill count down, and the node complete.

@@ -1,6 +1,6 @@
 ---
 title: 'Phase 4: Console Run View'
-status: todo
+status: done
 ---
 
 # Phase 4: Console Run View
@@ -139,18 +139,18 @@ Do not introduce shared React across the Console boundary.
 
 ## Protected Contracts
 
-- [ ] Every mutation uses one Console skill verb.
-- [ ] Runtime imports from production components/stores/contexts/routes/hooks, React Query and `@/lib/api` stay forbidden.
-- [ ] Generated API types and existing `@/lib/run-graph` runtime exception are the only relevant shared imports.
-- [ ] `getRun` preserves run, events, rawEvents, nodeStates, approval, usage, pendingInteractions and viewer fields.
-- [ ] `listNodeMessages` remains compatible for current callers while opt-in cursor reads are added.
-- [ ] `RunDetailPage` owns `buildLogRows` and the message-loader prop for `ConsoleNodeRoom`.
-- [ ] `selectNodeRoomMessages` and `selectRoomData` use exact scope; no broad fallback slice.
-- [ ] `createAskAnswerController` is one stable instance per run, not per Ask copy.
-- [ ] Existing `archon.console.runNodeFilter` continues to mean Log filtering, not selected room.
-- [ ] Current localStorage reads stay guarded; stored panel widths are clamped before use.
-- [ ] Existing node links and `consoleRunHref` remain valid.
-- [ ] Raw output stays escaped and Markdown links retain existing safety rules; no mockup innerHTML rendering is copied.
+- [x] Every mutation uses one Console skill verb.
+- [x] Runtime imports from production components/stores/contexts/routes/hooks, React Query and `@/lib/api` stay forbidden.
+- [x] Generated API types and existing `@/lib/run-graph` runtime exception are the only relevant shared imports.
+- [x] `getRun` preserves run, events, rawEvents, nodeStates, approval, usage, pendingInteractions and viewer fields.
+- [x] `listNodeMessages` remains compatible for current callers while opt-in cursor reads are added.
+- [x] `RunDetailPage` owns `buildLogRows` and the message-loader prop for `ConsoleNodeRoom`.
+- [x] `selectNodeRoomMessages` and `selectRoomData` use exact scope; no broad fallback slice.
+- [x] `createAskAnswerController` is one stable instance per run, not per Ask copy.
+- [x] Existing `archon.console.runNodeFilter` continues to mean Log filtering, not selected room.
+- [x] Current localStorage reads stay guarded; stored panel widths are clamped before use.
+- [x] Existing node links and `consoleRunHref` remain valid.
+- [x] Raw output stays escaped and Markdown links retain existing safety rules; no mockup innerHTML rendering is copied.
 
 ## Test Inventory and Commands
 
@@ -204,11 +204,11 @@ bun run --cwd e2e test:ui --grep "HITL.*Console"
 
 ## Acceptance and Rollback
 
-- [ ] Every Console inventory item has a reference comparison and behavior check.
-- [ ] Console isolation passes without new runtime exceptions.
-- [ ] Real Ask/answer/resume and parent-web-conversation send pass.
-- [ ] Shared graph geometry remains identical across renderers.
-- [ ] Artifacts and existing operational controls remain available.
+- [x] Every Console inventory item has a reference comparison and behavior check.
+- [x] Console isolation passes without new runtime exceptions.
+- [x] Real Ask/answer/resume and parent-web-conversation send pass.
+- [x] Shared graph geometry remains identical across renderers.
+- [x] Artifacts and existing operational controls remain available.
 
 Main risk: a local Console history engine could drift from Legacy again.
 Use the server's execution projection and keep adapters presentational.

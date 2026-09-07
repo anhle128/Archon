@@ -97,6 +97,8 @@ describe('OmpEventParser', () => {
         toolName: 'read',
         toolOutput: '{"content":[{"type":"text","text":"contents"}]}',
         toolCallId: 'tool-1',
+        toolOutcome: 'success',
+        outputState: 'full',
       },
       { type: 'assistant', content: 'Done' },
     ]);
@@ -462,7 +464,14 @@ describe('OmpEventParser', () => {
         })
       )
     ).toEqual([
-      { type: 'tool_result', toolName: 'read', toolOutput: expect.any(String), toolCallId: 't1' },
+      {
+        type: 'tool_result',
+        toolName: 'read',
+        toolOutput: expect.any(String),
+        toolCallId: 't1',
+        toolOutcome: 'success',
+        outputState: 'full',
+      },
     ]);
     // Superseding synthetic end for the already-closed call — previously fatal.
     expect(

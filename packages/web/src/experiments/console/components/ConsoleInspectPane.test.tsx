@@ -587,7 +587,7 @@ describe('ConsoleInspectPane', () => {
       'room column'
     );
     expect(room.className).toContain('border-t');
-    expect(room.className).toContain('lg:w-[380px]');
+    expect(room.className).toContain('lg:w-[460px]');
     expect(room.className).toContain('lg:border-l');
   });
 });

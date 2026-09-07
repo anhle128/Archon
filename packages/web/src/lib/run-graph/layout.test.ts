@@ -69,7 +69,7 @@ describe('layout', () => {
     expect(back.backEdge).toBe(true);
     expect(back.sourcePort).toBe('left');
     expect(back.targetPort).toBe('left');
-    expect(back.path).toBe('M 0 360 C -46 360 -46 200 0 200');
+    expect(back.path).toBe('M 0 237 C -46 237 -46 133 0 133');
     expect(result.routes.filter(item => item.backEdge)).toHaveLength(1);
   });
 

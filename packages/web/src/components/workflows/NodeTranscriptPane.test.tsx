@@ -670,7 +670,7 @@ describe('NodeTranscriptPane', () => {
     expect(
       host.querySelectorAll('form[aria-label="question from agent, 1 questions"]')
     ).toHaveLength(2);
-    expect((host.ownerDocument ?? document).activeElement?.id).toBe('ask-1:q1:Ship');
+    expect((host.ownerDocument ?? document).activeElement?.id).toBe('room:ask-1:q1:Ship');
   });
 
   test('renders Invalid Ask payload for a malformed envelope with no mutation actions', async () => {

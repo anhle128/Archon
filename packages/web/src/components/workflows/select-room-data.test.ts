@@ -207,6 +207,9 @@ describe('selectGateChrome', () => {
       canDecide: true,
       showInactiveNotice: false,
       reviewUrl: null,
+      gateId: null,
+      reviewSessionId: null,
+      feedbackReceiptStatus: null,
     });
   });
 
@@ -296,6 +299,9 @@ describe('selectGateChrome', () => {
       canDecide: false,
       showInactiveNotice: false,
       reviewUrl: null,
+      gateId: null,
+      reviewSessionId: null,
+      feedbackReceiptStatus: null,
     });
   });
 
@@ -322,6 +328,9 @@ describe('selectGateChrome', () => {
       canDecide: false,
       showInactiveNotice: false,
       reviewUrl: null,
+      gateId: null,
+      reviewSessionId: null,
+      feedbackReceiptStatus: null,
     });
   });
 

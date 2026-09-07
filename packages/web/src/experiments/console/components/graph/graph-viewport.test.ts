@@ -6,9 +6,9 @@ describe('graphBounds', () => {
     expect(graphBounds({})).toEqual({ width: 0, height: 0 });
   });
 
-  test('one node includes the 180x80 footprint plus 64px canvas padding on every side', () => {
-    expect(graphBounds({ a: { x: 0, y: 0 } })).toEqual({ width: 308, height: 208 });
-    expect(graphBounds({ a: { x: 40, y: 20 } })).toEqual({ width: 308, height: 208 });
+  test('one node includes the 208x58 footprint plus 64px canvas padding on every side', () => {
+    expect(graphBounds({ a: { x: 0, y: 0 } })).toEqual({ width: 336, height: 186 });
+    expect(graphBounds({ a: { x: 40, y: 20 } })).toEqual({ width: 336, height: 186 });
   });
 
   test('multiple nodes span node rectangles plus 64px padding on every side', () => {
@@ -17,7 +17,7 @@ describe('graphBounds', () => {
         a: { x: 0, y: 0 },
         b: { x: 220, y: 160 },
       })
-    ).toEqual({ width: 528, height: 368 });
+    ).toEqual({ width: 556, height: 346 });
   });
 });
 

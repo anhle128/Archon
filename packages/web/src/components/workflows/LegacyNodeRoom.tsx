@@ -147,6 +147,7 @@ export function LegacyNodeRoom({
         body = (
           <GateRoom
             nodeId={row.nodeId}
+            runId={runId}
             chrome={selectGateChrome({
               definitionNode: resolution.definitionNode,
               events,

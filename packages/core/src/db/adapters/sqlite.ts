@@ -590,6 +590,32 @@ export class SqliteAdapter implements IDatabase {
       allApplied = false;
     }
 
+    try {
+      const messageCols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_workflow_node_messages')"
+      );
+      if (!new Set(messageCols.map(c => c.name)).has('metadata')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_node_messages ADD COLUMN metadata TEXT');
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_node_messages_columns_failed');
+      allApplied = false;
+    }
+
+    try {
+      const pendingCols = this.queryRows<{ name: string }>(
+        "PRAGMA table_info('remote_agent_pending_interactions')"
+      );
+      if (!new Set(pendingCols.map(c => c.name)).has('execution_scope')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_pending_interactions ADD COLUMN execution_scope TEXT'
+        );
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_pending_interactions_columns_failed');
+      allApplied = false;
+    }
+
     // #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
     // copilot→github-copilot). Idempotent data fix mirroring
     // migrations/000_combined.sql: where both a legacy and a vendor row exist
@@ -1082,6 +1108,7 @@ export class SqliteAdapter implements IDatabase {
         seq INTEGER NOT NULL CHECK (seq >= 1),
         kind TEXT NOT NULL CHECK (kind IN ('text', 'tool', 'status')),
         payload TEXT NOT NULL,
+        metadata TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         CONSTRAINT uq_workflow_node_messages_run_node_seq
           UNIQUE (workflow_run_id, node_id, seq)
@@ -1101,6 +1128,7 @@ export class SqliteAdapter implements IDatabase {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         resolved_at TEXT,
         resolved_by TEXT,
+        execution_scope TEXT,
         CONSTRAINT uq_pending_interactions_run_tool_use
           UNIQUE (workflow_run_id, tool_use_id)
       );

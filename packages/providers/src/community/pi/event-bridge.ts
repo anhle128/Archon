@@ -331,6 +331,7 @@ export function mapPiEvent(event: AgentSessionEvent, redactErrorDetails = false)
         toolOutput: serializeToolResult(event.result),
         toolCallId: event.toolCallId,
         toolOutcome: event.isError ? 'error' : 'success',
+        outputState: 'full' as const,
       });
       return chunks;
     }

@@ -29,3 +29,31 @@ export async function appendNodeTranscript(
     );
   }
 }
+
+/**
+ * Append a tool completion as a second `tool` row with the same legacy payload
+ * shape as the call. Do not mutate the call row or introduce a new kind.
+ */
+export async function appendToolResultTranscript(
+  store: IWorkflowNodeMessageStore,
+  input: {
+    workflow_run_id: string;
+    node_id: string;
+    name: string;
+    id: string;
+    output?: unknown;
+    metadata?: AppendNodeMessageInput['metadata'];
+  }
+): Promise<void> {
+  await appendNodeTranscript(store, {
+    workflow_run_id: input.workflow_run_id,
+    node_id: input.node_id,
+    kind: 'tool',
+    payload: {
+      name: input.name,
+      id: input.id,
+      ...(input.output !== undefined ? { output: input.output } : {}),
+    },
+    ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+  });
+}

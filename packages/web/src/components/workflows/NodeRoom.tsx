@@ -10,6 +10,8 @@ import remarkGfm from 'remark-gfm';
 
 import type { WorkflowNodeMessageResponse } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { formatToolIo, projectToolTranscript } from '@/lib/pair-tool-transcript';
+import { projectTextTranscript } from '@/lib/project-text-transcript';
 
 import type { LogRowSelection } from './build-log-rows';
 
@@ -24,7 +26,6 @@ export interface NodeRoomProps {
   renderAtEnd?: React.ReactNode;
 }
 
-type ToolMessage = Extract<WorkflowNodeMessageResponse, { kind: 'tool' }>;
 type StatusMessage = Extract<WorkflowNodeMessageResponse, { kind: 'status' }>;
 
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
@@ -91,6 +92,8 @@ export function selectNodeRoomMessages(
   selection: LogRowSelection
 ): WorkflowNodeMessageResponse[] {
   const ordered = [...messages].sort((a, b) => a.seq - b.seq);
+  // occurrence-scoped: server already filtered by occurrence_id/attempt_id
+  if (selection.kind === 'occurrence' || selection.kind === 'node') return ordered;
   if (selection.kind !== 'loop_iteration') return ordered;
   const detail = String(selection.iteration);
   const start = ordered.findIndex(
@@ -144,28 +147,72 @@ export function RoomRegion({
   );
 }
 
-function ToolTranscriptItem({ message }: { message: ToolMessage }): React.ReactElement {
-  const { name, input, output } = message.payload;
+function toolOutcomeLabel(input: {
+  pending: boolean;
+  outcome?: 'success' | 'error' | 'interrupted' | 'unknown';
+  exitCode?: number;
+  truncated?: boolean;
+  outputState?: 'full' | 'truncated' | 'missing' | 'unknown';
+}): string | null {
+  if (input.pending) return 'pending';
+  const parts: string[] = [];
+  if (input.outcome !== undefined) parts.push(input.outcome);
+  if (input.exitCode !== undefined) parts.push(`exit ${String(input.exitCode)}`);
+  if (input.truncated === true || input.outputState === 'truncated') parts.push('truncated');
+  if (input.outputState === 'missing') parts.push('missing output');
+  if (parts.length === 0) return null;
+  return parts.join(' · ');
+}
+
+function ToolTranscriptCard({
+  name,
+  input,
+  output,
+  pending,
+  outcome,
+  exitCode,
+  truncated,
+  outputState,
+}: {
+  name: string;
+  input: unknown;
+  output: unknown;
+  pending: boolean;
+  outcome?: 'success' | 'error' | 'interrupted' | 'unknown';
+  exitCode?: number;
+  truncated?: boolean;
+  outputState?: 'full' | 'truncated' | 'missing' | 'unknown';
+}): React.ReactElement {
+  const outcomeLabel = toolOutcomeLabel({ pending, outcome, exitCode, truncated, outputState });
   return (
-    <div className="flex flex-col gap-1">
-      <span className="w-fit rounded-full bg-surface-elevated px-2 py-0.5 font-mono text-xs text-text-secondary">
-        {name}
-      </span>
+    <div className="ptool rounded-[var(--radius)] border border-border bg-surface-inset px-2.5 py-2">
+      <div className="flex items-baseline gap-2">
+        <span className="text-[11.5px] font-bold text-accent-bright">{name}</span>
+        {outcomeLabel !== null ? (
+          <span className="text-[11px] text-text-secondary">{outcomeLabel}</span>
+        ) : null}
+      </div>
       {input !== undefined ? (
-        <details>
-          <summary className="cursor-pointer text-xs text-text-secondary">Input</summary>
-          <pre className="mt-1 overflow-x-auto rounded-md bg-background p-2 font-mono text-xs text-text-secondary">
-            {JSON.stringify(input, null, 2)}
+        <div className="mt-1.5">
+          <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
+            Input
+          </div>
+          <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
+            {formatToolIo(input)}
           </pre>
-        </details>
+        </div>
       ) : null}
       {output !== undefined ? (
-        <details>
-          <summary className="cursor-pointer text-xs text-text-secondary">Output</summary>
-          <pre className="mt-1 overflow-x-auto rounded-md bg-background p-2 font-mono text-xs text-text-secondary">
-            {JSON.stringify(output, null, 2)}
+        <div className="mt-1.5">
+          <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
+            Output
+          </div>
+          <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
+            {formatToolIo(output)}
           </pre>
-        </details>
+        </div>
+      ) : pending ? (
+        <div className="mt-1.5 text-[11px] text-text-secondary">Output unavailable</div>
       ) : null}
     </div>
   );
@@ -196,7 +243,14 @@ function renderTranscriptItem(message: WorkflowNodeMessageResponse): React.React
         </div>
       );
     case 'tool':
-      return <ToolTranscriptItem message={message} />;
+      return (
+        <ToolTranscriptCard
+          name={message.payload.name}
+          input={message.payload.input}
+          output={message.payload.output}
+          pending={message.payload.output === undefined}
+        />
+      );
     case 'status':
       return <StatusTranscriptItem message={message} />;
     default:
@@ -242,16 +296,38 @@ export function NodeRoom({
     if (ordered.length === 0) {
       body = renderAtEnd ?? <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>;
     } else {
+      const projected = projectToolTranscript(projectTextTranscript(ordered));
       body = (
         <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
-          {ordered.map(
-            (message): React.ReactElement => (
-              <Fragment key={message.id}>
-                <div>{renderTranscriptItem(message)}</div>
-                {renderAfterMessage?.(message)}
+          {projected.map((item): React.ReactElement => {
+            if (item.kind === 'tool-card') {
+              return (
+                <Fragment key={item.id}>
+                  <div>
+                    <ToolTranscriptCard
+                      name={item.name}
+                      input={item.input}
+                      output={item.output}
+                      pending={item.pending}
+                      outcome={item.outcome}
+                      exitCode={item.exitCode}
+                      truncated={item.truncated}
+                      outputState={item.outputState}
+                    />
+                  </div>
+                  {item.messages.map(message => (
+                    <Fragment key={`after-${message.id}`}>{renderAfterMessage?.(message)}</Fragment>
+                  ))}
+                </Fragment>
+              );
+            }
+            return (
+              <Fragment key={item.message.id}>
+                <div>{renderTranscriptItem(item.message)}</div>
+                {renderAfterMessage?.(item.message)}
               </Fragment>
-            )
-          )}
+            );
+          })}
           {renderAtEnd}
         </div>
       );
