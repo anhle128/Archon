@@ -144,7 +144,7 @@ describe('buildWorkflowDagNodeStates', () => {
   });
 
   describe('resolveWorkflowExecutionBody', () => {
-    const views: WorkflowRunView[] = ['graph', 'logs', 'chat', 'source-control'];
+    const views: WorkflowRunView[] = ['graph', 'logs', 'chat', 'source-control', 'terminal'];
 
     test('every DAG inspect view shares the pane and source control stays separate', () => {
       const expected: Record<WorkflowRunView, WorkflowExecutionBody> = {
@@ -152,6 +152,7 @@ describe('buildWorkflowDagNodeStates', () => {
         logs: 'graph-logs-pane',
         chat: 'graph-logs-pane',
         'source-control': 'source-control',
+        terminal: 'terminal',
       };
       for (const activeView of views) {
         expect(resolveWorkflowExecutionBody({ isDag: true, activeView })).toBe(
