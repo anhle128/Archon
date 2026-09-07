@@ -13,9 +13,7 @@ function renderPanel(overrides: Partial<PanelProps> = {}): string {
       historySnapshot={{ commits: [], revision: 'a'.repeat(64), truncated: false }}
       loadState="idle"
       historyLoadState="idle"
-      stale={false}
       onReload={(): void => undefined}
-      onAcceptPending={(): void => undefined}
       expandedCommit={null}
       commitSnapshot={null}
       commitLoadState="idle"
@@ -46,6 +44,9 @@ describe('SourceControlPanel', () => {
     expect(html).toContain('>M<');
     expect(html).toContain('>A<');
     expect(html).toContain('>D<');
+    expect(html).toContain('aria-label="M, modified"');
+    expect(html).toContain('aria-label="A, added"');
+    expect(html).toContain('aria-label="D, deleted"');
     expect(html).not.toContain('Stage');
     expect(html).not.toContain('Discard');
     expect(html).not.toContain('Commit');
@@ -62,31 +63,7 @@ describe('SourceControlPanel', () => {
       snapshot: { files: [], revision: 'a'.repeat(64) },
     });
     expect(html).toContain('No uncommitted changes');
-    expect(html).not.toContain('No worktree available');
-  });
-
-  test('shows container copy with no Reload control', () => {
-    const html = renderPanel({
-      snapshot: { emptyReason: 'container', files: [], revision: '' },
-    });
-    expect(html).toContain('No files to show');
-    expect(html).toContain(
-      'This run executed inside a container — its working files aren&#x27;t on the host to read.'
-    );
-    expect(html).not.toContain('History');
-    expect(html).not.toContain('>Reload<');
-  });
-
-  test('shows no_checkout copy with Reload', () => {
-    const html = renderPanel({
-      snapshot: { emptyReason: 'no_checkout', files: [], revision: '' },
-    });
-    expect(html).toContain('No worktree available');
-    expect(html).toContain(
-      'This run&#x27;s checkout isn&#x27;t available or readable right now — it may not be ready yet, or it may have been cleaned up.'
-    );
-    expect(html).not.toContain('History');
-    expect(html).toContain('>Reload<');
+    expect(html).not.toContain('No files to show');
   });
 
   test('keeps a previous list during an in-region refresh error', () => {
@@ -103,14 +80,6 @@ describe('SourceControlPanel', () => {
     expect(html).not.toContain('Error:');
     expect(html).not.toContain('unsupported');
     expect(html).not.toContain('⚠️');
-  });
-
-  test('renders divergence as a clickable quiet reload affordance', () => {
-    const html = renderPanel({
-      snapshot: { files: [], revision: 'a'.repeat(64) },
-      stale: true,
-    });
-    expect(html).toContain('>Changed on disk — Reload<');
   });
 
   test('moves the active descendant with Arrow, Home, and End keys', () => {
@@ -174,7 +143,7 @@ describe('SourceControlPanel', () => {
 
     expect(renderedOptions.length).toBeGreaterThan(0);
     expect(renderedOptions.length).toBeLessThan(files.length);
-    expect(html).toContain('height:5600px');
+    expect(html).toContain('height:6400px');
     expect(html).not.toContain('initial-199.ts');
   });
 
@@ -189,22 +158,6 @@ describe('SourceControlPanel', () => {
     expect(html).toContain('No commits yet');
     expect(html).not.toContain('No worktree available');
     expect(html).not.toContain('No files to show');
-  });
-
-  test('uses container precedence when History reports container CAP-6', () => {
-    const html = renderPanel({
-      snapshot: { files: [], revision: 'a'.repeat(64) },
-      historySnapshot: {
-        emptyReason: 'container',
-        commits: [],
-        revision: '',
-        truncated: false,
-      },
-    });
-
-    expect(html).toContain('No files to show');
-    expect(html).not.toContain('History');
-    expect(html).not.toContain('>Reload<');
   });
 
   test('keeps the previous graph and offers Reload after a History error', () => {

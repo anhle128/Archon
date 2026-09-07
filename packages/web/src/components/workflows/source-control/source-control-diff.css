@@ -1,22 +1,38 @@
+.sc-mono-content {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  font-feature-settings:
+    'liga' 0,
+    'calt' 0;
+}
+
 .sc-diff-side {
-  --diff-background-color: var(--surface-inset);
+  --diff-background-color: var(--surface);
   --diff-text-color: var(--text-primary);
-  --diff-gutter-insert-background-color: color-mix(
-    in oklch,
-    var(--success) 18%,
-    var(--surface-inset)
-  );
-  --diff-code-insert-background-color: color-mix(
-    in oklch,
-    var(--success) 18%,
-    var(--surface-inset)
-  );
-  --diff-gutter-delete-background-color: color-mix(
-    in oklch,
-    var(--error) 18%,
-    var(--surface-inset)
-  );
-  --diff-code-delete-background-color: color-mix(in oklch, var(--error) 18%, var(--surface-inset));
+  --diff-font-family: var(--font-mono);
+  --diff-selection-background-color: color-mix(in oklch, var(--ring) 35%, transparent);
+  --diff-gutter-insert-background-color: color-mix(in oklch, var(--success) 14%, var(--surface));
+  --diff-gutter-insert-text-color: var(--text-tertiary);
+  --diff-code-insert-background-color: color-mix(in oklch, var(--success) 14%, var(--surface));
+  --diff-gutter-delete-background-color: color-mix(in oklch, var(--error) 14%, var(--surface));
+  --diff-gutter-delete-text-color: var(--text-tertiary);
+  --diff-code-delete-background-color: color-mix(in oklch, var(--error) 14%, var(--surface));
+  --diff-gutter-selected-background-color: var(--surface-hover);
+  --diff-gutter-selected-text-color: var(--text-tertiary);
+  --diff-code-selected-background-color: var(--surface-hover);
+  --diff-code-insert-edit-background-color: color-mix(in oklch, var(--success) 28%, var(--surface));
+  --diff-code-delete-edit-background-color: color-mix(in oklch, var(--error) 28%, var(--surface));
+  --diff-omit-gutter-line-color: var(--border);
+
+  font-size: 0.75rem;
+  font-feature-settings:
+    'liga' 0,
+    'calt' 0;
+}
+
+.sc-diff-side .diff-gutter {
+  color: var(--text-tertiary);
 }
 
 .sc-diff-side.diff {
@@ -42,7 +58,13 @@
   display: inline-block;
   width: 1ch;
   margin-right: 0.5ch;
-  color: var(--text-primary);
-  font-family: monospace;
   text-align: center;
+}
+
+.diff-gutter-insert .sc-diff-marker {
+  color: var(--success);
+}
+
+.diff-gutter-delete .sc-diff-marker {
+  color: var(--error);
 }

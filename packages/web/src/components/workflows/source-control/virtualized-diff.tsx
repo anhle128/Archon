@@ -63,6 +63,7 @@ function observePaneRect(
 function VirtualizedDiffSide(props: {
   label: 'Before' | 'After';
   sideClassName: string;
+  paneClassName?: string;
   hunks: HunkData[];
 }): ReactElement {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -105,10 +106,7 @@ function VirtualizedDiffSide(props: {
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <h3 className="border-b border-border px-4 py-1 text-xs font-medium text-text-secondary">
-        {props.label}
-      </h3>
+    <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${props.paneClassName ?? ''}`}>
       <div
         ref={scrollRef}
         aria-label={props.label}
@@ -148,7 +146,12 @@ export function DiffPanes(props: {
   return (
     <div className={paneClass}>
       <VirtualizedDiffSide label="Before" sideClassName="sc-diff-before" hunks={oldHunks} />
-      <VirtualizedDiffSide label="After" sideClassName="sc-diff-after" hunks={newHunks} />
+      <VirtualizedDiffSide
+        label="After"
+        sideClassName="sc-diff-after"
+        paneClassName={props.stacked ? 'border-t border-border' : 'border-l border-border'}
+        hunks={newHunks}
+      />
     </div>
   );
 }

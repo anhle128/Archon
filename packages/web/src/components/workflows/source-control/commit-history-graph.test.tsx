@@ -92,7 +92,7 @@ describe('CommitHistoryGraph', () => {
 
     expect(renderedOptions.length).toBeGreaterThan(0);
     expect(renderedOptions.length).toBeLessThan(commits.length);
-    expect(html).toContain('height:4800px');
+    expect(html).toContain('height:6400px');
     expect(html).not.toContain('commit-199');
   });
 
@@ -126,7 +126,7 @@ describe('CommitHistoryGraph', () => {
       />
     );
     expect(loading).toContain('Loading files');
-    expect(loading).toContain('height:132px');
+    expect(loading).toContain('height:164px');
     const failed = renderToStaticMarkup(
       <CommitHistoryGraph
         commits={COMMITS}
@@ -155,8 +155,8 @@ describe('CommitHistoryGraph', () => {
         onToggleCommit={(): void => undefined}
       />
     );
-    expect(html).toContain('height:336px');
-    expect(html).toContain('height:5600px');
+    expect(html).toContain('height:368px');
+    expect(html).toContain('height:6400px');
     expect(html).not.toContain('commit-file-199.ts');
   });
 });

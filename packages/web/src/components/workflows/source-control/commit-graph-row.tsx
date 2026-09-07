@@ -5,7 +5,7 @@ import type { GitLogCommit } from '@/lib/api';
 import type { LaneRow } from './commit-lanes';
 import { formatCommitTime } from './format-commit-time';
 
-export const COMMIT_ROW_HEIGHT = 24;
+export const COMMIT_ROW_HEIGHT = 32;
 export const LANE_WIDTH = 12;
 
 function laneX(lane: number): number {
@@ -48,7 +48,7 @@ export function CommitGraphRow(props: CommitGraphRowProps): ReactElement {
         event.preventDefault();
       }}
       onClick={props.onSelect}
-      className={`grid w-full grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] items-center gap-2 rounded-md px-2 text-left text-xs ${
+      className={`grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 text-left ${
         props.active ? 'bg-surface-elevated' : 'hover:bg-surface-hover'
       }`}
       style={{ height: COMMIT_ROW_HEIGHT }}
@@ -98,16 +98,15 @@ export function CommitGraphRow(props: CommitGraphRowProps): ReactElement {
           <circle cx={nodeX} cy={nodeY} r="4" className="fill-text-primary" />
         )}
       </svg>
-      <span className="min-w-0 truncate text-text-primary" title={props.commit.subject}>
+      <span
+        className="min-w-0 truncate text-[0.8125rem] text-text-primary"
+        title={props.commit.subject}
+      >
         {props.commit.subject}
       </span>
-      <span className="max-w-24 truncate text-text-secondary" title={props.commit.authorName}>
-        {props.commit.authorName}
+      <span className="shrink-0 text-[0.75rem] whitespace-nowrap text-text-secondary">
+        {props.commit.authorName} · <time dateTime={props.commit.authorDate}>{relativeTime}</time>
       </span>
-      <time dateTime={props.commit.authorDate} className="whitespace-nowrap text-text-secondary">
-        {relativeTime}
-      </time>
-      <code className="font-mono text-text-secondary">{shortOid}</code>
     </button>
   );
 }

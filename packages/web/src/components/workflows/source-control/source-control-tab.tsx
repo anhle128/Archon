@@ -24,6 +24,7 @@ import {
 
 import { FileViewer, type FileViewerState } from './file-viewer';
 import { formatHexPeek } from './hex-peek';
+import { SourceControlEmptyState, displayedEmptyReason } from './source-control-empty-state';
 import { SourceControlPanel, type SourceControlLoadState } from './source-control-panel';
 import { SourceControlSplit } from './source-control-split';
 import {
@@ -932,47 +933,62 @@ export function SourceControlTab({ runId }: { runId: string }): ReactElement {
     commitSnapshotState.pending !== null ||
     pendingViewer !== null;
   const stale = hasPending && changesCanBeAccepted;
+  const emptyReason = displayedEmptyReason(
+    snapshotState.displayed,
+    historySnapshotState.displayed,
+    commitSnapshotState.displayed
+  );
 
   return (
     <div className="h-full min-h-0" onKeyDown={onKeyDown}>
-      <SourceControlSplit
-        stacked={stacked}
-        list={
-          <SourceControlPanel
-            snapshot={snapshotState.displayed}
-            historySnapshot={historySnapshotState.displayed}
-            loadState={loadState}
-            historyLoadState={historyLoadState}
-            stale={stale}
-            onReload={onReload}
-            onAcceptPending={onAcceptPending}
-            onOpenFile={onOpenFile}
-            selectedNowPath={viewerScope.kind === 'now' ? (selectedFile?.path ?? null) : null}
-            selectedCommitPath={
-              viewerScope.kind === 'commit' && viewerScope.oid === expandedCommit?.oid
-                ? (selectedFile?.path ?? null)
-                : null
-            }
-            expandedCommit={expandedCommit}
-            commitSnapshot={commitSnapshotState.displayed}
-            commitLoadState={commitLoadState}
-            onToggleCommit={onToggleCommit}
-            onOpenCommitFile={onOpenCommitFile}
-            listRef={listRef}
-          />
-        }
-        viewer={
-          <FileViewer
-            state={viewerState}
-            stacked={stacked}
-            loadingMore={loadingMore}
-            onCancel={onViewerCancel}
-            onReload={onViewerReload}
-            onClose={closeViewer}
-            onLoadMore={onLoadMore}
-          />
-        }
-      />
+      {emptyReason !== undefined ? (
+        <SourceControlEmptyState
+          reason={emptyReason}
+          stale={stale}
+          refreshFailed={isError || historyIsError}
+          onReload={onReload}
+          onAcceptPending={onAcceptPending}
+        />
+      ) : (
+        <SourceControlSplit
+          stacked={stacked}
+          list={
+            <SourceControlPanel
+              snapshot={snapshotState.displayed}
+              historySnapshot={historySnapshotState.displayed}
+              loadState={loadState}
+              historyLoadState={historyLoadState}
+              onReload={onReload}
+              onOpenFile={onOpenFile}
+              selectedNowPath={viewerScope.kind === 'now' ? (selectedFile?.path ?? null) : null}
+              selectedCommitPath={
+                viewerScope.kind === 'commit' && viewerScope.oid === expandedCommit?.oid
+                  ? (selectedFile?.path ?? null)
+                  : null
+              }
+              expandedCommit={expandedCommit}
+              commitSnapshot={commitSnapshotState.displayed}
+              commitLoadState={commitLoadState}
+              onToggleCommit={onToggleCommit}
+              onOpenCommitFile={onOpenCommitFile}
+              listRef={listRef}
+            />
+          }
+          viewer={
+            <FileViewer
+              state={viewerState}
+              stacked={stacked}
+              loadingMore={loadingMore}
+              stale={stale}
+              onCancel={onViewerCancel}
+              onReload={onViewerReload}
+              onClose={closeViewer}
+              onAcceptPending={onAcceptPending}
+              onLoadMore={onLoadMore}
+            />
+          }
+        />
+      )}
     </div>
   );
 }

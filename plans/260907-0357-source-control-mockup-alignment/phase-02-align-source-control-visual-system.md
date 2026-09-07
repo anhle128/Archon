@@ -1,6 +1,6 @@
 ---
 title: 'Phase 2: Align Source Control Visual System'
-status: todo
+status: completed
 priority: P1
 effort: 1d
 dependencies: [1]
@@ -17,14 +17,14 @@ Keep the current data flow and all later functional behavior.
 
 ## Requirements
 
-- [ ] Use the existing design tokens and current Source Control components.
-- [ ] Match mockup geometry and density, and map colors through existing semantic tokens.
-- [ ] Target a 14 percent diff tint unless the contrast check requires an adjustment.
-- [ ] Keep Changes compact and let History fill the remaining left-panel height.
-- [ ] Keep the left panel resizable from 20 to 70 percent with a 30 percent default.
-- [ ] Keep the commit lane graph and expanded commit file viewer.
-- [ ] Keep Close, Escape, Reload, Return to Now, virtualization, and file fallbacks.
-- [ ] Keep all empty, loading, error, and stale states accessible.
+- [x] Use the existing design tokens and current Source Control components.
+- [x] Match mockup geometry and density, and map colors through existing semantic tokens.
+- [x] Target a 14 percent diff tint unless the contrast check requires an adjustment.
+- [x] Keep Changes compact and let History fill the remaining left-panel height.
+- [x] Keep the left panel resizable from 20 to 70 percent with a 30 percent default.
+- [x] Keep the commit lane graph and expanded commit file viewer.
+- [x] Keep Close, Escape, Reload, Return to Now, virtualization, and file fallbacks.
+- [x] Keep all empty, loading, error, and stale states accessible.
 
 ## Files to Modify
 
@@ -58,19 +58,19 @@ Keep the current data flow and all later functional behavior.
 
 ## Todo
 
-- [ ] Align whole-tab and region state ownership.
-- [ ] Align panel geometry and navigation rows.
-- [ ] Align commit graph presentation.
-- [ ] Align viewer chrome and controls.
-- [ ] Align diff and fallback presentation.
-- [ ] Confirm keyboard and focus behavior after each change.
+- [x] Align whole-tab and region state ownership.
+- [x] Align panel geometry and navigation rows.
+- [x] Align commit graph presentation.
+- [x] Align viewer chrome and controls.
+- [x] Align diff and fallback presentation.
+- [x] Confirm keyboard and focus behavior after each change.
 
 ## Success Criteria
 
-- [ ] The visual hierarchy matches the restored mockup at desktop and narrow widths.
-- [ ] Changed file and commit rows remain keyboard accessible and have visible focus.
-- [ ] All existing Source Control capabilities remain available.
-- [ ] No API, server, database, shared token, or dependency change is required.
+- [x] The visual hierarchy matches the restored mockup at desktop and narrow widths.
+- [x] Changed file and commit rows remain keyboard accessible and have visible focus.
+- [x] All existing Source Control capabilities remain available.
+- [x] No API, server, database, shared token, or dependency change is required.
 
 ## Risks and Controls
 

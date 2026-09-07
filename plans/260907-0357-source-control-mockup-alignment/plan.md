@@ -1,7 +1,7 @@
 ---
 title: 'Source Control Mockup Alignment'
 description: 'Align the legacy Source Control run tab with the restored 2026-09-05 UX mockup while preserving later functional capabilities.'
-status: pending
+status: in-progress
 priority: P1
 effort: 2d
 issue:
@@ -48,19 +48,19 @@ The pending Node Cost Model Breakdown plan changes the Console run view and does
 
 ## Phases
 
-| #   | Phase                                                                                        | Status  | Effort |
-| --- | -------------------------------------------------------------------------------------------- | ------- | ------ |
-| 1   | [Establish Visual Baseline and Contract](./phase-01-establish-visual-baseline.md)            | Pending | 3h     |
-| 2   | [Align Source Control Visual System](./phase-02-align-source-control-visual-system.md)       | Pending | 1d     |
-| 3   | [Verify States and Responsive Behavior](./phase-03-verify-states-and-responsive-behavior.md) | Pending | 5h     |
+| #   | Phase                                                                                        | Status    | Effort |
+| --- | -------------------------------------------------------------------------------------------- | --------- | ------ |
+| 1   | [Establish Visual Baseline and Contract](./phase-01-establish-visual-baseline.md)            | Completed | 3h     |
+| 2   | [Align Source Control Visual System](./phase-02-align-source-control-visual-system.md)       | Completed | 1d     |
+| 3   | [Verify States and Responsive Behavior](./phase-03-verify-states-and-responsive-behavior.md) | Completed | 5h     |
 
 ## Success Criteria
 
-- [ ] The desktop layout uses a resizable 30/70 split with a 20–70 percent left range.
-- [ ] Widths below 900 pixels stack lists above the viewer and stack diff panes vertically.
-- [ ] Changes stay compact while History fills the remaining left-panel height.
-- [ ] Rows, headers, badges, viewer chrome, diff colors, loading states, empty states, errors, and stale states match the restored design.
-- [ ] All protected later Source Control behaviors still pass their tests.
+- [x] The desktop layout uses a resizable 30/70 split with a 20–70 percent left range.
+- [x] Widths below 900 pixels stack lists above the viewer and stack diff panes vertically.
+- [x] Changes stay compact while History fills the remaining left-panel height.
+- [x] Rows, headers, badges, viewer chrome, diff colors, loading states, empty states, errors, and stale states match the restored design.
+- [x] All protected later Source Control behaviors still pass their tests.
 - [ ] Focus, keyboard, overflow, contrast, type-check, build, and repository validation checks pass.
 
 ## Validation

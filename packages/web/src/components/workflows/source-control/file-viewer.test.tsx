@@ -144,11 +144,11 @@ const STATES: readonly FileViewerState[] = [
 ];
 
 describe('FileViewer', () => {
-  test('idle says Select a file to inspect', () => {
+  test('idle says Select a file to view', () => {
     const html = renderViewer({ kind: 'idle' });
-    expect(html).toContain('Select a file to inspect');
+    expect(html).toContain('Select a file to view');
+    expect(html).toContain('No file selected');
     expect(html).not.toContain('>Cancel<');
-    expect(html).not.toContain('>Reload<');
     expect(html).not.toContain('aria-label="Close"');
     assertQuietChrome(html);
   });
@@ -314,9 +314,9 @@ describe('FileViewer', () => {
     });
     const hosted = renderViewer({ kind: 'unavailable', file: MODIFIED, emptyReason: 'container' });
     expect(missing).toContain('This run&#x27;s checkout isn&#x27;t available right now.');
-    expect(missing).toContain('>Reload<');
+    expect(missing).toContain('aria-label="Reload"');
     expect(hosted).toContain('This run&#x27;s files aren&#x27;t available on the host.');
-    expect(hosted).not.toContain('>Reload<');
+    expect(hosted).not.toContain('aria-label="Reload"');
     expect(hosted).not.toContain('This run&#x27;s checkout isn&#x27;t available right now.');
     assertQuietChrome(missing);
     assertQuietChrome(hosted);
@@ -326,7 +326,7 @@ describe('FileViewer', () => {
     const html = renderViewer({ kind: 'error', file: MODIFIED });
     expect(html).toContain('src/a.ts');
     expect(html).toContain('Could not open this file.');
-    expect(html).toContain('>Reload<');
+    expect(html).toContain('aria-label="Reload"');
     expect(html).not.toContain('Error:');
     expect(html).not.toContain('TypeError');
     assertQuietChrome(html);

@@ -13,7 +13,7 @@ import type { GitChangedFile, GitLogCommit } from '@/lib/api';
 
 import { ChangedFilesList } from './changed-files-list';
 import { assignCommitLanes } from './commit-lanes';
-import { CommitGraphRow, COMMIT_ROW_HEIGHT } from './commit-graph-row';
+import { CommitGraphRow, COMMIT_ROW_HEIGHT, LANE_WIDTH } from './commit-graph-row';
 
 export function nextCommitIndex(key: string, currentIndex: number, commitCount: number): number {
   if (commitCount <= 0) return 0;
@@ -38,7 +38,7 @@ export interface CommitHistoryGraphProps {
 
 function expandedExtraHeight(loadState: 'idle' | 'loading' | 'error', fileCount: number): number {
   if (loadState === 'loading' || fileCount === 0) return 36;
-  return Math.min(240, fileCount * 28 + 16);
+  return Math.min(240, fileCount * 32 + 8);
 }
 
 export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement {
@@ -124,7 +124,7 @@ export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement
       aria-activedescendant={activeDescendant}
       tabIndex={0}
       onKeyDown={onKeyDown}
-      className="min-h-0 flex-1 overflow-auto p-2"
+      className="min-h-0 flex-1 overflow-auto"
     >
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
         {virtualItems.map(virtualItem => {
@@ -161,24 +161,27 @@ export function CommitHistoryGraph(props: CommitHistoryGraphProps): ReactElement
               />
               {expanded ? (
                 commitFilesLoadState === 'loading' ? (
-                  <p role="status" className="h-9 px-4 py-2 text-xs text-text-secondary">
+                  <p role="status" className="h-9 px-3 py-2 text-[0.8125rem] text-text-tertiary">
                     Loading files
                   </p>
                 ) : commitFilesLoadState === 'error' && commitFiles.length === 0 ? (
-                  <p role="status" className="h-9 px-4 py-2 text-xs text-text-secondary">
+                  <p role="status" className="h-9 px-3 py-2 text-[0.8125rem] text-text-tertiary">
                     Could not refresh files.
                   </p>
                 ) : commitFiles.length === 0 ? (
-                  <p role="status" className="h-9 px-4 py-2 text-xs text-text-secondary">
+                  <p role="status" className="h-9 px-3 py-2 text-[0.8125rem] text-text-tertiary">
                     No file changes
                   </p>
                 ) : (
                   <div
-                    className="flex min-h-0 flex-col pl-2"
-                    style={{ height: Math.min(240, commitFiles.length * 28 + 16) }}
+                    className="flex min-h-0 flex-col"
+                    style={{
+                      height: Math.min(240, commitFiles.length * 32 + 8),
+                      paddingLeft: Math.max(LANE_WIDTH, graph.laneCount * LANE_WIDTH) + 8,
+                    }}
                   >
                     {commitFilesLoadState === 'error' ? (
-                      <p role="status" className="px-2 pb-1 text-xs text-text-secondary">
+                      <p role="status" className="px-3 pb-1 text-[0.75rem] text-text-tertiary">
                         Could not refresh files.
                       </p>
                     ) : null}

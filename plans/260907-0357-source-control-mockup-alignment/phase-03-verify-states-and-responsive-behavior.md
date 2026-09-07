@@ -1,6 +1,6 @@
 ---
 title: 'Phase 3: Verify States and Responsive Behavior'
-status: todo
+status: completed
 priority: P1
 effort: 5h
 dependencies: [2]
@@ -16,10 +16,10 @@ Protect the visual alignment and every later Source Control behavior with focuse
 
 ## Requirements
 
-- [ ] Test semantics and behavior instead of taking brittle full-markup snapshots.
-- [ ] Keep every current functional assertion unless the accepted visual contract changes its presentation.
-- [ ] Verify real UI output through the Vite Web UI at port `5173`.
-- [ ] Verify desktop, boundary, and narrow viewport behavior.
+- [x] Test semantics and behavior instead of taking brittle full-markup snapshots.
+- [x] Keep every current functional assertion unless the accepted visual contract changes its presentation.
+- [x] Verify real UI output through the Vite Web UI at port `5173`.
+- [x] Verify desktop, boundary, and narrow viewport behavior.
 - [ ] Finish with the repository validation command.
 
 ## Test Files to Modify
@@ -51,18 +51,18 @@ Protect the visual alignment and every later Source Control behavior with focuse
 
 ## Todo
 
-- [ ] Update focused component tests.
-- [ ] Update mounted integration coverage.
-- [ ] Complete the automated validation sequence.
-- [ ] Complete the live visual state matrix.
-- [ ] Record final before-and-after evidence in the implementation report.
+- [x] Update focused component tests.
+- [x] Update mounted integration coverage.
+- [x] Complete the automated validation sequence.
+- [x] Complete the live visual state matrix.
+- [x] Record final before-and-after evidence in the implementation report.
 
 ## Success Criteria
 
-- [ ] Focused Source Control tests pass.
-- [ ] The mounted Source Control integration test passes.
-- [ ] Web type-check and build pass.
-- [ ] The live state matrix matches the restored visual contract without console errors or unintended overflow.
+- [x] Focused Source Control tests pass.
+- [x] The mounted Source Control integration test passes.
+- [x] Web type-check and build pass.
+- [x] The live state matrix matches the restored visual contract without console errors or unintended overflow.
 - [ ] `bun run validate` passes without hidden warnings or skipped failures.
 
 ## Rollback

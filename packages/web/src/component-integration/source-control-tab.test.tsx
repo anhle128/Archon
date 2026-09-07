@@ -368,6 +368,16 @@ function requireButton(text: string): HTMLButtonElement {
   return button;
 }
 
+function requireIconButton(label: string): HTMLButtonElement {
+  const button = Array.from(host.querySelectorAll('button')).find(
+    candidate => candidate.getAttribute('aria-label') === label
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Missing icon button: ${label}`);
+  }
+  return button;
+}
+
 function requireListbox(): HTMLElement {
   const listbox = host.querySelector('[role="listbox"][aria-label="Uncommitted changes"]');
   if (!(listbox instanceof HTMLElement)) {
@@ -490,7 +500,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => host.textContent?.includes('old.ts'), 'the initial snapshot');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(
       () => host.textContent?.includes('Changed on disk — Reload'),
@@ -587,9 +597,7 @@ describe('SourceControlTab', () => {
           historySnapshot: EMPTY_GIT_LOG,
           loadState: 'idle',
           historyLoadState: 'idle',
-          stale: false,
           onReload: (): void => undefined,
-          onAcceptPending: (): void => undefined,
           expandedCommit: null,
           commitSnapshot: null,
           commitLoadState: 'idle',
@@ -631,7 +639,7 @@ describe('SourceControlTab', () => {
     Object.defineProperty(win.HTMLElement.prototype, 'offsetHeight', {
       configurable: true,
       get(this: { getAttribute: (name: string) => string | null }): number {
-        return this.getAttribute('role') === 'listbox' ? 280 : 28;
+        return this.getAttribute('role') === 'listbox' ? 280 : 32;
       },
     });
     Object.defineProperty(win.HTMLElement.prototype, 'offsetWidth', {
@@ -653,9 +661,7 @@ describe('SourceControlTab', () => {
           historySnapshot: EMPTY_GIT_LOG,
           loadState: 'idle',
           historyLoadState: 'idle',
-          stale: false,
           onReload: (): void => undefined,
-          onAcceptPending: (): void => undefined,
           expandedCommit: null,
           commitSnapshot: null,
           commitLoadState: 'idle',
@@ -688,7 +694,7 @@ describe('SourceControlTab', () => {
     Object.defineProperty(listbox, 'scrollHeight', {
       configurable: true,
       get(): number {
-        return 200 * 28;
+        return 200 * 32;
       },
     });
     Object.defineProperty(listbox, 'scrollTop', {
@@ -733,10 +739,9 @@ describe('SourceControlTab', () => {
     await act(async () => {
       requireListbox().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
-    await waitFor(() => (host.textContent ?? '').includes('Before'), 'Before pane');
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'Before pane');
 
     expect(host.textContent).toContain('src/a.ts');
-    expect(host.textContent).toContain('After');
     expect(host.querySelector('[aria-label="Before"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="After"]')).not.toBeNull();
     expect(calledUrls(fetchSpy).filter(url => !url.includes('/git/log'))).toEqual([
@@ -794,7 +799,7 @@ describe('SourceControlTab', () => {
     await renderTab('run-1');
     await waitFor(() => host.textContent?.includes('src/a.ts'), 'list');
     await clickOption('src/a.ts');
-    await waitFor(() => (host.textContent ?? '').includes('Before'), 'diff');
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'diff');
 
     expect(calledUrls(fetchSpy).every(url => !url.includes('working_path'))).toBe(true);
   });
@@ -863,11 +868,11 @@ describe('SourceControlTab', () => {
     await renderTab('run-1');
     await waitFor(() => host.textContent?.includes('one.ts'), 'initial list');
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(() => pendingSignal !== undefined, 'pending changes signal');
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
 
     expect(pendingSignal?.aborted).toBe(true);
@@ -920,7 +925,7 @@ describe('SourceControlTab', () => {
     await renderTab('run-1');
     await waitFor(() => host.textContent?.includes('src/a.ts'), 'list');
     await clickOption('src/a.ts');
-    await waitFor(() => (host.textContent ?? '').includes('Before'), 'diff');
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'diff');
 
     await act(async () => {
       requireListbox().dispatchEvent(
@@ -956,14 +961,14 @@ describe('SourceControlTab', () => {
     expect(host.textContent).toContain('src/a.ts');
     expect(host.textContent).not.toContain('Error:');
     const viewerReload = Array.from(host.querySelectorAll('button')).filter(
-      button => button.textContent === 'Reload'
+      button => button.getAttribute('aria-label') === 'Reload'
     );
-    expect(viewerReload.length).toBeGreaterThan(1);
+    expect(viewerReload).toHaveLength(1);
 
     await act(async () => {
-      viewerReload[viewerReload.length - 1]?.click();
+      viewerReload[0]?.click();
     });
-    await waitFor(() => (host.textContent ?? '').includes('Before'), 'retried diff');
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'retried diff');
 
     expect(host.textContent).toContain('src/a.ts');
     expect(host.textContent).not.toContain('Could not refresh changes.');
@@ -994,9 +999,9 @@ describe('SourceControlTab', () => {
     expect(host.textContent).toContain('boxed.ts');
     expect(host.textContent).toContain('missing.ts');
     const containerReloads = Array.from(host.querySelectorAll('button')).filter(
-      button => button.textContent === 'Reload'
+      button => button.getAttribute('aria-label') === 'Reload'
     );
-    expect(containerReloads).toHaveLength(1);
+    expect(containerReloads).toHaveLength(0);
 
     await clickOption('missing.ts');
     await waitFor(
@@ -1005,9 +1010,9 @@ describe('SourceControlTab', () => {
     );
     expect(host.textContent).toContain('boxed.ts');
     const checkoutReloads = Array.from(host.querySelectorAll('button')).filter(
-      button => button.textContent === 'Reload'
+      button => button.getAttribute('aria-label') === 'Reload'
     );
-    expect(checkoutReloads.length).toBeGreaterThan(1);
+    expect(checkoutReloads).toHaveLength(1);
   });
 
   test('a NUL M response probes worktree bytes and renders a Download link whose GET returns them', async () => {
@@ -1064,7 +1069,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => (host.textContent ?? '').includes('first-new'), 'first diff');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(
       () => (host.textContent ?? '').includes('Changed on disk — Reload'),
@@ -1096,7 +1101,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => (host.textContent ?? '').includes('first-new'), 'first diff');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await act(async () => {
       await new Promise<void>(resolve => {
@@ -1144,7 +1149,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => (host.textContent ?? '').includes('first-new'), 'first diff');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await act(async () => {
       secondDiff.resolve(jsonResponse(readyDiff('src/a.ts', 'old-line', 'second-new')));
@@ -1155,7 +1160,7 @@ describe('SourceControlTab', () => {
     );
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     const activeFetchSpy = fetchSpy;
     if (!activeFetchSpy) throw new Error('Missing fetch spy');
@@ -1206,7 +1211,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => (host.textContent ?? '').includes('first-new'), 'first diff');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(
       () => (host.textContent ?? '').includes('Changed on disk — Reload'),
@@ -1237,7 +1242,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => (host.textContent ?? '').includes('first-new'), 'first diff');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(
       () => (host.textContent ?? '').includes('Changed on disk — Reload'),
@@ -1268,7 +1273,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => (host.textContent ?? '').includes('old-new'), 'diff');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(
       () => (host.textContent ?? '').includes('Changed on disk — Reload'),
@@ -1282,7 +1287,7 @@ describe('SourceControlTab', () => {
 
     expect(host.querySelector('[aria-label="Before"]')).toBeNull();
     expect(host.querySelector('[aria-label="Close"]')).toBeNull();
-    expect(host.textContent).toContain('Select a file to inspect');
+    expect(host.textContent).toContain('Select a file to view');
   });
 
   test('accepting a pending list with a changed status closes the viewer', async () => {
@@ -1301,7 +1306,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => (host.textContent ?? '').includes('added-body'), 'added text');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(
       () => (host.textContent ?? '').includes('Changed on disk — Reload'),
@@ -1314,7 +1319,7 @@ describe('SourceControlTab', () => {
       requireButton('Changed on disk — Reload').click();
     });
     await waitFor(
-      () => (host.textContent ?? '').includes('Select a file to inspect'),
+      () => (host.textContent ?? '').includes('Select a file to view'),
       'closed viewer after status change'
     );
 
@@ -1347,7 +1352,7 @@ describe('SourceControlTab', () => {
     expect(host.querySelector('a')?.getAttribute('href')).toContain('source=worktree');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(
       () => (host.textContent ?? '').includes('Changed on disk — Reload'),
@@ -1358,7 +1363,7 @@ describe('SourceControlTab', () => {
     });
 
     await waitFor(
-      () => (host.textContent ?? '').includes('Select a file to inspect'),
+      () => (host.textContent ?? '').includes('Select a file to view'),
       'closed binary viewer after status change'
     );
     expect(
@@ -1401,7 +1406,7 @@ describe('SourceControlTab', () => {
     await clickOption('first.ts');
     await waitFor(() => (host.textContent ?? '').includes('first-body'), 'first viewer');
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(
       () => (host.textContent ?? '').includes('Changed on disk — Reload'),
@@ -1421,7 +1426,7 @@ describe('SourceControlTab', () => {
       requireButton('Changed on disk — Reload').click();
     });
     await waitFor(
-      () => (host.textContent ?? '').includes('Select a file to inspect'),
+      () => (host.textContent ?? '').includes('Select a file to view'),
       'closed viewer after status mismatch'
     );
 
@@ -1447,7 +1452,7 @@ describe('SourceControlTab', () => {
     await renderTab('run-1');
     await waitFor(() => host.textContent?.includes('src/a.ts'), 'list');
     await clickOption('src/a.ts');
-    await waitFor(() => (host.textContent ?? '').includes('Before'), 'diff');
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'diff');
 
     expect(groupFlexDirection()).toBe('column');
     const panes = host.querySelector('[aria-label="Before"]')?.parentElement?.parentElement;
@@ -1468,7 +1473,7 @@ describe('SourceControlTab', () => {
     await renderTab('run-1');
     await waitFor(() => host.textContent?.includes('src/a.ts'), 'list');
     await clickOption('src/a.ts');
-    await waitFor(() => (host.textContent ?? '').includes('Before'), 'diff');
+    await waitFor(() => host.querySelector('[aria-label="Before"]') !== null, 'diff');
 
     expect(groupFlexDirection()).toBe('row');
     const panes = host.querySelector('[aria-label="Before"]')?.parentElement?.parentElement;
@@ -1567,7 +1572,7 @@ describe('SourceControlTab', () => {
     expect(pageSignal?.aborted).toBe(true);
     expect(host.textContent).toContain('painted');
     expect(host.querySelector('[aria-label="Close"]')).not.toBeNull();
-    expect(host.textContent).not.toContain('Select a file to inspect');
+    expect(host.textContent).not.toContain('Select a file to view');
   });
 
   test('an SVG M fallback renders through img and revokes its object URL on close', async () => {
@@ -1597,7 +1602,7 @@ describe('SourceControlTab', () => {
     expect(host.querySelector('img')?.getAttribute('src')).toBe('blob:archon-image');
     expect(host.querySelector('a')?.getAttribute('href')).toContain('download=1');
     await act(async () => {
-      requireButton('Close').click();
+      requireIconButton('Close').click();
     });
     expect(createObjectUrlMock).toHaveBeenCalledTimes(1);
     expect(revokeObjectUrlMock).toHaveBeenCalledWith('blob:archon-image');
@@ -1732,7 +1737,7 @@ describe('SourceControlTab', () => {
     });
     await waitFor(() => host.textContent?.includes('second'), 'second hunk page');
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     const activeFetchSpy = fetchSpy;
     if (!activeFetchSpy) throw new Error('Missing fetch spy');
@@ -1911,7 +1916,7 @@ describe('SourceControlTab', () => {
     await renderTab('run-1');
     await waitFor(() => host.textContent?.includes(HISTORY_COMMIT.subject), 'initial History');
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(
       () => host.textContent?.includes('Changed on disk — Reload'),
@@ -2342,7 +2347,7 @@ describe('SourceControlTab', () => {
     await waitFor(() => host.textContent?.includes('first-original.ts'), 'first commit files');
 
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await act(async () => {
       host
@@ -2438,7 +2443,7 @@ describe('SourceControlTab', () => {
     await clickOption('then.ts');
     await waitFor(() => host.textContent?.includes('frozen-after'), 'open commit diff');
     await act(async () => {
-      requireButton('Reload').click();
+      requireIconButton('Reload').click();
     });
     await waitFor(() => host.textContent?.includes('Changed on disk — Reload'), 'stale banner');
     expect(host.textContent).toContain('frozen-after');

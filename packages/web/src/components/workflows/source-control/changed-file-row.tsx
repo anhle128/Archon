@@ -2,6 +2,8 @@ import type { PointerEvent, ReactElement } from 'react';
 
 import type { GitChangedFile } from '@/lib/api';
 
+import { StatusBadge } from './status-badge';
+
 export function ChangedFileRow(props: {
   file: GitChangedFile;
   id: string;
@@ -9,13 +11,6 @@ export function ChangedFileRow(props: {
   selected: boolean;
   onSelect: () => void;
 }): ReactElement {
-  const statusLabel =
-    props.file.status === 'M'
-      ? 'M, modified'
-      : props.file.status === 'A'
-        ? 'A, added'
-        : 'D, deleted';
-
   return (
     <button
       type="button"
@@ -24,21 +19,21 @@ export function ChangedFileRow(props: {
       id={props.id}
       aria-selected={props.selected}
       data-active={props.active ? 'true' : 'false'}
+      title={props.file.path}
       onPointerDown={(event: PointerEvent<HTMLButtonElement>): void => {
         event.preventDefault();
       }}
       onClick={props.onSelect}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${
-        props.active ? 'bg-surface-elevated' : 'hover:bg-surface-hover'
+      className={`flex h-8 w-full items-center gap-2 px-3 text-left text-[0.8125rem] text-text-primary ${
+        props.active
+          ? 'bg-surface-elevated'
+          : props.selected
+            ? 'bg-surface-hover'
+            : 'hover:bg-surface-hover'
       }`}
     >
-      <span className="min-w-0 flex-1 truncate font-mono text-text-primary">{props.file.path}</span>
-      <span
-        aria-label={statusLabel}
-        className="shrink-0 rounded bg-surface-inset px-1.5 py-0.5 text-[10px] font-medium text-text-primary"
-      >
-        {props.file.status}
-      </span>
+      <span className="min-w-0 flex-1 truncate">{props.file.path}</span>
+      <StatusBadge status={props.file.status} />
     </button>
   );
 }

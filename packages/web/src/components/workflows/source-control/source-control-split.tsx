@@ -15,7 +15,10 @@ export function SourceControlSplit(props: {
       <ResizablePanel id="source-control-list" defaultSize="30%" minSize="20%" maxSize="70%">
         {props.list}
       </ResizablePanel>
-      <ResizableHandle withHandle />
+      <ResizableHandle
+        withHandle
+        className="transition-colors data-[separator=hover]:bg-text-tertiary data-[separator=active]:bg-ring data-[separator=focus]:bg-ring"
+      />
       <ResizablePanel id="source-control-viewer" defaultSize="70%" minSize="30%" maxSize="80%">
         {props.viewer}
       </ResizablePanel>

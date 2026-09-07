@@ -15,7 +15,7 @@ export function nextChangedFileIndex(key: string, currentIndex: number, fileCoun
 }
 
 function estimateChangedFileSize(): number {
-  return 28;
+  return 32;
 }
 
 export interface ChangedFilesListProps {
@@ -105,7 +105,7 @@ export function ChangedFilesList(props: ChangedFilesListProps): ReactElement {
       aria-activedescendant={activeDescendant}
       tabIndex={0}
       onKeyDown={onKeyDown}
-      className="min-h-0 flex-1 overflow-auto p-2"
+      className="min-h-0 flex-1 overflow-auto"
     >
       {virtualized ? (
         <div

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement, type Ref } from 'react';
 
-import type { GitChangedFile, GitEmptyReason, GitLogCommit } from '@/lib/api';
+import type { GitChangedFile, GitLogCommit } from '@/lib/api';
 
 import { ChangedFilesList } from './changed-files-list';
 import { CommitHistoryGraph } from './commit-history-graph';
@@ -15,9 +15,7 @@ export interface SourceControlPanelProps {
   historySnapshot: GitLogSnapshot | null;
   loadState: SourceControlLoadState;
   historyLoadState: SourceControlLoadState;
-  stale: boolean;
   onReload: () => void;
-  onAcceptPending: () => void;
   onOpenFile?: (file: GitChangedFile) => void;
   selectedNowPath?: string | null;
   selectedCommitPath?: string | null;
@@ -31,18 +29,26 @@ export interface SourceControlPanelProps {
   onOpenCommitFile: (file: GitChangedFile) => void;
 }
 
-function displayedEmptyReason(
-  snapshot: SourceControlSnapshot | null,
-  historySnapshot: GitLogSnapshot | null,
-  commitSnapshot: SourceControlSnapshot | null
-): GitEmptyReason | undefined {
-  const reasons = [
-    snapshot?.emptyReason,
-    historySnapshot?.emptyReason,
-    commitSnapshot?.emptyReason,
-  ];
-  if (reasons.includes('container')) return 'container';
-  return reasons.find(reason => reason === 'no_checkout');
+const REGION_HEADER_CLASS =
+  'px-3 pt-2.5 pb-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.07em] text-text-tertiary';
+const REGION_EMPTY_CLASS = 'px-3 pt-0.5 pb-2 text-[0.8125rem] text-text-tertiary';
+const REGION_ERROR_CLASS = 'px-3 py-1.5 text-[0.8125rem] text-text-secondary';
+const REGION_RELOAD_CLASS =
+  'ml-2 rounded-sm px-1.5 py-0.5 text-[0.75rem] font-medium text-text-primary transition-colors hover:bg-surface-hover';
+
+function RegionSkeleton(props: { label: string }): ReactElement {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label={props.label}
+      className="flex flex-col gap-2 px-3 py-2"
+    >
+      <div className="h-3 w-3/4 animate-pulse rounded-sm bg-surface-elevated" />
+      <div className="h-3 w-1/2 animate-pulse rounded-sm bg-surface-elevated" />
+      <div className="h-3 w-2/3 animate-pulse rounded-sm bg-surface-elevated" />
+    </div>
+  );
 }
 
 export function SourceControlPanel(props: SourceControlPanelProps): ReactElement {
@@ -54,92 +60,36 @@ export function SourceControlPanel(props: SourceControlPanelProps): ReactElement
       : [];
   const [activeIndex, setActiveIndex] = useState(0);
   const clampedActiveIndex = files.length === 0 ? 0 : Math.min(files.length - 1, activeIndex);
-  const emptyReason = displayedEmptyReason(
-    props.snapshot,
-    props.historySnapshot,
-    props.commitSnapshot
-  );
 
   useEffect(() => {
     if (activeIndex !== clampedActiveIndex) setActiveIndex(clampedActiveIndex);
   }, [activeIndex, clampedActiveIndex]);
 
-  if (emptyReason === 'container') {
-    return (
-      <div role="status" className="flex h-full flex-col items-start gap-2 p-4 text-text-secondary">
-        <h2 className="text-sm font-medium text-text-primary">No files to show</h2>
-        <p className="text-sm">
-          This run executed inside a container — its working files aren't on the host to read.
-        </p>
-      </div>
-    );
-  }
-
-  if (emptyReason === 'no_checkout') {
-    return (
-      <div role="status" className="flex h-full flex-col items-start gap-2 p-4 text-text-secondary">
-        <h2 className="text-sm font-medium text-text-primary">No worktree available</h2>
-        <p className="text-sm">
-          This run's checkout isn't available or readable right now — it may not be ready yet, or it
-          may have been cleaned up.
-        </p>
-        {props.loadState === 'error' || props.historyLoadState === 'error' ? (
-          <p className="text-xs">Could not refresh source control.</p>
-        ) : null}
-        <button
-          type="button"
-          onClick={props.stale ? props.onAcceptPending : props.onReload}
-          className="text-xs text-primary transition-colors hover:text-accent-bright"
-        >
-          {props.stale ? 'Changed on disk — Reload' : 'Reload'}
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       <section
         aria-labelledby="source-control-changes-heading"
-        className="flex min-h-0 flex-1 flex-col"
+        className="flex max-h-1/2 min-h-0 flex-shrink-0 flex-col pb-1.5"
       >
-        <div className="flex items-center justify-between border-b border-border px-4 py-1.5">
-          <h2 id="source-control-changes-heading" className="text-sm font-medium text-text-primary">
-            Changes
-          </h2>
-          <button
-            type="button"
-            onClick={props.onReload}
-            className="text-xs text-primary transition-colors hover:text-accent-bright"
-          >
-            Reload
-          </button>
-        </div>
-
-        {props.stale ? (
-          <button
-            type="button"
-            onClick={props.onAcceptPending}
-            className="mx-4 mt-2 self-start text-xs text-text-secondary hover:text-text-primary"
-          >
-            Changed on disk — Reload
-          </button>
-        ) : null}
+        <h2 id="source-control-changes-heading" className={REGION_HEADER_CLASS}>
+          Changes
+        </h2>
 
         {props.loadState === 'loading' ? (
-          <p role="status" className="px-4 py-3 text-sm text-text-secondary">
-            {props.snapshot ? 'Refreshing changes' : 'Loading changes'}
-          </p>
+          <RegionSkeleton label={props.snapshot ? 'Refreshing changes' : 'Loading changes'} />
         ) : null}
 
         {props.loadState === 'error' ? (
-          <p role="status" className="px-4 py-2 text-xs text-text-secondary">
+          <p role="status" className={REGION_ERROR_CLASS}>
             Could not refresh changes.
+            <button type="button" onClick={props.onReload} className={REGION_RELOAD_CLASS}>
+              Reload
+            </button>
           </p>
         ) : null}
 
         {props.snapshot && files.length === 0 ? (
-          <p role="status" className="px-4 py-3 text-sm text-text-secondary">
+          <p role="status" className={REGION_EMPTY_CLASS}>
             No uncommitted changes
           </p>
         ) : null}
@@ -162,45 +112,35 @@ export function SourceControlPanel(props: SourceControlPanelProps): ReactElement
 
       <section
         aria-labelledby="source-control-history-heading"
-        className="flex min-h-0 flex-1 flex-col border-t border-border"
+        className="flex min-h-0 flex-1 flex-col border-t border-border pb-1.5"
       >
-        <h2
-          id="source-control-history-heading"
-          className="border-b border-border px-4 py-1.5 text-sm font-medium text-text-primary"
-        >
+        <h2 id="source-control-history-heading" className={REGION_HEADER_CLASS}>
           History
         </h2>
 
         {props.historyLoadState === 'loading' ? (
-          <p role="status" className="px-4 py-3 text-sm text-text-secondary">
-            {props.historySnapshot ? 'Refreshing history' : 'Loading history'}
-          </p>
+          <RegionSkeleton
+            label={props.historySnapshot ? 'Refreshing history' : 'Loading history'}
+          />
         ) : null}
 
         {props.historyLoadState === 'error' ? (
-          <div
-            role="status"
-            className="flex items-center gap-2 px-4 py-2 text-xs text-text-secondary"
-          >
-            <span>Could not refresh history.</span>
-            <button
-              type="button"
-              onClick={props.onReload}
-              className="text-primary hover:text-accent-bright"
-            >
+          <p role="status" className={REGION_ERROR_CLASS}>
+            Could not refresh history.
+            <button type="button" onClick={props.onReload} className={REGION_RELOAD_CLASS}>
               Reload
             </button>
-          </div>
+          </p>
         ) : null}
 
         {props.historySnapshot?.truncated ? (
-          <p role="status" className="px-4 py-1 text-xs text-text-secondary">
+          <p role="status" className="px-3 pb-1 text-[0.75rem] text-text-tertiary">
             Showing the newest 500 commits.
           </p>
         ) : null}
 
         {props.historySnapshot && commits.length === 0 ? (
-          <p role="status" className="px-4 py-3 text-sm text-text-secondary">
+          <p role="status" className={REGION_EMPTY_CLASS}>
             No commits yet
           </p>
         ) : null}
