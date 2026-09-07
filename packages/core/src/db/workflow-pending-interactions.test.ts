@@ -49,7 +49,6 @@ const {
   PendingInteractionCorruptRowError,
   PendingInteractionNotFoundError,
   PendingInteractionAlreadyResolvedError,
-  PendingInteractionNotFoundError,
   PendingInteractionRunNotPausedError,
   PendingInteractionValidationError,
 } = await import('./workflow-pending-interactions');
