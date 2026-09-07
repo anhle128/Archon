@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### DeepSeek provider error-as-result + lazy ACP import
+- **Where**: `packages/providers/src/community/deepseek/provider.ts`
+- **Pattern**: Store injected `DeepseekProviderDependencies` only. Check `abortSignal.aborted` before parse/env/MCP/runner. Capture the resolved API key for redaction after `buildDeepseekChildEnv`. Dynamic `import('./acp-client')` happens after preflight when `runTurn` is not injected — type-only `DeepseekProcessInput` import is erased. Wrap the runner with `withResumedOutcome(stream, resumedOutcome(resumeSessionId, true))`; resume failures throw `deepseek_resume_failed` and the outer catch yields one error result (never `session/new`). Dedup MCP `missingVars` into one system warning.
+- **Example**: `new DeepseekProvider({ runTurn, resolveNodeBinary, resolveDshEntrypoint })`
+
 ### ACP connectWith plus queue streaming
 - **Where**: `packages/providers/src/community/deepseek/acp-client.ts`
 - **Pattern**: Start `client({ name: 'archon-deepseek' }).connectWith(...)` without awaiting. Pipe success to `queue.close()` and failure to `queue.fail()`, then `for await` the queue so session updates are readable before prompt settlement. Cancel with `ctx.notify(methods.agent.session.cancel)` — never `request()`. Wrap resume failures as `deepseek_resume_failed` before the outer `deepseek_protocol_error` catch. Fake `SetSessionConfigOption` handlers must return `{ configOptions: [] }`. Injected FakeChild `kill()` must emit `exit` synchronously so `terminateGraceMs: 0` does not SIGKILL a child that already honored SIGTERM.
@@ -232,5 +237,31 @@
 - Fake `session/set_config_option` must return `{ configOptions: [] }` or ACP response validation fails.
 - Cancel via `notify()` should resolve an in-flight fake prompt hold so `.return()` / abort tests do not deadlock waiting on `connectWith`.
 - Injected FakeChild must emit `exit` synchronously from `kill()`; a microtask exit races `terminateGraceMs: 0` into an extra SIGKILL.
+
+---
+
+## 2026-09-07 — US-008: Implement DeepSeekProvider boundary with error-as-result semantics
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/provider.ts` — `DeepseekProvider` implementing `IAgentProvider` with injected runner/resolvers, lazy `acp-client` import, `withResumedOutcome`, and `toDeepseekErrorResult`
+- `packages/providers/src/community/deepseek/provider.test.ts` — injected-dependency coverage for abort, missing key, model/effort/env precedence, MCP merge/dedup/SSE, resume stamp/fail-closed, redaction, chunk order, and no fabricated usage
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/provider.ts implements IAgentProvider as DeepseekProvider.
+- [x] getType() returns 'deepseek' and getCapabilities() returns DEEPSEEK_CAPABILITIES.
+- [x] Supports injected DeepseekProviderDependencies (runTurn, resolveNodeBinary, resolveDshEntrypoint); in production, sendQuery() dynamically imports ./acp-client.
+- [x] Pre-aborted signal yields one deepseek_aborted error result without invoking preflight or spawning DSH.
+- [x] Preflight resolves options.model ?? config.model, options.nodeConfig?.effort ?? config.effort, and loads MCP passing merged { ...process.env, ...requestOptions.env }.
+- [x] Resumed turns wrap runner stream with withResumedOutcome to stamp resumed: true on the result chunk.
+- [x] Failed resume yields exactly one terminal deepseek_resume_failed error result and never retries.
+- [x] Outer try/catch converts all thrown errors via toDeepseekErrorResult redacting the resolved API key.
+- [x] Result chunks never synthesize tokens, usageBreakdown, or cost.
+- [x] packages/providers/src/community/deepseek/provider.test.ts passes via bun test src/community/deepseek/provider.test.ts.
+
+**Learnings**:
+- Type-only import of `DeepseekProcessInput` from `acp-client.ts` is erased at runtime; keep the value import as `await import('./acp-client')` after preflight.
+- `requestOptions?.nodeConfig?.mcp` does not narrow `requestOptions`; use `requestOptions?.env` when passing the MCP env source.
+- Duplicate `$VAR` expansions in one MCP file are pushed repeatedly by `loadMcpConfig`; dedup before the system warning.
 
 ---
