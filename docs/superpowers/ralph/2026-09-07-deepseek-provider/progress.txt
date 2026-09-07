@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### scripts tsconfig DOM vs Node web streams
+- **Where**: `packages/providers/src/community/deepseek/acp-client.ts`, `scripts/tsconfig.json`
+- **Pattern**: Package type-check can pass while root `bun x tsc --noEmit -p scripts/tsconfig.json` fails. That project adds DOM lib and type-checks `@archon/providers` via `generate-capability-matrix.ts`. Cast `Readable.toWeb` / `Writable.toWeb` through `unknown` before `Uint8Array` web streams.
+- **Example**: `Writable.toWeb(child.stdin) as unknown as WritableStream<Uint8Array>`
+
 ### Opt-in DeepSeek ACP live spike
 - **Where**: `packages/providers/src/community/deepseek/acp-handshake-spike.ts`, `packages/providers/package.json` `spike:deepseek:acp`
 - **Pattern**: Skip with exit 0 unless `DEEPSEEK_LIVE_TEST=1`. When enabled, require `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_LIVE_MODEL` without printing values. Fresh prompt `Reply with exactly pong.` then resume `Reply with exactly pong again.` and require a non-error result plus `resumed: true`. Print only skip/pass/generic-fail. Keep the script out of `test` and `validate`.
@@ -356,5 +361,28 @@
 - Plan Task 10 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1242-1296` (prd.md line numbers are stale).
 - Live billed path was not authorized in this iteration; skip path is the AC gate. Record live as not run rather than claiming it passed.
 - Child DSH stderr is piped (`stdio: pipe`) and must stay unprinted in the spike even after redaction.
+
+---
+
+## 2026-09-07 — US-012: Final repository validation and pattern audit
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/acp-client.ts` — Node-to-Web stream casts go through `unknown` so scripts/tsconfig.json DOM lib type-check passes
+
+**Acceptance criteria verified**:
+- [x] All DeepSeek unit test files and registry.test.ts pass in packages/providers.
+- [x] bun run test and bun run type-check pass in packages/providers.
+- [x] bun test src/loader.test.ts and bun run type-check pass in packages/workflows.
+- [x] bun run check:capability-matrix passes.
+- [x] bun run validate passes from the repository root with zero errors and zero lint warnings.
+- [x] Pattern audit passes: no runtime matches for DSH_PROVIDER_ROUTE, max_tokens, or deepseek-v3; ACP value imports restricted to acp-client.ts; cancel sent only via notify(); no fabricated tokens or usage in results.
+- [x] git status and git diff confirm no unexpected file changes outside the documented file map.
+
+**Learnings**:
+- Plan Task 11 lives at `docs/superpowers/plans/2026-09-07-deepseek-provider.md:1298-1393` (prd.md line numbers are stale).
+- Package `bun run type-check` is not a substitute for root validate: scripts/tsconfig.json adds DOM and pulls DeepSeek via `@archon/providers`.
+- First-command matches for DSH_PROVIDER_ROUTE / max_tokens / deepseek-v3 are comments and "do not" docs, not runtime writes.
+- Live billed spike remains not run (US-011).
 
 ---

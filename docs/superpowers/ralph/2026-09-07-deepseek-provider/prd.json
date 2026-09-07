@@ -263,8 +263,8 @@
         "US-011"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/providers/src/community/deepseek/acp-client.ts. bun run validate passed after widening Node-to-Web stream casts through unknown for scripts/tsconfig.json DOM lib."
     }
   ]
 }
