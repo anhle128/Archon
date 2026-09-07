@@ -8,6 +8,7 @@ import {
   parseDeepseekConfig,
   resolveDeepseekEffort,
 } from './config';
+import { DeepseekProviderError } from './errors';
 
 describe('parseDeepseekConfig', () => {
   test('applies ACP defaults for empty input', () => {
@@ -73,7 +74,15 @@ describe('parseDeepseekConfig', () => {
   });
 
   test('rejects defined maxTokens naming the unsupported pinned ACP surface', () => {
-    expect(() => parseDeepseekConfig({ maxTokens: 65536 })).toThrow(/pinned ACP|reasoning_effort/);
+    expect(() => parseDeepseekConfig({ maxTokens: 65536 })).toThrow(DeepseekProviderError);
+    try {
+      parseDeepseekConfig({ maxTokens: 65536 });
+      throw new Error('expected throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(DeepseekProviderError);
+      expect((error as DeepseekProviderError).subtype).toBe('deepseek_unsupported_config');
+      expect((error as Error).message).toMatch(/pinned ACP|reasoning_effort/);
+    }
     expect(() => parseDeepseekConfig({ maxTokens: null })).toThrow(/pinned ACP|reasoning_effort/);
   });
 

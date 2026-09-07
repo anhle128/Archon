@@ -1,4 +1,5 @@
 import type { DeepseekProviderDefaults } from '../../types';
+import { DeepseekProviderError } from './errors';
 
 export type { DeepseekProviderDefaults };
 
@@ -89,7 +90,8 @@ export function resolveDeepseekEffort(value: unknown): DeepseekReasoningEffort |
  */
 export function parseDeepseekConfig(raw: Record<string, unknown>): DeepseekProviderDefaults {
   if (raw.maxTokens !== undefined) {
-    throw new Error(
+    throw new DeepseekProviderError(
+      'deepseek_unsupported_config',
       'assistants.deepseek.maxTokens is unsupported: pinned DSH ACP exposes only model and reasoning_effort.'
     );
   }
