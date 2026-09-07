@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Stateful ACP SessionUpdate translation (no fabricated usage)
+- **Where**: `packages/providers/src/community/deepseek/event-bridge.ts`
+- **Pattern**: `mapDeepseekSessionUpdate` uses an exhaustive `switch (update.sessionUpdate)` with a `never` default. Tool start stores `{ name, input }` by `toolCallId`; in-progress updates mutate that entry; `completed`/`failed` emit `tool_result` then `delete`. `usage_update` (even with `cost`) and other housekeeping variants emit `[]` — never `tokens`/`usageBreakdown`/`cost`. Non-text message/thought content is ignored, not stringified.
+- **Example**: `mapDeepseekSessionUpdate(update, createDeepseekEventState())`
+
 ### Isolated child-env records (never mutate process.env)
 - **Where**: `packages/providers/src/community/deepseek/env.ts`
 - **Pattern**: `buildDeepseekChildEnv` takes `ambient`/`request` records. Tests pass isolated objects; never mutate `process.env`. Request overlays ambient, then config `baseUrl`, then `DSH_PERMISSION_MODE`. Empty/missing `DEEPSEEK_API_KEY` throws `deepseek_missing_api_key` without trimming or logging the value. Never writes `DSH_PROVIDER_ROUTE`.
@@ -117,5 +122,29 @@
 - `permission.ts` uses `import type` from `@agentclientprotocol/sdk` so ACP SDK values stay unevaluated (US-009 lazy-load gate).
 - PATH lookup must sit behind `facts.findNodeOnPath`; tests drive POSIX vs `win32` without `process.platform` or a shell.
 - Source-mode DSH resolve: `createRequire(import.meta.url).resolve('@deepseek-ai/dsh/lib/bin.js')`. Binary mode must throw before `createRequire()`.
+
+---
+
+## 2026-09-07 — US-004: Translate ACP session updates without fabricating usage
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/community/deepseek/event-bridge.ts` — `createDeepseekEventState`, `mapDeepseekSessionUpdate`
+- `packages/providers/src/community/deepseek/event-bridge.test.ts` — fixture-driven SessionUpdate → MessageChunk mapping
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/community/deepseek/event-bridge.ts exports createDeepseekEventState and mapDeepseekSessionUpdate(update: SessionUpdate, state: DeepseekEventState): MessageChunk[].
+- [x] agent_message_chunk maps to assistant chunk, agent_thought_chunk maps to thinking chunk, and non-text message content is ignored.
+- [x] tool_call emits tool chunk with name ?? title, toolCallId, and object rawInput (non-object wrapped in { rawInput: value }).
+- [x] tool_call_update preserves name and input during in-progress updates, extracts content or JSON-serialized rawOutput upon completion, and deletes stored state upon terminal update.
+- [x] Completed update maps to toolOutcome: 'success'; failed update maps to toolOutcome: 'error'.
+- [x] Tool result in pinned DSH structure ({ content: [{ type: 'content', content: { type: 'text', text: '...' } }] }) extracts the text string correctly.
+- [x] usage_update, plans, modes, config updates, session info, compaction, and user message updates emit zero chunks, never generating tokens, usageBreakdown, or cost.
+- [x] packages/providers/src/community/deepseek/event-bridge.test.ts passes via bun test src/community/deepseek/event-bridge.test.ts.
+
+**Learnings**:
+- Keep ACP SDK as `import type` in `event-bridge.ts` (value imports stay isolated to later `acp-client.ts`).
+- Tests construct fixtures with `satisfies SessionUpdate`; they do not need a dynamic ACP SDK value import.
+- `rawOutput` wins over display `content`; structured values go through `JSON.stringify`.
 
 ---
