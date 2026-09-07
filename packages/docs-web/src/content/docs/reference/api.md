@@ -324,6 +324,7 @@ CRUD does **not** require `cwd` or that the workflow be currently discoverable. 
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
+| GET (WebSocket) | `/api/workflows/runs/{runId}/terminal` | Interactive run terminal (not in OpenAPI) |
 
 #### Run a Workflow
 
@@ -441,6 +442,56 @@ curl -X POST http://localhost:3090/api/workflows/runs/{runId}/reject \
 ```
 
 **Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, its parent run pauses "blocked on child". Approve/reject the **child** run (its id is in the parent's block message) — the parent auto-resumes when the child completes. A child gate is the exception: it works for a 1:1 sub-run, but a child that pauses inside a `fan_out:` expansion **fails the node** instead — a parent has one approval slot and cannot hand it to N children, so gate before or after the fan-out node rather than inside a child of it. Calling approve/reject on the *parent's* id while it is blocked on a child returns **400** with a redirect to the child id. `abandon` on a parent cascade-cancels its non-terminal sub-run descendants; the response's `cascadeFailures` is non-zero if part of the tree could not be reached, and `blockedParentRunId` is set when the abandoned run was itself a child stranding a paused parent.
+
+#### Run Terminal WebSocket
+
+This WebSocket is **not** represented in the OpenAPI document (`GET /api/openapi.json`) and is not a `registerOpenApiRoute` REST endpoint.
+
+```
+GET /api/workflows/runs/{runId}/terminal
+```
+
+Optional query: `resume` — an opaque 64-character lowercase hex token issued by the server on `ready`. Malformed tokens are treated as absent.
+
+**Same-origin.** The upgrade requires a browser `Origin` header that matches `WEB_UI_ORIGIN` when that value is a concrete HTTP/HTTPS origin, or the request `Host` hostname when `WEB_UI_ORIGIN` is unset or `*`. Missing, malformed, opaque (`null`), and mismatched origins return `403` `{ "error": "Forbidden origin" }`.
+
+**Identity.** Resolution matches the existing API gate: Better Auth session first, then the trusted `ARCHON_WEB_AUTH_HEADER` header (default `X-Archon-User`).
+When either identity resolves, the terminal session is keyed by the canonical `remote_agent_users.id`.
+When neither identity resolves and the API gate is enabled, the upgrade returns `401` `{ "error": "Authentication required" }`.
+When neither identity resolves and the API gate is disabled, the session key uses the solo identity `solo`.
+
+**Server-only targets.** The client cannot supply or override a working path, isolation environment ID, or container handle.
+The server resolves the PTY from `workflow_runs.working_path` and the referenced isolation row: a host worktree or folder, a live managed container, or a locked unavailable state (`no_checkout`, `container_missing`, `container_stopped`, `unsupported_provider`).
+A missing or stopped container never falls back to a host shell.
+
+**Frames.** Client and server control frames are UTF-8 JSON text. PTY output frames are binary.
+
+Client control messages:
+
+```json
+{ "type": "input", "data": "…" }
+{ "type": "resize", "cols": 80, "rows": 24 }
+{ "type": "close" }
+```
+
+- `input.data` is capped at 64 KiB UTF-8.
+- `resize` requires integer `cols` in 1–500 and `rows` in 1–200.
+- Extra keys on any client frame are ignored and never used for target resolution.
+- Binary client frames are rejected.
+
+Server control messages:
+
+```json
+{ "type": "ready", "resumeToken": "<64-hex>", "cols": 80, "rows": 24 }
+{ "type": "exit", "code": 0, "signal": null }
+{ "type": "unavailable", "reason": "no_checkout", "message": "…" }
+{ "type": "error", "message": "…" }
+```
+
+**Session lifecycle.** One in-memory PTY exists per user and run.
+A second active tab takes over the existing PTY, receives bounded replay (newest 256 KiB), and closes the previous socket with code `4001`.
+A disconnected session may reconnect with the matching resume token for two minutes; after that, or after `close`, process exit, overflow, or server shutdown, the PTY is destroyed.
+No terminal input, output, command history, resume tokens, or session rows are persisted.
 
 ---
 

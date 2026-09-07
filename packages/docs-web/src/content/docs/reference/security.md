@@ -136,6 +136,27 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 - Each user can connect their own provider API key or subscription. Credentials are encrypted at rest with **AES-256-GCM** using an auto-provisioned key (`~/.archon/credential-key`) or an explicit `TOKEN_ENCRYPTION_KEY` on managed installs. Credentials are never logged and **never returned by any endpoint** — responses carry only `provider`/`kind`/`label` metadata. See [AI Provider Credentials](/reference/api/#ai-provider-credentials).
 - The credential routes (`/api/auth/providers*`) require a resolved identity (the `X-Archon-User` header or a Better Auth session). The model-config routes (`/api/config/*`, including `tiers`) are intentionally **ungated** — they carry no secrets (just model strings) and must work on solo installs.
 
+### Interactive run terminal
+
+Every authenticated web user may open a shell on a workflow run by product decision.
+There is no extra run-owner or role check.
+An ungated solo install (web auth / API gate disabled) permits any client that can reach Archon.
+
+The same-origin check on the terminal WebSocket mitigates cross-site browser initiation.
+It does not replace deployment authentication: put a reverse proxy, firewall, or the API gate in front of any network-exposed install.
+
+Host shells receive an explicit environment allowlist (locale, home, path, and Windows equivalents).
+The local Docker CLI receives that same host allowlist plus Docker connectivity variables (`DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`).
+Only the fixed values `TERM=xterm-256color` and `COLORTERM=truecolor` are passed into the container via `docker exec -e`.
+Archon secrets, database URLs, adapter tokens, Better Auth secrets, provider credentials, and `SSH_AUTH_SOCK` are never copied into either environment.
+
+The terminal can read everything available to the Archon service account on the host, or everything inside a live managed container.
+It is not a filesystem sandbox.
+
+Terminal input and output are not logged and are not persisted to disk or the database.
+Lifecycle logs (`terminal.session_started`, `terminal.session_reconnected`, `terminal.session_completed`, `terminal.session_failed`, `terminal.session_expired`, `terminal.pty_exited`) may include `runId`, `userId`, `targetKind`, and error type.
+They exclude checkout paths, container handles, resume tokens, environment values, commands, and output.
+
 ### Target repo `.env` isolation
 
 Archon prevents target repo `.env` from leaking into subprocesses through structural protection:
