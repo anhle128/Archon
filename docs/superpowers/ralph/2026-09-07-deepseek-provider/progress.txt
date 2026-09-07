@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### DeepSeek config parser fail-fast + applied defaults
+- **Where**: `packages/providers/src/community/deepseek/config.ts`
+- **Pattern**: `parseDeepseekConfig` always returns `profile`/`providerRoute`/`permissionMode` defaults. Explicit `providerRoute` without `model` is rejected; the default route is allowed without a model. `maxTokens !== undefined` throws a plain `Error` until US-003 wraps it as `DeepseekProviderError`.
+- **Example**: `'assistants.deepseek.maxTokens is unsupported: pinned DSH ACP exposes only model and reasoning_effort.'`
+
+### DeepSeek effort switch (not clampEffort)
+- **Where**: `packages/providers/src/community/deepseek/config.ts` `resolveDeepseekEffort`
+- **Pattern**: Use an explicit `switch`, not `clampEffort`. Map `minimal->off`, `medium->low`, `xhigh->high`; preserve `off`/`low`/`high`/`max`; throw on blank/unknown. `off` is not on `EFFORT_LADDER`.
+- **Example**: `resolveDeepseekEffort('minimal') === 'off'`
+
 ### Exact provider dependency pins
 - **Where**: `packages/providers/package.json`
 - **Pattern**: Pin runtime SDKs with exact versions (no `^` or `~`). `bun --filter @archon/providers add` failed with "No packages matched the filter"; `bun add --exact` from `packages/providers` updates both `package.json` and the root `bun.lock`.
@@ -36,5 +46,29 @@
 - `bun --filter @archon/providers add --exact ...` failed in this worktree; `cd packages/providers && bun add --exact ...` succeeded.
 - Characterization test is allowed to pass immediately (no production source besides deps).
 - ESLint ignores `**/*.test.ts`; scoped lint of the new test file only produces ignore warnings.
+
+---
+
+## 2026-09-07 — US-002: Define DeepSeek config, effort translation, and capabilities
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/src/types.ts` — added `DeepseekProviderDefaults` (no `maxTokens`)
+- `packages/providers/src/community/deepseek/config.ts` — defaults, `parseDeepseekConfig`, `resolveDeepseekEffort`
+- `packages/providers/src/community/deepseek/config.test.ts` — table-driven config, effort, and capability tests
+- `packages/providers/src/community/deepseek/capabilities.ts` — `DEEPSEEK_CAPABILITIES` (`as const satisfies ProviderCapabilities`)
+
+**Acceptance criteria verified**:
+- [x] packages/providers/src/types.ts exports DeepseekProviderDefaults containing optional model, baseUrl, providerRoute, profile ('acp'), permissionMode ('workspace-write' | 'danger-full-access'), effort, and nodeBin (omitting maxTokens).
+- [x] packages/providers/src/community/deepseek/capabilities.ts exports DEEPSEEK_CAPABILITIES with sessionResume: true, mcp: true, envInjection: true, effortControl: true, structuredOutput: 'best-effort', and all other axes false.
+- [x] packages/providers/src/community/deepseek/config.ts exports DEFAULT_DEEPSEEK_PROFILE ('acp'), DEFAULT_DEEPSEEK_PROVIDER_ROUTE ('deepseek-official'), DEFAULT_DEEPSEEK_PERMISSION_MODE ('workspace-write'), parseDeepseekConfig, and resolveDeepseekEffort.
+- [x] parseDeepseekConfig trims strings, requires http: or https: for baseUrl, rejects profile other than acp, restricts permissionMode to workspace-write or danger-full-access, rejects providerRoute without model, and rejects maxTokens !== undefined with an error naming the unsupported pinned ACP surface.
+- [x] resolveDeepseekEffort maps minimal->off, medium->low, xhigh->high, preserves off, low, high, max, and rejects unknown or blank values.
+- [x] packages/providers/src/community/deepseek/config.test.ts tests all config validation and effort mapping cases and passes via bun test src/community/deepseek/config.test.ts.
+
+**Learnings**:
+- `bun test src/community/deepseek/config.test.ts` from `packages/providers`: 13 pass, 0 fail.
+- Surgical edits to `packages/providers/src/types.ts` must keep the full 900+ line file; never write back a truncated read.
+- US-003 must replace only the `maxTokens` `Error` type with `DeepseekProviderError('deepseek_unsupported_config', ...)` and keep the same message.
 
 ---
