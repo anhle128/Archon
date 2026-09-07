@@ -15,8 +15,8 @@
       "technicalNotes": "Follow Task 0 (docs/superpowers/plans/2026-09-07-deepseek-provider.md:117-202). Edit packages/providers/package.json and bun.lock. Create packages/providers/src/community/deepseek/ndjson-stream.test.ts.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/providers/package.json, bun.lock, packages/providers/src/community/deepseek/ndjson-stream.test.ts."
     },
     {
       "id": "US-002",

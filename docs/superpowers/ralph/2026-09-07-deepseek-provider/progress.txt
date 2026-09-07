@@ -1,0 +1,40 @@
+## Codebase Patterns
+
+### Exact provider dependency pins
+- **Where**: `packages/providers/package.json`
+- **Pattern**: Pin runtime SDKs with exact versions (no `^` or `~`). `bun --filter @archon/providers add` failed with "No packages matched the filter"; `bun add --exact` from `packages/providers` updates both `package.json` and the root `bun.lock`.
+- **Example**: `"@agentclientprotocol/sdk": "1.4.0"`, `"@deepseek-ai/dsh": "0.1.2-rc.1"`
+
+### Community provider tests
+- **Where**: `packages/providers/src/community/<name>/`
+- **Pattern**: Tests use `bun:test`. ESLint ignores `**/*.test.ts`. Always run `bun test <file>` from `packages/providers`; never `bun test` from the repo root.
+- **Example**: `bun test src/community/deepseek/ndjson-stream.test.ts`
+
+### ACP SDK value-import isolation
+- **Where**: `packages/providers/src/community/deepseek/ndjson-stream.test.ts`
+- **Pattern**: Dynamic-import `@agentclientprotocol/sdk` in tests. Production code must keep ACP SDK *value* imports isolated to `acp-client.ts` (type-only elsewhere).
+- **Example**: `const { ndJsonStream } = await import('@agentclientprotocol/sdk');`
+
+---
+
+## 2026-09-07 — US-001: Pin ACP and DSH runtime dependencies and characterize Bun streams
+
+**Status**: PASSED
+**Files changed**:
+- `packages/providers/package.json` — exact pins `@agentclientprotocol/sdk@1.4.0` and `@deepseek-ai/dsh@0.1.2-rc.1`
+- `bun.lock` — recorded the resolved ACP/DSH graph
+- `packages/providers/src/community/deepseek/ndjson-stream.test.ts` — Bun loopback characterization via PassThrough + ndJsonStream
+
+**Acceptance criteria verified**:
+- [x] packages/providers/package.json adds exact dependencies @agentclientprotocol/sdk@1.4.0 and @deepseek-ai/dsh@0.1.2-rc.1 with no ^ or ~ ranges.
+- [x] bun.lock records the exact dependency graph and bun install --frozen-lockfile exits zero.
+- [x] Installed package versions are verified: @agentclientprotocol/sdk is 1.4.0 and @deepseek-ai/dsh is 0.1.2-rc.1.
+- [x] packages/providers/src/community/deepseek/ndjson-stream.test.ts characterizes loopback streaming using PassThrough, Writable.toWeb, Readable.toWeb, and dynamic import of ndJsonStream from @agentclientprotocol/sdk.
+- [x] bun test src/community/deepseek/ndjson-stream.test.ts passes when executed from packages/providers.
+
+**Learnings**:
+- `bun --filter @archon/providers add --exact ...` failed in this worktree; `cd packages/providers && bun add --exact ...` succeeded.
+- Characterization test is allowed to pass immediately (no production source besides deps).
+- ESLint ignores `**/*.test.ts`; scoped lint of the new test file only produces ignore warnings.
+
+---
