@@ -18,6 +18,7 @@ import { ArtifactSummary } from './ArtifactSummary';
 import { WorkflowNodeRetryAction } from './WorkflowNodeRetryAction';
 import { DagRunTabs, type WorkflowRunView } from './source-control/dag-run-tabs';
 import { SourceControlTab } from './source-control/source-control-tab';
+import { TerminalTab } from './terminal/terminal-tab';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import {
   answerAskHuman,
@@ -297,7 +298,11 @@ export function buildWorkflowDagNodeStates(
   );
 }
 
-export type WorkflowExecutionBody = 'graph-logs-pane' | 'source-control' | 'sequential';
+export type WorkflowExecutionBody =
+  | 'graph-logs-pane'
+  | 'source-control'
+  | 'terminal'
+  | 'sequential';
 
 export function resolveWorkflowExecutionBody(input: {
   isDag: boolean;
@@ -305,6 +310,7 @@ export function resolveWorkflowExecutionBody(input: {
 }): WorkflowExecutionBody {
   if (!input.isDag) return 'sequential';
   if (input.activeView === 'source-control') return 'source-control';
+  if (input.activeView === 'terminal') return 'terminal';
   return 'graph-logs-pane';
 }
 
@@ -883,6 +889,9 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     }
     if (body === 'source-control') {
       return <SourceControlTab key={runId} runId={runId} />;
+    }
+    if (body === 'terminal') {
+      return <TerminalTab key={runId} runId={runId} />;
     }
     return (
       <div className="flex flex-1 overflow-hidden min-h-0">

@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-export type WorkflowRunView = 'graph' | 'logs' | 'chat' | 'source-control';
+export type WorkflowRunView = 'graph' | 'logs' | 'chat' | 'source-control' | 'terminal';
 
 export interface DagRunTabsProps {
   activeView: WorkflowRunView;
@@ -29,6 +29,7 @@ export function DagRunTabs(props: DagRunTabsProps): ReactElement {
           </TabsTrigger>
         ) : null}
         <TabsTrigger value="source-control">Source Control</TabsTrigger>
+        <TabsTrigger value="terminal">Terminal</TabsTrigger>
       </TabsList>
     </Tabs>
   );

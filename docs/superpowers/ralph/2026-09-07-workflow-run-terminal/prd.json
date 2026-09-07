@@ -1,0 +1,231 @@
+{
+  "feature": "Interactive Workflow Run Terminal",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Validate workflow terminal WebSocket origins",
+      "description": "As an operator, I want incoming terminal WebSocket upgrade requests strictly validated against the allowed origin, so that cross-site websocket hijacking attacks are rejected before connection establishment.",
+      "acceptanceCriteria": [
+        "Create packages/server/src/routes/terminal/origin.ts and test file packages/server/src/routes/terminal/origin.test.ts.",
+        "Define TerminalOriginError with status 403 and error message 'Forbidden origin'.",
+        "assertTerminalOrigin(request, env) rejects missing, malformed, opaque ('null'), file:, and non-http/https Origin headers by throwing TerminalOriginError.",
+        "When env.WEB_UI_ORIGIN is set to a concrete URL (not '*'), assertTerminalOrigin requires the request Origin to match its normalized .origin value exactly.",
+        "When env.WEB_UI_ORIGIN is unset or '*', assertTerminalOrigin compares the request Origin hostname against the request Host header hostname, permitting different ports to support the Vite dev proxy.",
+        "All unit tests pass via bun test src/routes/terminal/origin.test.ts in packages/server."
+      ],
+      "technicalNotes": "Follow plan Task 1 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:262-381 and locked origin rules at lines 146-149. Create packages/server/src/routes/terminal/origin.ts and packages/server/src/routes/terminal/origin.test.ts.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/server/src/routes/terminal/origin.ts, packages/server/src/routes/terminal/origin.test.ts."
+    },
+    {
+      "id": "US-002",
+      "title": "Isolate workflow terminal subprocess environments",
+      "description": "As a security engineer, I want terminal subprocesses to execute with strict environment variable allowlists, so that Archon server secrets, database credentials, API tokens, and SSH keys are never accessible to terminal users.",
+      "acceptanceCriteria": [
+        "Create packages/server/src/routes/terminal/env.ts and test file packages/server/src/routes/terminal/env.test.ts.",
+        "buildHostTerminalEnv(source) copies only non-empty string values from HOST_ENV_KEYS: HOME, USER, LOGNAME, SHELL, PATH, LANG, LC_ALL, LC_CTYPE, LC_MESSAGES, TZ, TMPDIR, USERPROFILE, HOMEDRIVE, HOMEPATH, PATHEXT, SYSTEMROOT, COMSPEC.",
+        "buildDockerClientEnv(source) copies HOST_ENV_KEYS plus DOCKER_HOST, DOCKER_CONTEXT, DOCKER_CONFIG, DOCKER_TLS_VERIFY, and DOCKER_CERT_PATH.",
+        "Both environment builders unconditionally overwrite TERM with 'xterm-256color' and COLORTERM with 'truecolor'.",
+        "Neither builder forwards SSH_AUTH_SOCK, DATABASE_URL, BETTER_AUTH_SECRET, API tokens, or any unrecognized environment variables.",
+        "All unit tests pass via bun test src/routes/terminal/env.test.ts in packages/server."
+      ],
+      "technicalNotes": "Follow plan Task 2 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:383-515 and locked environment rules at lines 35-37, 58-59, 204-206. Create packages/server/src/routes/terminal/env.ts and packages/server/src/routes/terminal/env.test.ts.",
+      "dependsOn": [],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/server/src/routes/terminal/env.ts, packages/server/src/routes/terminal/env.test.ts."
+    },
+    {
+      "id": "US-003",
+      "title": "Resolve workflow terminal host and container targets",
+      "description": "As a workflow developer, I want terminal targets resolved strictly from database rows without user override, so that terminals attach safely to real checkouts or running containers and fail clearly without host fallback.",
+      "acceptanceCriteria": [
+        "Create packages/server/src/routes/terminal/docker.ts and test file packages/server/src/routes/terminal/docker.test.ts.",
+        "buildDockerExecArgs(cwd, handle, shell) generates literal argv array: ['exec', '-i', '-t', '-e', 'TERM=xterm-256color', '-e', 'COLORTERM=truecolor', '-w', cwd, handle, shell].",
+        "inspectContainer(handle, runner) runs docker inspect -f '{{.State.Running}}' with 5000ms timeout, returns 'running', 'stopped', or 'missing' (matching case-insensitive 'no such object' or 'no such container'), rethrowing any daemon error.",
+        "resolveContainerShell(handle, runner) tests /bin/bash executable via docker exec; if it fails non-zero and container is running, falls back to /bin/sh.",
+        "Create packages/server/src/routes/terminal/target.ts and test file packages/server/src/routes/terminal/target.test.ts defining TerminalTarget, TerminalUnavailableReason, TerminalRunRow, TerminalIsolationRow, ResolveTerminalTargetDeps, and resolveTerminalTarget.",
+        "resolveTerminalTarget requires non-empty run.working_path; if absent, returns unavailable reason 'no_checkout'.",
+        "When run.metadata.isolation_env_id is present, inspects isolation row; provider 'container' requires active status, prefers containerName over containerId, checks container running state, and returns container target or unavailable reason 'container_missing' or 'container_stopped'.",
+        "Provider 'worktree' continues through host directory resolution; providers 'vm', 'remote', or unknown return unavailable reason 'unsupported_provider'.",
+        "Any container-marked run with missing/destroyed isolation row or stopped container never falls back to host directory.",
+        "Host resolution calls canonicalDirectory(cwd) using realpath and stat.isDirectory(), returning host target with resolveHostShell() or unavailable reason 'no_checkout'.",
+        "All unit tests pass via bun test src/routes/terminal/docker.test.ts src/routes/terminal/target.test.ts in packages/server."
+      ],
+      "technicalNotes": "Follow plan Task 3 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:517-768 and locked contracts at lines 116-125, 155-186. Create packages/server/src/routes/terminal/docker.ts, docker.test.ts, target.ts, and target.test.ts.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/server/src/routes/terminal/docker.ts, docker.test.ts, target.ts, target.test.ts."
+    },
+    {
+      "id": "US-004",
+      "title": "Validate workflow terminal WebSocket frames",
+      "description": "As a server developer, I want strict framing, byte limits, and type guards for client and server control messages, so that malformed or forged payloads are rejected before processing.",
+      "acceptanceCriteria": [
+        "Create packages/server/src/routes/terminal/protocol.ts and test file packages/server/src/routes/terminal/protocol.test.ts.",
+        "Export protocol constants: TERMINAL_PATH_RE, RECONNECT_MS (120000), REPLAY_MAX_BYTES (262144), INPUT_MAX_BYTES (65536), PENDING_MAX_BYTES (1048576), MAX_CLIENT_FRAME_BYTES (394240), MIN_COLS (1), MAX_COLS (500), MIN_ROWS (1), MAX_ROWS (200), DEFAULT_COLS (80), DEFAULT_ROWS (24), SOLO_TERMINAL_USER_ID ('solo'), REPLACED_SOCKET_CLOSE_CODE (4001).",
+        "Export types: ClientControlMessage (input, resize, close), ServerControlMessage (ready, exit, unavailable, error), ClientMessageParseResult.",
+        "isResumeToken(value) validates 64-character lowercase hex string (/^[0-9a-f]{64}$/).",
+        "parseClientControlMessage(raw) parses JSON text frame, strips unknown fields, enforces byte length <= INPUT_MAX_BYTES for input, enforces integer range bounds for resize, and returns { error } on malformed frames.",
+        "serializeServerControlMessage(message) serializes typed server control message to JSON string.",
+        "unavailableMessage(reason) maps TerminalUnavailableReason to locked copy: 'no_checkout' -> \"This run's checkout isn't available — it may not be ready yet, or it may have been cleaned up.\", 'container_missing' and 'container_stopped' -> \"This run's container isn't available — it may have been stopped or cleaned up.\", 'unsupported_provider' -> 'This run uses an isolation provider the terminal cannot open.'.",
+        "All unit tests pass via bun test src/routes/terminal/protocol.test.ts in packages/server."
+      ],
+      "technicalNotes": "Follow plan Task 4 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:770-896 and locked protocol contracts at lines 101-145, 230-235. Create packages/server/src/routes/terminal/protocol.ts and packages/server/src/routes/terminal/protocol.test.ts.",
+      "dependsOn": [],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/server/src/routes/terminal/protocol.ts, protocol.test.ts."
+    },
+    {
+      "id": "US-005",
+      "title": "Spawn interactive Bun terminals for workflow runs",
+      "description": "As a systems developer, I want host shells and container exec sessions spawned using Bun inline terminal options, so that child processes have a true controlling terminal and support interactive signals.",
+      "acceptanceCriteria": [
+        "Create packages/server/src/routes/terminal/pty.ts and test file packages/server/src/routes/terminal/pty.test.ts.",
+        "Export SpawnedTerminal interface (write, resize, kill, exited promise) and TerminalSpawnSpec.",
+        "buildTerminalSpawnSpec(target, sourceEnv) builds command, cwd, and env using buildHostTerminalEnv for host and buildDockerExecArgs + buildDockerClientEnv for container.",
+        "spawnTerminalPty(input) spawns process using Bun.spawn with inline terminal options: { cols, rows, name: 'xterm-256color', data(_terminal, bytes) { input.onData(bytes); } }.",
+        "spawnTerminalPty never creates a detached Bun.Terminal(); fails fast if subprocess.terminal is absent.",
+        "kill() is idempotent: terminates process with SIGTERM, closes terminal, and does not throw on repeated calls.",
+        "exited promise resolves to { code, signal } with signalCode normalized.",
+        "Include one POSIX integration test demonstrating real controlling terminal behavior where SIGINT (Ctrl-C, '\\x03') interrupts a sleeping child command.",
+        "Modify root package.json engines.bun from '^1.3.0' to '^1.3.5'.",
+        "All tests pass via bun test src/routes/terminal/pty.test.ts in packages/server."
+      ],
+      "technicalNotes": "Follow plan Task 5 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:898-1047 and locked PTY rules at lines 38-40, 187-202. Create packages/server/src/routes/terminal/pty.ts and pty.test.ts; edit root package.json.",
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/server/src/routes/terminal/pty.ts, pty.test.ts, package.json."
+    },
+    {
+      "id": "US-006",
+      "title": "Manage reconnectable workflow terminal sessions",
+      "description": "As an operator, I want terminal sessions owned in memory per user and run with bounded replay, active tab takeover, and backpressure handling, so that disconnects survive network blips while memory remains bounded.",
+      "acceptanceCriteria": [
+        "Create packages/server/src/routes/terminal/session-manager.ts and test file packages/server/src/routes/terminal/session-manager.test.ts.",
+        "Export TerminalSocket, TerminalSessionManager interfaces and createTerminalSessionManager factory.",
+        "Key sessions by '${userId}:${runId}' and generate 64-character lowercase hex resume tokens using crypto randomBytes(32).",
+        "When a second active socket connects for an existing key, take over the session: clear pending output, attach replacement socket, replay bounded buffer suffix, and close old socket with code 4001.",
+        "Old socket close callback does not mutate or detach the replacement session.",
+        "When a socket disconnects, retain the session for RECONNECT_MS (120,000 ms); reattach only when valid matching resumeToken is supplied.",
+        "Invalid or missing resumeToken on a disconnected session destroys the old PTY and allows creating a fresh session.",
+        "Maintain in-memory replay buffer retaining at most the newest REPLAY_MAX_BYTES (256 KiB) of binary output; never persist to disk.",
+        "Handle Bun send() return values: -1 sets backpressure flag and queues subsequent chunks; 0 detaches socket; positive integer confirms bytes sent.",
+        "Enforce PENDING_MAX_BYTES (1 MiB) ceiling across socket buffered amount and pending queue; overflow sends error message, closes with code 1011, and destroys session.",
+        "drain(socket) flushes application queue in order until empty or send() returns -1.",
+        "Explicit closeSession, process exit, expiry timer, and destroyAll() kill the PTY idempotently and remove the map entry.",
+        "Lifecycle logging emits only terminal.session_started, terminal.session_reconnected, terminal.session_completed, terminal.session_failed, terminal.session_expired, terminal.pty_exited with safe metadata (no commands, paths, tokens, handles, or output).",
+        "All unit tests pass via bun test src/routes/terminal/session-manager.test.ts in packages/server."
+      ],
+      "technicalNotes": "Follow plan Task 6 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:1049-1192 and locked session rules at lines 41-42, 102-115, 207-224. Create packages/server/src/routes/terminal/session-manager.ts and session-manager.test.ts.",
+      "dependsOn": [
+        "US-004",
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/server/src/routes/terminal/session-manager.ts, session-manager.test.ts. Verified bun test src/routes/terminal/session-manager.test.ts (15 pass)."
+    },
+    {
+      "id": "US-007",
+      "title": "Serve authenticated workflow terminal WebSockets",
+      "description": "As a server architect, I want incoming WebSocket upgrades authenticated, routed to the terminal endpoint before Hono, and wired into Bun.serve lifecycle, so that users can connect securely.",
+      "acceptanceCriteria": [
+        "Create packages/server/src/routes/terminal/endpoint.ts and test file packages/server/src/routes/terminal/endpoint.test.ts.",
+        "Implement createTerminalEndpoint(deps) resolving identity: 1) Better Auth session, 2) ARCHON_WEB_AUTH_HEADER header, 3) SOLO_TERMINAL_USER_ID ('solo') if API gate is disabled; throws 401 if gate enabled and no auth.",
+        "handleUpgrade validates same-origin, requires GET and Upgrade: websocket headers (426 otherwise), decodes runId, looks up workflow run (404 if missing), validates resume query param, and calls server.upgrade with runId, userId, resumeToken.",
+        "WebSocket open callback attempts manager.attachExisting; if not attached, resolves target, sends locked unavailable control frame on unavailable targets, or spawns PTY and calls manager.create.",
+        "WebSocket message callback parses JSON control frame; dispatches input and resize to manager; destroys session on binary frames or malformed JSON.",
+        "WebSocket close and drain callbacks delegate to manager.disconnect and manager.drain.",
+        "Create packages/server/src/routes/terminal/index.ts exporting createTerminalEndpoint and createFetchWithTerminal.",
+        "Create packages/server/src/routes/terminal/server-fetch.test.ts proving exact terminal path intercepts before Hono and unrelated paths pass to app.fetch.",
+        "Modify packages/server/src/index.ts to wrap Bun.serve fetch with createFetchWithTerminal, register terminalEndpoint.websocket, and call terminalEndpoint.destroyAll() during shutdown.",
+        "Modify packages/server/package.json test script to add isolated 'bun test src/routes/terminal/' leg.",
+        "All server terminal tests pass via bun test src/routes/terminal/."
+      ],
+      "technicalNotes": "Follow plan Task 7 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:1194-1470 and locked integration contracts at lines 43-46, 70-75, 150-154. Create packages/server/src/routes/terminal/endpoint.ts, endpoint.test.ts, index.ts, server-fetch.test.ts; modify packages/server/src/index.ts and packages/server/package.json.",
+      "dependsOn": [
+        "US-001",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/server/src/routes/terminal/endpoint.ts, endpoint.test.ts, index.ts, server-fetch.test.ts; packages/server/src/index.ts; packages/server/package.json. Verified bun test src/routes/terminal/ (81 pass)."
+    },
+    {
+      "id": "US-008",
+      "title": "Connect xterm to reconnectable run terminal sockets",
+      "description": "As a front-end developer, I want client-side protocol parsing, a resilient WebSocket reconnect client, and an xterm.js mount adapter, so that the Web UI can stream terminal input and output smoothly.",
+      "acceptanceCriteria": [
+        "Add exact dependencies @xterm/xterm@5.5.0 and @xterm/addon-fit@0.10.0 to packages/web/package.json; update bun.lock.",
+        "Update packages/web/vite.config.ts to set ws: true in the /api proxy configuration.",
+        "Create packages/web/src/components/workflows/terminal/protocol.ts and test file protocol.test.ts: parseServerControlMessage validates ready, exit, unavailable, error; chunkTerminalInput safely splits large strings into UTF-8 chunks <= INPUT_MAX_BYTES on code-point boundaries.",
+        "Create packages/web/src/components/workflows/terminal/client.ts and test file client.test.ts: createRunTerminalClient manages WebSocket connection to same-origin /api/workflows/runs/:runId/terminal with binaryType 'arraybuffer'.",
+        "Client stores resume token in sessionStorage ('archon.terminal.resume.${runId}'), clears token on explicit close/exit/unavailable/error, caches resize dimension until ready, and reconnects with exponential backoff [250, 500, 1000, 2000, 5000] ms up to 120 seconds on unexpected disconnect.",
+        "Close code 4001 transitions state to 'Terminal opened in another tab.' without reconnecting.",
+        "Create packages/web/src/components/workflows/terminal/xterm-session.ts and test file xterm-session.test.ts: mountXtermSession instantiates Terminal, loads FitAddon, attaches ResizeObserver, styles terminal using CSS variables (--surface-inset, --text-primary, --primary), and wires input/output/resize.",
+        "All client unit tests pass via bun test in packages/web."
+      ],
+      "technicalNotes": "Follow plan Task 8 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:1472-1736 and locked browser contracts at lines 77-85, 225-229. Modify packages/web/package.json, packages/web/vite.config.ts, bun.lock; create protocol.ts, protocol.test.ts, client.ts, client.test.ts, xterm-session.ts, and xterm-session.test.ts.",
+      "dependsOn": [
+        "US-004"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/package.json, packages/web/vite.config.ts, bun.lock, packages/web/src/components/workflows/terminal/protocol.ts, protocol.test.ts, client.ts, client.test.ts, xterm-session.ts, xterm-session.test.ts. 21 terminal tests + full packages/web test suite, tsc, eslint, prettier."
+    },
+    {
+      "id": "US-009",
+      "title": "Add a Terminal tab to legacy workflow run details",
+      "description": "As an operator viewing a workflow run, I want a Terminal tab next to Source Control on the DAG run page, so that I can interact with the live shell or inspect status messages.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/components/workflows/terminal/terminal-status.tsx and test file terminal-status.test.tsx rendering exact copy for Connecting…, Connected, Reconnecting…, Terminal closed., Terminal opened in another tab., exit codes/signals, and error messages.",
+        "Create packages/web/src/components/workflows/terminal/terminal-tab.tsx and test file terminal-tab.test.tsx importing xterm.css, hosting xterm container, displaying status, and providing 'Close terminal' button.",
+        "Modify packages/web/src/components/workflows/source-control/dag-run-tabs.tsx and its test to add 'Terminal' tab trigger immediately after 'Source Control' for DAG runs.",
+        "Modify packages/web/src/components/workflows/WorkflowExecution.tsx and its test: extend WorkflowRunView with 'terminal', map activeView 'terminal' to body 'terminal' only for DAG runs, and render <TerminalTab key={runId} runId={runId} />.",
+        "Ensure experimental Console (packages/web/src/experiments/console/) remains completely untouched.",
+        "All component tests pass via NODE_ENV=development bun test in packages/web."
+      ],
+      "technicalNotes": "Follow plan Task 9 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:1738-1876 and locked UI contracts at lines 20, 86-91, 230-238. Create terminal-status.tsx, terminal-status.test.tsx, terminal-tab.tsx, terminal-tab.test.tsx; modify dag-run-tabs.tsx, dag-run-tabs.test.tsx, WorkflowExecution.tsx, and WorkflowExecution.test.tsx.",
+      "dependsOn": [
+        "US-008"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/components/workflows/terminal/terminal-status.tsx, terminal-status.test.tsx, terminal-tab.tsx, terminal-tab.test.tsx; packages/web/src/components/workflows/source-control/dag-run-tabs.tsx, dag-run-tabs.test.tsx; packages/web/src/components/workflows/WorkflowExecution.tsx, WorkflowExecution.test.tsx. Verified NODE_ENV=development bun test for terminal + dag-run-tabs + WorkflowExecution (36 pass), full packages/web test script, tsc, eslint, prettier."
+    },
+    {
+      "id": "US-010",
+      "title": "Document workflow run terminal access and validate system",
+      "description": "As an Archon administrator and developer, I want comprehensive operator and API documentation and end-to-end repository validation, so that the feature is documented accurately and meets all production quality gates.",
+      "acceptanceCriteria": [
+        "Modify packages/docs-web/src/content/docs/adapters/web.md to document the Terminal tab under Execution Detail Page, including target resolution, 2-minute reconnect, and non-persistence.",
+        "Modify packages/docs-web/src/content/docs/reference/api.md under workflow runs to document the Run Terminal WebSocket protocol, URL, frames, and non-OpenAPI status.",
+        "Modify packages/docs-web/src/content/docs/reference/security.md under Secrets Handling to document shell authority, environment allowlists, secret stripping, and audit privacy.",
+        "Execute automated validation: (cd packages/server && bun test src/routes/terminal/), (cd packages/web && NODE_ENV=development bun test src/components/workflows/terminal/ src/components/workflows/source-control/dag-run-tabs.test.tsx src/components/workflows/WorkflowExecution.test.tsx), bun run build:web, bun run type-check, and git diff --check.",
+        "Execute full repository validation: bun run validate exits 0."
+      ],
+      "technicalNotes": "Follow plan Task 10 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:1878-1976 and documentation contracts at lines 92-94, 239. Modify packages/docs-web/src/content/docs/adapters/web.md, reference/api.md, and reference/security.md.",
+      "dependsOn": [
+        "US-007",
+        "US-009"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/docs-web/src/content/docs/adapters/web.md, reference/api.md, reference/security.md. Verified server terminal tests (81 pass), focused web tests (36 pass), bun run build:web, bun run type-check, git diff --check, and bun run validate."
+    }
+  ]
+}

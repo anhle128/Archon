@@ -165,6 +165,19 @@ Click on a workflow run (from the dashboard or progress card) to open the execut
 - Route-loop decisions, including selected target and redacted condition metadata
 - Actions to resume, retry eligible DAG nodes, cancel, or abandon the run
 
+DAG runs show these tabs in order: Graph, Logs, optional Chat, Source Control, and Terminal.
+
+**Terminal.** The Terminal tab opens a real interactive shell in the run's host worktree, in-place folder, or live managed container.
+It is available for any run status while that server-resolved target still exists.
+The browser never chooses a path or container: the server resolves the target from the run's checkout and isolation records.
+
+Leaving the tab keeps the in-memory shell for two minutes so a reload can resume the same session.
+**Close terminal** destroys the shell immediately.
+No terminal input, output, or command history is saved.
+
+The host shell is not a filesystem sandbox.
+It has the Archon service account's operating-system permissions and can change directories, read files the account can read, and run whatever the account can execute.
+
 ## Workflow Builder
 
 The Workflow Builder at `/legacy/workflows/builder` provides a visual editor for creating and modifying workflow YAML files. Features include:

@@ -129,6 +129,7 @@ import {
   getSignupMode,
   isArchonOwnedAuthPath,
 } from './auth';
+import { createFetchWithTerminal, createTerminalEndpoint } from './routes/terminal';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -927,8 +928,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     );
   }
 
+  const terminalEndpoint = createTerminalEndpoint();
   const server = Bun.serve({
-    fetch: app.fetch,
+    fetch: createFetchWithTerminal(
+      (request: Request): Response | Promise<Response> => app.fetch(request),
+      terminalEndpoint
+    ),
+    websocket: terminalEndpoint.websocket,
     hostname,
     port,
     idleTimeout: 255, // Max value (seconds) - prevents SSE connections from being killed
@@ -975,6 +981,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Graceful shutdown
   const shutdown = (): void => {
     getLog().info('server_shutting_down');
+    terminalEndpoint.destroyAll();
     stopCleanupScheduler();
     persistence.stopPeriodicFlush();
 
