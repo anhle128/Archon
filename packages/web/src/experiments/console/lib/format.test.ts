@@ -8,6 +8,7 @@ import {
   elapsedSince,
   ensureUtc,
   formatClock,
+  formatDurationMs,
   formatRelativeToBaseline,
   formatUsdAmount,
   relativeTime,
@@ -88,5 +89,16 @@ describe('formatUsdAmount', () => {
     expect(formatUsdAmount(0.004)).toBe('$0.004');
     expect(formatUsdAmount(0.004, true)).toBe('≈$0.004');
     expect(formatUsdAmount(2.5)).toBe('$2.50');
+  });
+});
+
+describe('formatDurationMs', () => {
+  test('formats millisecond, second, and minute boundaries', () => {
+    expect(formatDurationMs(0)).toBe('0ms');
+    expect(formatDurationMs(999)).toBe('999ms');
+    expect(formatDurationMs(1000)).toBe('1.0s');
+    expect(formatDurationMs(59999)).toBe('60.0s');
+    expect(formatDurationMs(60000)).toBe('1.0m');
+    expect(formatDurationMs(90000)).toBe('1.5m');
   });
 });

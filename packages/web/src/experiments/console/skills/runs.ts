@@ -67,6 +67,10 @@ export type WorkflowNodeState = components['schemas']['WorkflowNodeState'];
 export type WorkflowNodeMessage = components['schemas']['WorkflowNodeMessage'];
 export type WorkflowNodeMessagesResponse = components['schemas']['WorkflowNodeMessagesResponse'];
 
+export type PendingInteraction = components['schemas']['PendingInteraction'];
+export type AskAnswerBody = components['schemas']['AskAnswerBody'];
+export type WorkflowRunActionResponse = components['schemas']['WorkflowRunActionResponse'];
+
 export interface ConsoleRunDetail {
   run: Run;
   events: RunEvent[];
@@ -74,19 +78,29 @@ export interface ConsoleRunDetail {
   nodeStates: WorkflowNodeState[];
   approval: unknown;
   usage: RunDetailResponse['usage'];
+  pendingInteractions: PendingInteraction[];
+  viewerIsStarter: boolean;
+  starterDisplayName: string | null;
+  runError: string | null;
 }
 
 export async function getRun(id: string): Promise<ConsoleRunDetail> {
   const res = await requestJson<RunDetailResponse>(`/api/workflows/runs/${encodeURIComponent(id)}`);
   const approval = res.run.metadata.approval ?? null;
+  const metadataError = res.run.metadata.error;
   return {
     run: toRun(res.run),
     events: res.events.map(toRunEvent),
     rawEvents: res.events,
     nodeStates: res.nodeStates,
     approval,
-    // Generated WorkflowRunDetail.usage is already UsageReport | null — no cast.
     usage: res.usage,
+    pendingInteractions: res.pending_interactions ?? [],
+    // OpenAPI types this as boolean; === true still maps missing runtime values to false.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare -- US-001 locked mapping
+    viewerIsStarter: res.viewer_is_starter === true,
+    starterDisplayName: res.starter_display_name,
+    runError: typeof metadataError === 'string' ? metadataError : null,
   };
 }
 
@@ -132,6 +146,21 @@ export async function abandonRun(id: string): Promise<void> {
     method: 'POST',
     body: JSON.stringify({}),
   });
+}
+
+export async function answerAskHuman(
+  runId: string,
+  requestId: string,
+  body: AskAnswerBody
+): Promise<WorkflowRunActionResponse> {
+  return requestJson<WorkflowRunActionResponse>(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/ask/${encodeURIComponent(requestId)}/answer`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
 }
 
 /**

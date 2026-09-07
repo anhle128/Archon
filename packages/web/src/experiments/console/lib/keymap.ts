@@ -89,11 +89,21 @@ function defaultInputGuard(): boolean {
  * mounted" and "dialog's input focused" where a fast keystroke would hit
  * the route binding underneath instead of the dialog. Scanning for any
  * `[role="dialog"][aria-modal="true"]` closes that race generically, at
- * the cost of one querySelector per keydown.
+ * the cost of one DOM scan per keydown. Native `<dialog>` elements can stay
+ * mounted while closed, so they count only when their `open` flag is set.
  */
 function modalIsOpen(): boolean {
   if (typeof document === 'undefined') return false;
-  return document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+  for (const element of document.querySelectorAll('[role="dialog"][aria-modal="true"]')) {
+    if (element.tagName === 'DIALOG') {
+      if ((element as HTMLDialogElement).open) {
+        return true;
+      }
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 
 function arraysEqual(a: readonly string[], b: readonly string[]): boolean {

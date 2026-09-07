@@ -36,14 +36,26 @@ export function readNodeSearchParam(search: string): string | null {
 
 export function resolveInitialInspectSelection(input: {
   requestedNodeId: string | null;
+  preferredNodeId?: string | null;
   nodeStates: readonly WorkflowNodeState[];
   rows: readonly LogRow[];
   approvalNodeId: string | null;
 }): InspectSelection {
-  const { requestedNodeId, nodeStates, rows, approvalNodeId } = input;
+  const { requestedNodeId, preferredNodeId, nodeStates, rows, approvalNodeId } = input;
   if (requestedNodeId !== null && isKnownNode(requestedNodeId, nodeStates, rows)) {
     return { nodeId: requestedNodeId, logRowId: null };
   }
+
+  if (
+    preferredNodeId !== undefined &&
+    preferredNodeId !== null &&
+    isKnownNode(preferredNodeId, nodeStates, rows)
+  ) {
+    return selectionForNode(preferredNodeId, rows);
+  }
+
+  const awaiting = nodeStates.find(state => inspectStatus(state.status) === 'awaiting');
+  if (awaiting !== undefined) return selectionForNode(awaiting.nodeId, rows);
 
   const running = nodeStates.find(state => inspectStatus(state.status) === 'running');
   if (running !== undefined) return selectionForNode(running.nodeId, rows);

@@ -57,7 +57,7 @@ describe('resolveInitialInspectSelection', () => {
     ).toEqual({ nodeId: 'ship', logRowId: null });
   });
 
-  test('an invalid query falls back to the first inspect-running node', () => {
+  test('an invalid query falls back to the first awaiting node', () => {
     expect(
       resolveInitialInspectSelection({
         requestedNodeId: 'ghost',
@@ -66,6 +66,41 @@ describe('resolveInitialInspectSelection', () => {
         approvalNodeId: 'ship',
       })
     ).toEqual({ nodeId: 'review', logRowId: 'review-row' });
+  });
+
+  test('a preferred live node wins over generic awaiting fallback', () => {
+    expect(
+      resolveInitialInspectSelection({
+        requestedNodeId: null,
+        preferredNodeId: 'review',
+        nodeStates: [
+          nodeState({ nodeId: 'approve', name: 'Approve', status: 'awaiting' }),
+          nodeState({ nodeId: 'review', name: 'Review', status: 'awaiting' }),
+        ],
+        rows: [
+          row({ id: 'approve-row', nodeId: 'approve', status: 'awaiting' }),
+          row({ id: 'review-row', nodeId: 'review', status: 'awaiting' }),
+        ],
+        approvalNodeId: null,
+      })
+    ).toEqual({ nodeId: 'review', logRowId: 'review-row' });
+  });
+
+  test('awaiting wins over an earlier running node', () => {
+    expect(
+      resolveInitialInspectSelection({
+        requestedNodeId: null,
+        nodeStates: [
+          nodeState({ nodeId: 'review', name: 'Review', status: 'running' }),
+          nodeState({ nodeId: 'ship', name: 'Ship', status: 'awaiting' }),
+        ],
+        rows: [
+          row({ id: 'review-row', nodeId: 'review', status: 'running' }),
+          row({ id: 'ship-row', nodeId: 'ship', status: 'awaiting' }),
+        ],
+        approvalNodeId: null,
+      })
+    ).toEqual({ nodeId: 'ship', logRowId: 'ship-row' });
   });
 
   test('declared approval is next when no inspect-running node exists', () => {

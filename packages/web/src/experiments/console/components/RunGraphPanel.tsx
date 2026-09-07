@@ -36,7 +36,7 @@ const MAX_ZOOM = 1.5;
 const ZOOM_STEP = 0.1;
 const ARROW_MARKER_ID = 'console-run-graph-arrow';
 
-type InspectCardStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+type InspectCardStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'awaiting';
 
 function clampManualZoom(value: number): number {
   const rounded = Math.round(value * 10) / 10;
@@ -108,7 +108,8 @@ function cardStatus(value: string): InspectCardStatus {
     value === 'running' ||
     value === 'completed' ||
     value === 'failed' ||
-    value === 'skipped'
+    value === 'skipped' ||
+    value === 'awaiting'
   ) {
     return value;
   }
@@ -119,6 +120,8 @@ function statusFill(status: InspectCardStatus): string {
   switch (status) {
     case 'running':
       return 'color-mix(in oklch, var(--running), transparent 90%)';
+    case 'awaiting':
+      return 'color-mix(in oklch, var(--warning), transparent 90%)';
     case 'completed':
       return 'color-mix(in oklch, var(--success), transparent 95%)';
     case 'failed':
@@ -134,6 +137,8 @@ function statusBorder(status: InspectCardStatus): string {
   switch (status) {
     case 'running':
       return 'color-mix(in oklch, var(--running), transparent 40%)';
+    case 'awaiting':
+      return 'color-mix(in oklch, var(--warning), transparent 40%)';
     case 'completed':
       return 'color-mix(in oklch, var(--success), transparent 60%)';
     case 'failed':
@@ -149,6 +154,8 @@ function statusGlyphClass(status: InspectCardStatus): string {
   switch (status) {
     case 'running':
       return 'text-[color:var(--running)]';
+    case 'awaiting':
+      return 'text-warning';
     case 'completed':
       return 'text-success';
     case 'failed':
@@ -347,7 +354,11 @@ export function RunGraphPanel({
                   aria-current={selected ? 'true' : undefined}
                   title={`${node.definition.id} · ${nodeBodyKind(node.definition)} · ${inspectStatusLabel(node.nodeState)}`}
                   className={`absolute flex flex-col justify-center gap-0.5 overflow-hidden rounded-[9px] border px-3 py-2 text-left transition-colors hover:brightness-110 ${
-                    status === 'running' ? 'animate-pulse' : ''
+                    status === 'running'
+                      ? 'animate-pulse'
+                      : status === 'awaiting'
+                        ? 'animate-[pulse_2.4s_ease-in-out_infinite] motion-reduce:animate-none'
+                        : ''
                   } ${dimmed ? 'opacity-60' : ''}`}
                   style={style}
                   onClick={(): void => {

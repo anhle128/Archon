@@ -199,4 +199,15 @@ describe('NodeDivider', () => {
     expect(selected).toEqual([['plan-start', 'plan']]);
     expect(host.textContent).toContain('Usage · Plan');
   });
+
+  test('renders awaiting as warning waiting-on-you chrome', async () => {
+    await act(async () => {
+      renderDivider({ status: 'awaiting' });
+    });
+    const status = [...host.querySelectorAll('span')].find(
+      item => (item.textContent ?? '').trim() === 'waiting on you · 00:01 · $0.25 / ≈$0.30 · 2t'
+    );
+    expect(status).toBeDefined();
+    expect(status?.className).toContain('text-warning');
+  });
 });

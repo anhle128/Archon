@@ -1,0 +1,257 @@
+{
+  "feature": "Answer the Ask in the Command Center Room",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Extend the typed console Ask data boundary",
+      "description": "As a console developer, I want getRun in packages/web/src/experiments/console/skills/runs.ts to retain pending interactions, starter identity, and metadata errors, and provide an answerAskHuman helper, so that the console can interact with AskHuman API endpoints cleanly.",
+      "acceptanceCriteria": [
+        "packages/web/src/experiments/console/skills/runs.ts re-exports generated schema types: PendingInteraction, AskAnswerBody, and WorkflowRunActionResponse.",
+        "ConsoleRunDetail interface adds pendingInteractions: PendingInteraction[], viewerIsStarter: boolean, starterDisplayName: string | null, and runError: string | null.",
+        "getRun maps pendingInteractions to res.pending_interactions ?? [], viewerIsStarter to res.viewer_is_starter === true, starterDisplayName to res.starter_display_name, and runError to string res.run.metadata.error or null.",
+        "answerAskHuman(runId, requestId, body) issues POST to /api/workflows/runs/${encodeURIComponent(runId)}/ask/${encodeURIComponent(requestId)}/answer with JSON content-type and stringified body using console requestJson.",
+        "Unit test in packages/web/src/experiments/console/skills/runs.node-messages.test.ts asserts retention of pendingInteractions, viewerIsStarter, starterDisplayName, and string runError.",
+        "Unit tests in packages/web/src/experiments/console/skills/runs.ask.test.ts assert URL encoding, JSON headers, payload forwarding, and rejection handling, passing via bun test src/experiments/console/skills/runs.ask.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 1 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:531-760). Modify packages/web/src/experiments/console/skills/runs.ts and runs.node-messages.test.ts; create runs.ask.test.ts.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/web/src/experiments/console/skills/runs.ts, runs.node-messages.test.ts, runs.ask.test.ts."
+    },
+    {
+      "id": "US-002",
+      "title": "Duplicate the Ask envelope parser",
+      "description": "As a console developer, I want a pure parser and validator for Ask envelopes in packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts, so that console Ask inputs are strictly validated without importing legacy UI code or Zod runtime.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts exporting AskQuestion, AskDraftValue, AskDraft, parseAskEnvelope, parseAskAnswer, isQuestionValid, isAskDraftValid, and draftToAnswerBody.",
+        "parseAskEnvelope returns AskQuestion[] in original envelope order for valid envelopes; returns null for non-objects, missing/empty questions, invalid types, missing prompt/selection/options, non-boolean allowOther, or duplicate question IDs.",
+        "isQuestionValid and isAskDraftValid enforce single-select (valid option or non-empty trimmed other if allowOther) and multi-select (non-empty array of valid options/trimmed other) rules, requiring all questions in the draft to be valid.",
+        "draftToAnswerBody converts a complete valid draft into { answers: Array<{ questionId: string; value: string | string[] }> } in envelope order.",
+        "parseAskAnswer decodes strictly either { decline: true } or valid answers array with non-empty questionId and string/string[] values, returning null for invalid or extra-keyed objects.",
+        "Imports in parse-ask-envelope.ts use console types from ../../skills/runs and do not import from components/workflows or Zod.",
+        "Unit tests in packages/web/src/experiments/console/components/ask/parse-ask-envelope.test.ts pass via bun test src/experiments/console/components/ask/parse-ask-envelope.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 2 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:762-817). Create packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts and parse-ask-envelope.test.ts. Copy algorithm from Story 6.5, replacing type imports with console skills/runs.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts, parse-ask-envelope.test.ts."
+    },
+    {
+      "id": "US-003",
+      "title": "Add loop-safe Ask selection",
+      "description": "As a console architect, I want selectVisibleNodeAskInteractions in packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts, so that Ask cards anchor cleanly at matching tool messages without leaking across loop slices.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts exporting selectVisibleNodeAskInteractions.",
+        "selectVisibleNodeAskInteractions filters for kind === 'ask', selected nodeId, and status pending|answered in GET order; excludes purged and permission rows.",
+        "An Ask matching a tool row in the full transcript is included only when that tool row is in visibleMessages; an unanchored Ask is included only when visibleMessages reaches the end of the full transcript.",
+        "Implementation imports PendingInteraction and WorkflowNodeMessage only from ../../skills/runs and does not export unused mergeAgentRoomItems or AgentRoomItem.",
+        "Unit tests in packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts verify node filtering, loop slice isolation, and transcript tail fallback, passing via bun test src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 3 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:819-967). Create packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts and select-visible-node-ask-interactions.test.ts.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts, select-visible-node-ask-interactions.test.ts."
+    },
+    {
+      "id": "US-004",
+      "title": "Add the Ask mutation controller",
+      "description": "As a state architect, I want a per-request mutation controller in packages/web/src/experiments/console/components/ask/ask-answer-controller.ts, so that console Ask submissions are deduplicated, handle 409 conflicts, and trigger query invalidations.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/components/ask/ask-answer-controller.ts exporting AskActionState, AskActionStateByRequest, AskAnswerController, and createAskAnswerController.",
+        "createAskAnswerController maintains a private in-flight Set<string>; duplicate calls for the same in-flight requestId return immediately without a second POST, while different request IDs can run concurrently.",
+        "Transitions state to sending before POST, accepted with submitted answer and resolvedAt ISO timestamp upon success, rejected-late for HTTP 409 (detected via error instanceof HttpError && error.status === 409), and error with thrown message or 'Failed to answer.' otherwise.",
+        "Success and 409 trigger invalidate(), catching any invalidation failure and logging console.warn with run and request IDs without reverting accepted or rejected-late state.",
+        "Unit tests in packages/web/src/experiments/console/components/ask/ask-answer-controller.test.ts cover success, 409, error, concurrency, and duplicate suppression, passing via bun test src/experiments/console/components/ask/ask-answer-controller.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 4 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:969-1038). Create packages/web/src/experiments/console/components/ask/ask-answer-controller.ts and ask-answer-controller.test.ts. Uses console HttpError from ../../lib/http.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/experiments/console/components/ask/ask-answer-controller.ts, ask-answer-controller.test.ts."
+    },
+    {
+      "id": "US-005",
+      "title": "Add canonical and optimistic Ask presentation",
+      "description": "As a frontend developer, I want resolveAskCardPresentation in packages/web/src/experiments/console/components/ask/ask-card-presentation.ts, so that Ask card view states reflect optimistic actions, canonical answers, and resume errors.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/components/ask/ask-card-presentation.ts exporting AskCardViewState, AskCardPresentation, and resolveAskCardPresentation.",
+        "resolveAskCardPresentation derives viewState (pending, sending, answered, declined, rejected-late, failed-resume), preferring canonical interaction answer over local accepted answer, and retaining rejected-late even after refetch.",
+        "failed-resume is selected only when an accepted or canonical answer exists, nodeStatus is 'failed', and nodeError starts with 'Could not resume the AskHuman session'; unrelated node failures remain answered or declined.",
+        "Malformed canonical answers produce inline error 'Malformed canonical answer' while retaining answered viewState.",
+        "Unit tests in packages/web/src/experiments/console/components/ask/ask-card-presentation.test.ts cover view state matrix, resume error classification, and malformed canonical answers, passing via bun test src/experiments/console/components/ask/ask-card-presentation.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 5 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:1040-1099). Create packages/web/src/experiments/console/components/ask/ask-card-presentation.ts and ask-card-presentation.test.ts. Imports console types from ../../skills/runs and parseAskAnswer from ./parse-ask-envelope.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-004"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/experiments/console/components/ask/ask-card-presentation.ts, ask-card-presentation.test.ts."
+    },
+    {
+      "id": "US-006",
+      "title": "Derive awaiting state and initial inspect selection",
+      "description": "As a console architect, I want awaiting helpers and inspect-status policy updates, so that awaiting nodes are preserved as first-class awaiting status with waiting-on-you labels and prioritized during initial selection.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/components/ask/awaiting-chrome.ts exporting countPendingAsks, isAskAwaitingRun, firstAwaitingNodeId, and isAskHumanUnsupportedError.",
+        "countPendingAsks counts only pending interactions with kind === 'ask' and status === 'pending'; isAskAwaitingRun returns true only when status === 'paused' and countPendingAsks > 0; isAskHumanUnsupportedError checks for prefix 'AskHuman is not supported by provider'.",
+        "inspect-status.ts preserves 'awaiting' as a valid InspectStatus (does not map to 'running'), inspectStatusLabel maps 'awaiting' to 'waiting on you', and isInspectRunLive includes 'running' and 'paused'.",
+        "build-console-log-entries preserves awaiting as displayStatus, and build-run-graph-input passes awaiting nodeState through to layout as on-path.",
+        "resolveInitialInspectSelection prioritizes valid ?node= param, then the first awaiting node, then the first running node, then approval node, then first log row.",
+        "Unit tests in awaiting-chrome.test.ts, inspect-status.test.ts, console-inspect-selection.test.ts, build-console-log-entries.test.ts, and build-run-graph-input.test.ts pass."
+      ],
+      "technicalNotes": "Follow plan Task 6 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:1101-1286). Create awaiting-chrome.ts and awaiting-chrome.test.ts; modify inspect-status.ts, console-inspect-selection.ts, and corresponding test files.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: awaiting-chrome.ts, awaiting-chrome.test.ts, inspect-status.ts, inspect-status.test.ts, console-inspect-selection.ts, console-inspect-selection.test.ts, build-console-log-entries.test.ts, build-run-graph-input.test.ts, NodeDivider.tsx."
+    },
+    {
+      "id": "US-007",
+      "title": "Render awaiting warning chrome in Logs and Graph",
+      "description": "As a UI developer, I want NodeDivider and RunGraphPanel to render warning-colored waiting on you chrome for awaiting nodes, so that operators can immediately identify paused nodes requiring input.",
+      "acceptanceCriteria": [
+        "NodeDividerProps['status'] accepts 'awaiting', rendering 'waiting on you' with text-warning color class in NodeDivider.tsx.",
+        "RunGraphPanel InspectCardStatus and cardStatus accept 'awaiting', rendering statusFill 'color-mix(in oklch, var(--warning), transparent 90%)', statusBorder 'color-mix(in oklch, var(--warning), transparent 40%)', statusGlyphClass 'text-warning', and pulsing animation class 'animate-[pulse_2.4s_ease-in-out_infinite] motion-reduce:animate-none'.",
+        "Graph cards for awaiting nodes display 'waiting on you' in content and title attribute.",
+        "Unit tests in packages/web/src/experiments/console/components/NodeDivider.test.tsx and RunGraphPanel.test.tsx pass via bun test src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunGraphPanel.test.tsx."
+      ],
+      "technicalNotes": "Follow plan Task 7 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:1288-1389). Modify packages/web/src/experiments/console/components/NodeDivider.tsx, NodeDivider.test.tsx, RunGraphPanel.tsx, and RunGraphPanel.test.tsx.",
+      "dependsOn": [
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/experiments/console/components/NodeDivider.tsx, NodeDivider.test.tsx, RunGraphPanel.tsx, RunGraphPanel.test.tsx."
+    },
+    {
+      "id": "US-008",
+      "title": "Build the console Ask card",
+      "description": "As a user, I want an accessible, console-owned AskCard component with single/multi-choice, custom Other, decline confirmation dialog, and teammate read-only view, so that I can answer or decline agent questions directly in the room.",
+      "acceptanceCriteria": [
+        "packages/web/src/experiments/console/lib/format.ts exports formatDurationMs(ms: number) formatting <1000ms as 'Xms', <60s as 'X.Xs', and >=60s as 'X.Xm', verified by format.test.ts.",
+        "Create packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx exporting ConsoleAskCard and ConsoleInvalidAskCard using native HTML elements (form, fieldset, legend, radio, checkbox, textarea, button, dialog) without shadcn imports.",
+        "Root form has aria-label='question from agent, N questions', border-warning bg-surface-elevated classes, header '${agentDisplayName} is asking', and meta row showing nodeId and elapsed duration via formatDurationMs.",
+        "Starter pending card renders Submit (enabled only when isAskDraftValid is true) and Decline (opens native dialog with title 'Decline this ask?' and description 'The agent will be told you declined').",
+        "Non-starter pending card renders disabled controls, omits buttons, and shows 'Waiting for ${starterDisplayName ?? 'the run starter'} to answer'.",
+        "Resolved states display question-labelled summaries, semantic <time> timestamps, 'Answered \u00b7 by you' (starter only) / 'Answered' (teammate), 'Declined', 'Already answered' (409), and 'Resume failed \u2014 node failed; your answer is preserved below'.",
+        "ConsoleInvalidAskCard renders non-interactive role='alert' with 'Invalid Ask payload' and raw payload disclosure.",
+        "Unit tests in packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx pass with no React warnings."
+      ],
+      "technicalNotes": "Follow plan Task 8 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:1391-1574). Modify lib/format.ts and format.test.ts; create ConsoleAskCard.tsx and ConsoleAskCard.test.tsx.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-005"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/src/experiments/console/lib/format.ts, format.test.ts, components/ask/ConsoleAskCard.tsx, ConsoleAskCard.test.tsx."
+    },
+    {
+      "id": "US-009",
+      "title": "Build the console run Ask chrome",
+      "description": "As an operator, I want ConsoleAskChrome to display an awaiting input pill during Ask pauses or an error banner during CAP-7 provider rejections, so that I can see run-level HITL state and navigate to awaiting nodes.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx exporting ConsoleAskChrome(props: ConsoleAskChromeProps).",
+        "When run has failed with a CAP-7 error (isAskHumanUnsupportedError(runError) is true), renders an error banner with role='alert', border-error bg-error/10 text-error, the full persisted error message, and no awaiting pill.",
+        "When run is paused with pending Asks (isAskAwaitingRun is true), renders a warning button with aria-live='polite', warning tokens, and text 'Awaiting input (${count})'.",
+        "Clicking the awaiting pill calls onRequestGraphView first, then onSelectAwaitingNode with the first awaiting node ID; click is a no-op if no awaiting node exists.",
+        "When neither condition holds (or declared-gate pause without pending asks), returns null.",
+        "Unit tests in packages/web/src/experiments/console/components/ask/ConsoleAskChrome.test.tsx pass via bun test src/experiments/console/components/ask/ConsoleAskChrome.test.tsx."
+      ],
+      "technicalNotes": "Follow plan Task 9 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:1576-1636). Create packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx and ConsoleAskChrome.test.tsx.",
+      "dependsOn": [
+        "US-001",
+        "US-006"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx, ConsoleAskChrome.test.tsx."
+    },
+    {
+      "id": "US-010",
+      "title": "Place Ask cards in the Command Center agent room",
+      "description": "As a user, I want Ask cards placed inline after matching tool rows in the Command Center agent room and threaded through ConsoleInspectPane, so that the persistent room presents cards across both Log and Graph doors.",
+      "acceptanceCriteria": [
+        "AgentTranscript in ConsoleNodeRoom.tsx accepts generic slots renderAfterMessage?: (message: WorkflowNodeMessage) => ReactNode and renderAtEnd?: ReactNode without HITL types.",
+        "ConsoleNodeRoom splits visible Asks into anchored and unanchored; renders anchored cards immediately following matching tool messages via renderAfterMessage, and unanchored cards via renderAtEnd.",
+        "When transcript has no messages or fails to load, unanchored cards are rendered at the tail (after the retry button on error), preventing query failures from blocking Ask actions.",
+        "Only agent rooms (resolution.kind === 'agent') render Ask cards; stdout, gate, and loop-group rooms never render Ask cards.",
+        "ConsoleInspectPane accepts pendingInteractions, viewerIsStarter, starterDisplayName, actionStates, and onSubmitAsk, threading them to ConsoleNodeRoom.",
+        "Switching between Log and Graph views in ConsoleInspectPane preserves the persistent room and does not remount Ask cards.",
+        "Tests in packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx and ConsoleInspectPane.test.tsx pass."
+      ],
+      "technicalNotes": "Follow plan Task 10 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:1638-2054). Modify packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx, ConsoleNodeRoom.test.tsx, ConsoleInspectPane.tsx, and ConsoleInspectPane.test.tsx.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-005",
+        "US-008"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx, ConsoleNodeRoom.test.tsx, ConsoleInspectPane.tsx, ConsoleInspectPane.test.tsx."
+    },
+    {
+      "id": "US-011",
+      "title": "Wire run-detail ownership, chrome, and composer isolation",
+      "description": "As an architect, I want RunDetailPage to own the AskAnswerController and action states, render ConsoleAskChrome, guard keymap shortcuts, and display 'Awaiting input' in the header, while keeping ChatComposer completely isolated.",
+      "acceptanceCriteria": [
+        "RunDetailHeaderProps adds askAwaiting?: boolean; when run is paused and askAwaiting is true, displays 'Awaiting input' instead of 'Waiting for approval'.",
+        "RunDetailPage owns per-run AskActionStateByRequest and instantiates createAskAnswerController per run.id; resets action states on run change.",
+        "Controller invalidation invalidates K.run(runId) and K.nodeMessages(runId, selectedNodeId) when a node is selected.",
+        "RunDetailPage renders ConsoleAskChrome under RunDetailHeader with onRequestGraphView setting view to 'graph' and onSelectAwaitingNode selecting the node.",
+        "Keymap 'a' / 'r' bindings are guarded by hasDeclaredGate (isPaused && detail?.run.approval != null) and never trigger Ask submissions or declines.",
+        "ConsoleInspectPane receives required Ask props from RunDetailPage.",
+        "ChatComposer and ChatPage receive zero pending interaction props and remain conversation-only.",
+        "Tests in packages/web/src/experiments/console/components/RunDetailHeader.test.tsx and routes/RunDetailPage.test.tsx pass."
+      ],
+      "technicalNotes": "Follow plan Task 11 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:2056-2384). Modify RunDetailHeader.tsx, RunDetailHeader.test.tsx, RunDetailPage.tsx, and RunDetailPage.test.tsx.",
+      "dependsOn": [
+        "US-001",
+        "US-004",
+        "US-006",
+        "US-007",
+        "US-009",
+        "US-010"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/web/src/experiments/console/components/RunDetailHeader.tsx, RunDetailHeader.test.tsx, routes/RunDetailPage.tsx, routes/RunDetailPage.test.tsx, components/ConsoleInspectPane.tsx."
+    },
+    {
+      "id": "US-012",
+      "title": "Isolation, docs, validate, and close tracking",
+      "description": "As a quality engineer, I want isolation tests, documentation updates, full repository validation, and sprint status tracking updated, so that Story 6.6 and Epic 6 are officially verified and closed.",
+      "acceptanceCriteria": [
+        "console-isolation.test.ts replaces premature HITL test with final architecture guard: verifies ConsoleNodeRoom, ConsoleInspectPane, and RunDetailPage do not import components/workflows or ChatComposer; verifies room imports ConsoleAskCard and page imports ConsoleAskChrome; verifies ChatComposer and ChatPage do not contain pendingInteractions, answerAskHuman, ConsoleAskCard, or ConsoleAskChrome.",
+        "packages/web/src/experiments/console/README.md replaces Epic 6 handoff note with AskHuman description.",
+        "All focused console Ask/inspect suites and Story 6.5 legacy Ask regression suites pass with zero failures.",
+        "bun run type-check, bun run lint, bun run format:check, and bun run validate pass at repository root.",
+        "_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml updates 6-6-answer-the-ask-in-the-command-center-room to 'done', epic-6 to 'done', with matching last_updated timestamps."
+      ],
+      "technicalNotes": "Follow plan Task 12 (docs/superpowers/plans/2026-09-07-answer-ask-command-center-room.md:2386-2539). Modify packages/web/src/experiments/console/console-isolation.test.ts, packages/web/src/experiments/console/README.md, and sprint-status.yaml.",
+      "dependsOn": [
+        "US-011"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/web/src/experiments/console/console-isolation.test.ts, packages/web/src/experiments/console/README.md, _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml."
+    }
+  ]
+}

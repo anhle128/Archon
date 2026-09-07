@@ -8,6 +8,8 @@ import type { RunEvent } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Run } from '../primitives/run';
 import type {
+  AskAnswerBody,
+  PendingInteraction,
   WorkflowEvent,
   WorkflowNodeMessagesResponse,
   WorkflowNodeState,
@@ -17,6 +19,7 @@ import type { DagNode } from '../skills/workflows';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import { StreamContextProvider } from '../lib/stream-context';
+import type { AskActionStateByRequest } from './ask/ask-answer-controller';
 import { ConsoleNodeRoom } from './ConsoleNodeRoom';
 import { RunGraphPanel } from './RunGraphPanel';
 import { RunStream } from './RunStream';
@@ -48,6 +51,11 @@ export interface ConsoleInspectPaneProps {
   onCloseRoom: () => void;
   loadDefinition: (workflowName: string, cwd: string) => Promise<DagNode[]>;
   loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+  pendingInteractions: readonly PendingInteraction[];
+  viewerIsStarter: boolean;
+  starterDisplayName: string | null;
+  actionStates: AskActionStateByRequest;
+  onSubmitAsk: (requestId: string, body: AskAnswerBody) => Promise<void>;
 }
 
 function resolveSelectedRow(
@@ -96,6 +104,11 @@ export function ConsoleInspectPane({
   onCloseRoom,
   loadDefinition,
   loadMessages,
+  pendingInteractions,
+  viewerIsStarter,
+  starterDisplayName,
+  actionStates,
+  onSubmitAsk,
 }: ConsoleInspectPaneProps): ReactElement {
   const definitionQuery = useEntity<DagNode[]>(K.workflowDagNodes(projectCwd, run.workflow), () =>
     loadDefinition(run.workflow, projectCwd)
@@ -165,6 +178,11 @@ export function ConsoleInspectPane({
           isLive={isInspectRunLive(run.status)}
           loadMessages={loadMessages}
           onClose={onCloseRoom}
+          pendingInteractions={pendingInteractions}
+          viewerIsStarter={viewerIsStarter}
+          starterDisplayName={starterDisplayName}
+          actionStates={actionStates}
+          onSubmitAsk={onSubmitAsk}
         />
       </aside>
     </div>

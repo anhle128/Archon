@@ -166,10 +166,10 @@ describe('buildConsoleLogEntries', () => {
     });
   });
 
-  test('maps awaiting node status to running display status', () => {
+  test('keeps awaiting as the display status', () => {
     const [entry] = entriesFor([nodeState({ nodeId: 'ask', name: 'Ask', status: 'awaiting' })], []);
 
-    expect(entry?.displayStatus).toBe('running');
+    expect(entry?.displayStatus).toBe('awaiting');
     expect(entry?.startedAt).toBe(RUN_STARTED);
   });
 

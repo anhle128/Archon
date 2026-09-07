@@ -1,6 +1,6 @@
 /**
  * Console-owned inspect room: one persistent surface for every Story 5.5
- * node body, without Epic 6 interaction chrome.
+ * node body, with Ask cards inline at agent tool invocations.
  */
 import { useEffect, useRef, type ReactElement, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
@@ -10,6 +10,8 @@ import remarkGfm from 'remark-gfm';
 
 import type { Run } from '../primitives/run';
 import type {
+  AskAnswerBody,
+  PendingInteraction,
   WorkflowEvent,
   WorkflowNodeMessage,
   WorkflowNodeMessagesResponse,
@@ -19,6 +21,11 @@ import type { DagNode } from '../skills/workflows';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import { ApprovalPanel } from './ApprovalPanel';
+import { ConsoleAskCard, ConsoleInvalidAskCard } from './ask/ConsoleAskCard';
+import type { AskActionStateByRequest } from './ask/ask-answer-controller';
+import { resolveAskCardPresentation } from './ask/ask-card-presentation';
+import { parseAskEnvelope } from './ask/parse-ask-envelope';
+import { selectVisibleNodeAskInteractions } from './ask/select-visible-node-ask-interactions';
 import type { LogRow } from './inspect/build-log-rows';
 import { inspectStatusLabel } from './inspect/inspect-status';
 import { resolveRoomKind, type RoomKind, type RoomResolution } from './inspect/resolve-room-kind';
@@ -48,6 +55,11 @@ export interface ConsoleNodeRoomProps {
   isLive: boolean;
   loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
   onClose: () => void;
+  pendingInteractions: readonly PendingInteraction[];
+  viewerIsStarter: boolean;
+  starterDisplayName: string | null;
+  actionStates: AskActionStateByRequest;
+  onSubmitAsk: (requestId: string, body: AskAnswerBody) => Promise<void>;
 }
 
 const IDLE_NODE_MESSAGES_KEY = 'console-node-room:idle';
@@ -192,17 +204,43 @@ function formattedJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-function AgentTranscript({ messages }: { messages: readonly WorkflowNodeMessage[] }): ReactElement {
+function AgentTranscript({
+  messages,
+  renderAfterMessage,
+  renderAtEnd,
+}: {
+  messages: readonly WorkflowNodeMessage[];
+  renderAfterMessage?: (message: WorkflowNodeMessage) => ReactNode;
+  renderAtEnd?: ReactNode;
+}): ReactElement {
   if (messages.length === 0) {
-    return <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>;
+    return renderAtEnd === undefined ? (
+      <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>
+    ) : (
+      <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">{renderAtEnd}</div>
+    );
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
       {messages.map(message => (
-        <div key={message.id}>{renderTranscriptItem(message)}</div>
+        <div key={message.id}>
+          {renderTranscriptItem(message)}
+          {renderAfterMessage?.(message)}
+        </div>
       ))}
+      {renderAtEnd}
     </div>
   );
+}
+
+function collectToolIds(messages: readonly WorkflowNodeMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.kind === 'tool') {
+      ids.add(message.payload.id);
+    }
+  }
+  return ids;
 }
 
 function renderTranscriptItem(message: WorkflowNodeMessage): ReactElement {
@@ -456,6 +494,11 @@ export function ConsoleNodeRoom({
   isLive,
   loadMessages,
   onClose,
+  pendingInteractions,
+  viewerIsStarter,
+  starterDisplayName,
+  actionStates,
+  onSubmitAsk,
 }: ConsoleNodeRoomProps): ReactElement {
   const resolution =
     nodeId === null ? null : resolveRoomKind(nodeId, definitionNodes, events, approval);
@@ -485,6 +528,90 @@ export function ConsoleNodeRoom({
   const headerStatus = row === null ? '' : inspectStatusLabel(row.status);
   const headerExtra = row === null ? null : selectionExtra(row);
 
+  const allMessages = messagesQuery.error === undefined ? (messagesQuery.data?.messages ?? []) : [];
+  const visibleMessages = row === null ? [] : selectNodeRoomMessages(allMessages, row.selection);
+  const visibleAsks =
+    row !== null && resolution?.kind === 'agent'
+      ? selectVisibleNodeAskInteractions({
+          pending: pendingInteractions,
+          nodeId: row.nodeId,
+          allMessages,
+          visibleMessages,
+        })
+      : [];
+  const visibleToolIds = collectToolIds(visibleMessages);
+  const anchoredAsks = visibleAsks.filter(interaction =>
+    visibleToolIds.has(interaction.tool_use_id)
+  );
+  const unanchoredAsks = visibleAsks.filter(
+    interaction => !visibleToolIds.has(interaction.tool_use_id)
+  );
+  const orderedAsks = [
+    ...visibleMessages.flatMap(message =>
+      message.kind === 'tool'
+        ? anchoredAsks.filter(interaction => interaction.tool_use_id === message.payload.id)
+        : []
+    ),
+    ...unanchoredAsks,
+  ];
+  const selectedNodeState =
+    row === null ? undefined : nodeStates.find(state => state.nodeId === row.nodeId);
+  const firstActionableId = orderedAsks.find(interaction => {
+    if (!viewerIsStarter || interaction.status !== 'pending') return false;
+    if (parseAskEnvelope(interaction.envelope) === null) return false;
+    return (
+      resolveAskCardPresentation({
+        interaction,
+        action: actionStates[interaction.tool_use_id],
+        nodeStatus: selectedNodeState?.status,
+        nodeError: selectedNodeState?.error,
+      }).viewState === 'pending'
+    );
+  })?.id;
+  const nowMs = Date.now();
+  const agentDisplayName = row?.label ?? '';
+  const roomNodeId = row?.nodeId ?? '';
+
+  const renderAskCard = (interaction: PendingInteraction): ReactElement => {
+    const questions = parseAskEnvelope(interaction.envelope);
+    if (questions === null) {
+      return (
+        <ConsoleInvalidAskCard
+          key={interaction.id}
+          interaction={interaction}
+          agentDisplayName={agentDisplayName}
+          nodeId={roomNodeId}
+        />
+      );
+    }
+    const requestId = interaction.tool_use_id;
+    return (
+      <ConsoleAskCard
+        key={interaction.id}
+        interaction={interaction}
+        questions={questions}
+        presentation={resolveAskCardPresentation({
+          interaction,
+          action: actionStates[requestId],
+          nodeStatus: selectedNodeState?.status,
+          nodeError: selectedNodeState?.error,
+        })}
+        viewerIsStarter={viewerIsStarter}
+        starterDisplayName={starterDisplayName}
+        agentDisplayName={agentDisplayName}
+        nodeId={roomNodeId}
+        autoFocus={interaction.id === firstActionableId}
+        nowMs={nowMs}
+        onSubmit={(body): void => {
+          void onSubmitAsk(requestId, body);
+        }}
+        onDecline={(): void => {
+          void onSubmitAsk(requestId, { decline: true });
+        }}
+      />
+    );
+  };
+
   let body: ReactNode;
   if (nodeId === null || resolution === null || row === null) {
     body = <RoomPlaceholder>Select a node</RoomPlaceholder>;
@@ -493,17 +620,22 @@ export function ConsoleNodeRoom({
   } else if (resolution.kind === 'agent') {
     if (messagesQuery.error !== undefined) {
       body = (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-[13px] text-text-secondary">
-          <p>Failed to load node transcript</p>
-          <button
-            type="button"
-            className="text-[12px] text-primary transition-colors hover:text-accent-bright"
-            onClick={(): void => {
-              messagesQuery.refetch();
-            }}
-          >
-            Retry
-          </button>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-[13px] text-text-secondary">
+            <p>Failed to load node transcript</p>
+            <button
+              type="button"
+              className="text-[12px] text-primary transition-colors hover:text-accent-bright"
+              onClick={(): void => {
+                messagesQuery.refetch();
+              }}
+            >
+              Retry
+            </button>
+          </div>
+          {unanchoredAsks.length === 0 ? null : (
+            <div className="flex flex-col gap-3 p-3">{unanchoredAsks.map(renderAskCard)}</div>
+          )}
         </div>
       );
     } else if (messagesQuery.loading || messagesQuery.data === undefined) {
@@ -511,7 +643,15 @@ export function ConsoleNodeRoom({
     } else {
       body = (
         <AgentTranscript
-          messages={selectNodeRoomMessages(messagesQuery.data.messages, row.selection)}
+          messages={visibleMessages}
+          renderAfterMessage={(message: WorkflowNodeMessage): ReactNode =>
+            message.kind === 'tool'
+              ? anchoredAsks
+                  .filter(interaction => interaction.tool_use_id === message.payload.id)
+                  .map(renderAskCard)
+              : undefined
+          }
+          renderAtEnd={unanchoredAsks.length === 0 ? undefined : unanchoredAsks.map(renderAskCard)}
         />
       );
     }

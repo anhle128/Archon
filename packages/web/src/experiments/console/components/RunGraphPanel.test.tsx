@@ -289,4 +289,26 @@ describe('RunGraphPanel', () => {
     expect(pendingText).not.toContain('Could not load graph:');
     expect(pendingText).not.toContain('No workflow nodes to display.');
   });
+
+  test('renders awaiting review card with warning waiting-on-you chrome', async () => {
+    await act(async () => {
+      renderPanel({
+        nodeStates: [
+          nodeState('fix', 'completed', 'Fix'),
+          nodeState('review', 'awaiting', 'Review'),
+          nodeState('review_router', 'pending', 'Review router'),
+          nodeState('done', 'pending', 'Done'),
+          nodeState('escalate', 'skipped', 'Escalate'),
+        ],
+      });
+    });
+    await flush();
+
+    const waitingCard = host.querySelector('[data-node-id="review"]');
+    expect(waitingCard?.textContent).toContain('waiting on you');
+    expect(waitingCard?.getAttribute('title')).toContain('waiting on you');
+    expect(waitingCard?.className).toContain('animate-[pulse_2.4s_ease-in-out_infinite]');
+    expect(waitingCard?.className).toContain('motion-reduce:animate-none');
+    expect(waitingCard?.querySelector('span[aria-hidden]')?.className).toContain('text-warning');
+  });
 });
