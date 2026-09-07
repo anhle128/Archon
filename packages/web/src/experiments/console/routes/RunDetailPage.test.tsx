@@ -8,7 +8,12 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
 import { toRun, type Run } from '../primitives/run';
-import type { RunDetailResponse, WorkflowEvent, WorkflowNodeState } from '../skills/runs';
+import type {
+  PendingInteraction,
+  RunDetailResponse,
+  WorkflowEvent,
+  WorkflowNodeState,
+} from '../skills/runs';
 import type { DagNode } from '../skills/workflows';
 import { invalidate } from '../store/cache';
 import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
@@ -210,6 +215,7 @@ describe('RunDetailPage inspect selection', () => {
   let runId = '';
   let cwd = '';
   let workflow = '';
+  let answerPosts: { path: string; body: unknown }[] = [];
 
   beforeEach(() => {
     seq += 1;
@@ -217,6 +223,7 @@ describe('RunDetailPage inspect selection', () => {
     runId = `run-us010-${String(seq)}`;
     cwd = `/repo us010 ${String(seq)}`;
     workflow = `inspect-us010-${String(seq)}`;
+    answerPosts = [];
     win = installHappyDom();
     win.localStorage.clear();
     const el = win.document.createElement('div');
@@ -355,6 +362,34 @@ describe('RunDetailPage inspect selection', () => {
     nodeState({ nodeId: 'build', name: 'Build', status: 'running' }),
   ];
 
+  function ask(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
+    return {
+      id: 'ask-1',
+      workflow_run_id: runId,
+      node_id: 'review',
+      tool_use_id: 'tool-1',
+      kind: 'ask',
+      status: 'pending',
+      envelope: {
+        questions: [
+          {
+            id: 'q1',
+            prompt: 'Ship it?',
+            selection: 'single',
+            options: ['Ship', 'Hold'],
+            allowOther: false,
+          },
+        ],
+      },
+      answer: null,
+      provider_session_id: 'session-1',
+      created_at: CREATED_AT,
+      resolved_at: null,
+      resolved_by: null,
+      ...overrides,
+    };
+  }
+
   function stubPageFetch(
     options: {
       status?: RunDetailResponse['run']['status'];
@@ -363,11 +398,17 @@ describe('RunDetailPage inspect selection', () => {
       nodeStates?: WorkflowNodeState[];
       events?: WorkflowEvent[];
       workflowNodes?: DagNode[];
+      pendingInteractions?: PendingInteraction[];
+      viewerIsStarter?: boolean;
+      starterDisplayName?: string | null;
     } = {}
   ): void {
     const detailStatus = options.status ?? 'running';
     const cwdQuery = `/api/workflows?cwd=${encodeURIComponent(cwd)}`;
-    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(((input: RequestInfo | URL) => {
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(((
+      input: RequestInfo | URL,
+      init?: RequestInit
+    ) => {
       const path = requestPath(input);
       if (path === `/api/codebases/${encodeURIComponent(projectId)}`) {
         return Promise.resolve(
@@ -392,10 +433,10 @@ describe('RunDetailPage inspect selection', () => {
             run: runPayload(detailStatus, options.metadata),
             events: options.events ?? eventsFor(runId),
             nodeStates: options.nodeStates ?? NODE_STATES,
-            pending_interactions: [],
+            pending_interactions: options.pendingInteractions ?? [],
             usage: null,
-            viewer_is_starter: false,
-            starter_display_name: null,
+            viewer_is_starter: options.viewerIsStarter ?? false,
+            starter_display_name: options.starterDisplayName ?? null,
           } satisfies RunDetailResponse)
         );
       }
@@ -460,6 +501,18 @@ describe('RunDetailPage inspect selection', () => {
       }
       if (path === '/api/health') {
         return Promise.resolve(jsonResponse({ ok: true, is_docker: true }));
+      }
+      if (
+        path.startsWith(`/api/workflows/runs/${encodeURIComponent(runId)}/ask/`) &&
+        path.endsWith('/answer')
+      ) {
+        if (init?.method !== 'POST') throw new Error('Ask answer must use POST');
+        if (new Headers(init.headers).get('Content-Type') !== 'application/json') {
+          throw new Error('Ask answer must use JSON');
+        }
+        if (typeof init.body !== 'string') throw new Error('Ask answer body must be JSON text');
+        answerPosts.push({ path, body: JSON.parse(init.body) as unknown });
+        return Promise.resolve(jsonResponse({ success: true, message: 'ok' }));
       }
       return Promise.resolve(jsonResponse({ error: `unmocked ${path}` }, 404));
     }) as typeof fetch);
@@ -539,6 +592,8 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.textContent).toContain('Review session document');
     expect(host.querySelector('a[href="https://plannotator.example/review"]')).not.toBeNull();
     expect(host.textContent).not.toContain(REVIEW_TEXT);
+    expect(host.textContent).toContain('Waiting for approval');
+    expect(host.textContent).not.toContain('Awaiting input (');
   });
 
   test('an invalid ?node= query falls back to the inspect-running node', async () => {
@@ -731,5 +786,80 @@ describe('RunDetailPage inspect selection', () => {
     expect(locationSearch()).toBe('?node=review');
     expect(filter.value).toBe('all');
     expect(host.querySelector('#node-transition-build-start')).not.toBeNull();
+  });
+
+  test('jumps to an awaiting room, answers through the skill, and keeps gate keys inactive', async () => {
+    const pending = ask();
+    stubPageFetch({
+      status: 'paused',
+      nodeStates: [
+        nodeState({ nodeId: 'review', name: 'Review', status: 'awaiting' }),
+        nodeState({ nodeId: 'build', name: 'Build', status: 'running' }),
+      ],
+      pendingInteractions: [pending],
+      viewerIsStarter: true,
+      starterDisplayName: 'Avery',
+    });
+    await act(async () => {
+      renderPage('?node=build');
+    });
+    await flushUntil('awaiting chrome', () =>
+      (host.textContent ?? '').includes('Awaiting input (1)')
+    );
+
+    await act(async () => {
+      tabButton('Awaiting input (1)').click();
+    });
+    await flushUntil(
+      'review Ask room',
+      () =>
+        host.querySelector('[data-testid="console-run-graph-scroller"]') !== null &&
+        host.querySelector('[aria-label="review room"] form') !== null
+    );
+    expect(locationSearch()).toContain('node=review');
+
+    const choice = host.querySelector('input[type="radio"][value="Ship"]');
+    if (!(choice instanceof HTMLInputElement)) throw new Error('missing Ship choice');
+    await act(async () => {
+      choice.click();
+    });
+    const submit = [...host.querySelectorAll('button')].find(
+      button => (button.textContent ?? '').trim() === 'Submit'
+    );
+    if (!(submit instanceof HTMLButtonElement)) throw new Error('missing Submit');
+    expect(submit.disabled).toBe(false);
+    await act(async () => {
+      submit.click();
+    });
+    await flushUntil('accepted answer', () =>
+      (host.textContent ?? '').includes('Answered · by you')
+    );
+    expect(answerPosts).toEqual([
+      {
+        path: `/api/workflows/runs/${encodeURIComponent(runId)}/ask/tool-1/answer`,
+        body: { answers: [{ questionId: 'q1', value: 'Ship' }] },
+      },
+    ]);
+
+    document.body.focus();
+    const approveKey = new KeyboardEvent('keydown', { key: 'a', cancelable: true });
+    const rejectKey = new KeyboardEvent('keydown', { key: 'r', cancelable: true });
+    window.dispatchEvent(approveKey);
+    window.dispatchEvent(rejectKey);
+    expect(approveKey.defaultPrevented).toBe(false);
+    expect(rejectKey.defaultPrevented).toBe(false);
+    expect(host.textContent).not.toContain('Reply…');
+  });
+
+  test('renders CAP-7 failure as error chrome without an awaiting pill', async () => {
+    const message = 'AskHuman is not supported by provider: grok';
+    stubPageFetch({ status: 'failed', metadata: { error: message } });
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil('CAP-7 banner', () => (host.textContent ?? '').includes(message));
+    const alert = host.querySelector('[role="alert"]');
+    expect(alert?.className).toContain('text-error');
+    expect(host.textContent).not.toContain('Awaiting input (');
   });
 });

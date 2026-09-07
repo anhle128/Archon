@@ -18,6 +18,13 @@ import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
 import { ArtifactPanel } from '../components/ArtifactPanel';
 import { ConsoleInspectPane } from '../components/ConsoleInspectPane';
+import { ConsoleAskChrome } from '../components/ask/ConsoleAskChrome';
+import {
+  createAskAnswerController,
+  type AskActionState,
+  type AskActionStateByRequest,
+} from '../components/ask/ask-answer-controller';
+import { isAskAwaitingRun } from '../components/ask/awaiting-chrome';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { buildConsoleLogEntries } from '../components/inspect/build-console-log-entries';
 import { buildLogRows } from '../components/inspect/build-log-rows';
@@ -38,7 +45,7 @@ import { runMessageConversationId, type Run, type RunEnvOverlay } from '../primi
 import { foldNodeRuns } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
-import type { ArtifactFile, ConsoleRunDetail } from '../skills/runs';
+import type { AskAnswerBody, ArtifactFile, ConsoleRunDetail } from '../skills/runs';
 
 /**
  * Run detail — the "logs" page, promoted out of a hidden tab.
@@ -151,6 +158,12 @@ export function RunDetailPage(): ReactElement {
     nodeId: null,
     logRowId: null,
   });
+  const [askActions, setAskActions] = useState<{
+    runId: string | undefined;
+    states: AskActionStateByRequest;
+  }>({ runId, states: {} });
+  const actionStates = askActions.runId === runId ? askActions.states : {};
+  const selectedNodeIdRef = useRef<string | null>(null);
 
   // `Project | null` / `ConsoleRunDetail | null` rather than the `as unknown as T`
   // casts the original sentinel used — keeps the null path honest for
@@ -310,6 +323,47 @@ export function RunDetailPage(): ReactElement {
     [replaceNodeSearch]
   );
 
+  selectedNodeIdRef.current = inspectSelection.nodeId;
+
+  const setAskActionState = useCallback(
+    (requestId: string, state: AskActionState): void => {
+      setAskActions(current => ({
+        runId,
+        states: {
+          ...(current.runId === runId ? current.states : {}),
+          [requestId]: state,
+        },
+      }));
+    },
+    [runId]
+  );
+
+  const askController = useMemo(
+    () =>
+      runId === undefined
+        ? null
+        : createAskAnswerController({
+            runId,
+            postAnswer: skill.answerAskHuman,
+            setActionState: setAskActionState,
+            invalidate: async (): Promise<void> => {
+              invalidate(K.run(runId));
+              const selectedNodeId = selectedNodeIdRef.current;
+              if (selectedNodeId !== null) {
+                invalidate(K.nodeMessages(runId, selectedNodeId));
+              }
+            },
+            now: (): Date => new Date(),
+          }),
+    [runId, setAskActionState]
+  );
+
+  const submitAsk = useCallback(
+    (requestId: string, body: AskAnswerBody): Promise<void> =>
+      askController?.submit(requestId, body) ?? Promise.resolve(),
+    [askController]
+  );
+
   const onCloseRoom = useCallback((): void => {
     setInspectSelection({ nodeId: null, logRowId: null });
     replaceNodeSearch(null);
@@ -334,6 +388,7 @@ export function RunDetailPage(): ReactElement {
   // across all render paths (loading, error, ready).
   const detailStatus = detail?.run.status ?? null;
   const isPaused = detailStatus === 'paused';
+  const hasDeclaredGate = isPaused && detail?.run.approval != null;
   const goBack = useCallback((): void => {
     if (projectId !== undefined) navigate(`/console/p/${projectId}`);
     else navigate('/console');
@@ -395,19 +450,27 @@ export function RunDetailPage(): ReactElement {
       {
         keys: ['a'],
         label: 'Approve',
-        when: (): boolean => isPaused,
+        when: (): boolean => hasDeclaredGate,
         run: clickApprove,
       },
       {
         keys: ['r'],
         label: 'Reject',
-        when: (): boolean => isPaused,
+        when: (): boolean => hasDeclaredGate,
         run: clickReject,
       },
       { keys: ['Escape'], label: 'Back to runs', run: goBack },
       { keys: ['h'], label: 'Back to runs', run: goBack },
     ],
-    [isPaused, goBack, setViewPersist, toggleToolCalls, toggleSystem, clickApprove, clickReject]
+    [
+      hasDeclaredGate,
+      goBack,
+      setViewPersist,
+      toggleToolCalls,
+      toggleSystem,
+      clickApprove,
+      clickReject,
+    ]
   );
   useKeymap({ bindings });
 
@@ -526,6 +589,19 @@ export function RunDetailPage(): ReactElement {
           projectId={projectId}
           projectName={project?.name ?? projectId}
           usage={detail.usage}
+          askAwaiting={isAskAwaitingRun(run.status, detail.pendingInteractions)}
+        />
+        <ConsoleAskChrome
+          status={run.status}
+          pendingInteractions={detail.pendingInteractions}
+          nodeStates={inspectNodeStates}
+          runError={detail.runError}
+          onRequestGraphView={(): void => {
+            setViewPersist('graph');
+          }}
+          onSelectAwaitingNode={(nodeId: string): void => {
+            onInspectSelect(nodeId);
+          }}
         />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -561,6 +637,11 @@ export function RunDetailPage(): ReactElement {
                 onCloseRoom={onCloseRoom}
                 loadDefinition={skill.getWorkflowDagNodes}
                 loadMessages={skill.listNodeMessages}
+                pendingInteractions={detail.pendingInteractions}
+                viewerIsStarter={detail.viewerIsStarter}
+                starterDisplayName={detail.starterDisplayName}
+                actionStates={actionStates}
+                onSubmitAsk={submitAsk}
               />
             </>
           ) : (

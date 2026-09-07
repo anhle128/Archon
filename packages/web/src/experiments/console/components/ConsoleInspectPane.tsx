@@ -51,11 +51,11 @@ export interface ConsoleInspectPaneProps {
   onCloseRoom: () => void;
   loadDefinition: (workflowName: string, cwd: string) => Promise<DagNode[]>;
   loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
-  pendingInteractions?: readonly PendingInteraction[];
-  viewerIsStarter?: boolean;
-  starterDisplayName?: string | null;
-  actionStates?: AskActionStateByRequest;
-  onSubmitAsk?: (requestId: string, body: AskAnswerBody) => Promise<void>;
+  pendingInteractions: readonly PendingInteraction[];
+  viewerIsStarter: boolean;
+  starterDisplayName: string | null;
+  actionStates: AskActionStateByRequest;
+  onSubmitAsk: (requestId: string, body: AskAnswerBody) => Promise<void>;
 }
 
 function resolveSelectedRow(
@@ -104,11 +104,11 @@ export function ConsoleInspectPane({
   onCloseRoom,
   loadDefinition,
   loadMessages,
-  pendingInteractions = [],
-  viewerIsStarter = false,
-  starterDisplayName = null,
-  actionStates = {},
-  onSubmitAsk = async (): Promise<void> => undefined,
+  pendingInteractions,
+  viewerIsStarter,
+  starterDisplayName,
+  actionStates,
+  onSubmitAsk,
 }: ConsoleInspectPaneProps): ReactElement {
   const definitionQuery = useEntity<DagNode[]>(K.workflowDagNodes(projectCwd, run.workflow), () =>
     loadDefinition(run.workflow, projectCwd)

@@ -15,6 +15,7 @@ interface RunDetailHeaderProps {
   projectId: string;
   /** Direct-run usage from GET detail (`null` = query failed). */
   usage: UsageReport | null;
+  askAwaiting?: boolean;
 }
 
 /** Cost strip for the run header — keeps event-only distinct from not-recorded. */
@@ -120,6 +121,7 @@ export function RunDetailHeader({
   projectName,
   projectId,
   usage,
+  askAwaiting = false,
 }: RunDetailHeaderProps): ReactElement {
   const elapsed = useLiveElapsed(run);
   const isPaused = run.status === 'paused';
@@ -191,7 +193,7 @@ export function RunDetailHeader({
         <span
           className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${statusTextClass[run.status]}`}
         >
-          {statusLabel[run.status]}
+          {isPaused && askAwaiting ? 'Awaiting input' : statusLabel[run.status]}
         </span>
       </div>
 

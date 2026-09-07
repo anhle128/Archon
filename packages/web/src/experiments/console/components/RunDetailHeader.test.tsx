@@ -67,7 +67,11 @@ function run(overrides: Partial<Run> = {}): Run {
   };
 }
 
-function renderHeader(props: { usage: UsageReport | null; runOverrides?: Partial<Run> }): string {
+function renderHeader(props: {
+  usage: UsageReport | null;
+  runOverrides?: Partial<Run>;
+  askAwaiting?: boolean;
+}): string {
   return renderToStaticMarkup(
     createElement(
       MemoryRouter,
@@ -77,6 +81,7 @@ function renderHeader(props: { usage: UsageReport | null; runOverrides?: Partial
         projectName: 'demo',
         projectId: 'proj-1',
         usage: props.usage,
+        askAwaiting: props.askAwaiting,
       })
     )
   );
@@ -211,6 +216,26 @@ describe('RunDetailHeader usage states', () => {
     expect(markup).toContain('$0.00');
     expect(markup).toContain('direct');
     expect(markup).not.toContain('legacy total');
+  });
+});
+
+describe('RunDetailHeader Ask pause copy', () => {
+  test('uses Awaiting input only for an Ask pause', () => {
+    const ask = renderHeader({
+      usage: usage(),
+      runOverrides: { status: 'paused' },
+      askAwaiting: true,
+    });
+    expect(ask).toContain('Awaiting input');
+    expect(ask).not.toContain('Waiting for approval');
+
+    const gate = renderHeader({
+      usage: usage(),
+      runOverrides: { status: 'paused' },
+      askAwaiting: false,
+    });
+    expect(gate).toContain('Waiting for approval');
+    expect(gate).not.toContain('Awaiting input');
   });
 });
 
