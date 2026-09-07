@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router';
-import { Window } from 'happy-dom';
+import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
 import { DraftRunCard } from './DraftRunCard';
 import * as skill from '../skills';
 import { invalidate, get as cacheGet } from '../store/cache';
@@ -21,51 +21,6 @@ import type { StartRunArgs } from '../skills/startRun';
 interface Clickable {
   click: () => void;
   disabled?: boolean;
-}
-
-function installHappyDom(): Window {
-  const win = new Window({ url: 'https://localhost/' });
-  const bag: Record<string, unknown> = {
-    window: win,
-    document: win.document,
-    self: win,
-    HTMLElement: win.HTMLElement,
-    Element: win.Element,
-    Node: win.Node,
-    Text: win.Text,
-    DocumentFragment: win.DocumentFragment,
-    SVGElement: win.SVGElement,
-    HTMLInputElement: win.HTMLInputElement,
-    HTMLButtonElement: win.HTMLButtonElement,
-    HTMLSelectElement: win.HTMLSelectElement,
-    HTMLTextAreaElement: win.HTMLTextAreaElement,
-    HTMLFormElement: win.HTMLFormElement,
-    HTMLIFrameElement: win.HTMLIFrameElement,
-    navigator: win.navigator,
-    location: win.location,
-    localStorage: win.localStorage,
-    sessionStorage: win.sessionStorage,
-    getComputedStyle: win.getComputedStyle.bind(win),
-    // happy-dom returns Immediate; coerce for lib.dom's number handle type.
-    requestAnimationFrame: (cb: FrameRequestCallback): number => {
-      const handle = win.requestAnimationFrame(cb as unknown as (time: number) => void);
-      return Number(handle);
-    },
-    cancelAnimationFrame: win.cancelAnimationFrame.bind(win),
-    MutationObserver: win.MutationObserver,
-    Event: win.Event,
-    CustomEvent: win.CustomEvent,
-    KeyboardEvent: win.KeyboardEvent,
-    MouseEvent: win.MouseEvent,
-    FocusEvent: win.FocusEvent,
-    InputEvent: win.InputEvent,
-    IS_REACT_ACT_ENVIRONMENT: true,
-  };
-  Object.assign(globalThis as object, bag);
-  // WorkflowPicker reposition needs a non-zero viewport.
-  Object.defineProperty(win, 'innerHeight', { value: 800, configurable: true });
-  Object.defineProperty(win, 'innerWidth', { value: 1200, configurable: true });
-  return win;
 }
 
 async function flush(): Promise<void> {
@@ -260,7 +215,7 @@ async function pickWorkflow(doc: Document, name: string): Promise<void> {
 }
 
 describe('DraftRunCard ENV picker and Start wiring', () => {
-  let win: Window;
+  let win: ReturnType<typeof installHappyDom>;
   let host: Element;
   let root: Root;
   const spies: { mockRestore: () => void }[] = [];
@@ -268,6 +223,9 @@ describe('DraftRunCard ENV picker and Start wiring', () => {
   beforeEach(() => {
     process.env.NODE_ENV = 'development';
     win = installHappyDom();
+    // WorkflowPicker reposition needs a non-zero viewport.
+    Object.defineProperty(win, 'innerHeight', { value: 800, configurable: true });
+    Object.defineProperty(win, 'innerWidth', { value: 1200, configurable: true });
     const el = win.document.createElement('div');
     win.document.body.appendChild(el);
     host = el as unknown as Element;
@@ -287,6 +245,7 @@ describe('DraftRunCard ENV picker and Start wiring', () => {
     for (const s of spies.splice(0)) s.mockRestore();
     clearConsoleCaches();
     win.close();
+    restoreHappyDom();
   });
 
   function track<T extends { mockRestore: () => void }>(s: T): T {
