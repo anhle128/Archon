@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import rootPackage from '../package.json';
+import workflowPackage from '../packages/workflows/package.json';
 import {
   candidateTree,
   checkPlaywright,
@@ -39,6 +41,11 @@ function temporary(): string {
   scratch.push(path);
   return path;
 }
+test('declares the schema dependency used by the root workflow helper', () => {
+  expect(rootPackage.devDependencies['@hono/zod-openapi']).toBe(
+    workflowPackage.dependencies['@hono/zod-openapi']
+  );
+});
 function git(root: string, ...args: string[]): string {
   return execFileSync('git', args, {
     cwd: root,
