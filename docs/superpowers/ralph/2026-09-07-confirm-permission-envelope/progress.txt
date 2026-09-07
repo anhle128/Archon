@@ -1,0 +1,174 @@
+## Codebase Patterns
+
+### Native Ralph YAML contract vs stale test literals
+- **Where**: `.archon/workflows/defaults/speckit-ralph-native-feature.yaml` (`ralph-loop-run`: `omp` + `xai-oauth/grok-4.5` @ `high`); `packages/workflows/src/dag-executor.test.ts`; `packages/workflows/src/loader.test.ts`
+- **Pattern**: Native Ralph model/effort assertions must copy the YAML, not older alibaba/max literals. Dual-model: first loop `xai-oauth/grok-4.5` @ `high`, final loop `anthropic/claude-sonnet-5` @ `xhigh`.
+- **Example**: `expect(loopNode?.model).toBe('xai-oauth/grok-4.5'); expect(options.nodeConfig?.effort).toBe('high');`
+
+### Plannotator fake control files need atomic replace
+- **Where**: `packages/workflows/src/plannotator-gate-executor.test.ts` `releaseDecision`
+- **Pattern**: `existsSync(control)` then `JSON.parse(readFileSync(control))` races with truncating `writeFileSync`. Write temp then `renameSync`.
+- **Example**: `writeFileSync(temporary, json); renameSync(temporary, controlPath);`
+
+### Permission HTTP confirm does not auto-dispatch
+- **Where**: `packages/server/src/routes/api.ts` (`confirmPermissionRoute` after `answerAskHumanRoute`)
+- **Pattern**: Mirror Ask's pre-validation `app.use` 401 middleware and typed error mapping, but do not call `tryAutoResumeAfterGate` / `dispatchToOrchestrator` / `resumeWorkflowRun`. Unexpected failures log `{ errorName, runId, callId }` only — never `err` or intent. OpenAPI body is `permissionConfirmRequestSchema = permissionConfirmBodySchema.openapi('PermissionConfirmBody')`.
+- **Example**: `registerOpenApiRoute(confirmPermissionRoute, ...)` then return remaining-pending message without orchestrator dispatch.
+
+### Permission operations keep distinct auth/log helpers from Ask
+- **Where**: `packages/core/src/operations/workflow-operations.ts` (`confirmPermission` after `answerAskHuman`)
+- **Pattern**: Do not reuse Ask error classes. Permission lookup logs `{ errorName, runId }` and throws `Failed to look up workflow run <runId>` without the raw DB message. Auth is starter-only (`run.user_id === actorUserId`); empty string and undefined both throw `PermissionAuthenticationRequiredError`. Log/emit only after `confirmPendingPermission` resolves, identifiers only.
+- **Example**: `getLog().error({ errorName, runId }, 'operations.workflow_permission_lookup_failed')` then `workflow.permission_resolved` + `interaction_resolved` after commit.
+
+### Parallel StrReplace truncates large files
+- **Where**: `packages/cli/src/commands/workflow.test.ts` (~10k lines)
+- **Pattern**: Concurrent StrReplace on one large file can wipe the tail. Restore from git and apply sequential in-process replacements. `mock.module()` MERGES, so every pending-interactions factory that can import operations must export `confirmPendingPermission`.
+- **Example**: Python `text.replace(old, new, 1)` after `count == 1`, then `git checkout --` if the file shrinks.
+
+### Permission confirm duplicates Ask transaction, no generic resolver
+- **Where**: `packages/core/src/db/workflow-pending-interactions.ts` (`confirmPendingPermission` after `resolvePendingInteraction`)
+- **Pattern**: Keep Ask and Permission transaction bodies explicit. Same lock/CAS/resume (`'paused-ask'`) shape; kind check, event payload, and body validation differ. Do not extract a two-caller generic resolver (rule of three). Event data is identifiers only: `{ node_id, tool_use_id, kind: 'permission', resumed }` — never intent/envelope/answer.
+- **Example**: `if (current.kind !== 'permission') throwValidation('kind_not_permission')` then CAS + optional `resumeWorkflowRunInTransaction(..., 'paused-ask')`.
+
+### Permission confirm schemas live next to Ask contracts
+- **Where**: `packages/workflows/src/schemas/pending-interaction.ts`
+- **Pattern**: Engine-owned Zod schemas use `z` from `@hono/zod-openapi`, `.strict()`, and `z.infer` — never parallel hand-written types. Permission confirm body is `{ intent: string }` with `trim().length > 0` refinement; submitted whitespace is preserved. Persistence input is a separate strict schema wrapping that body.
+- **Example**: `permissionConfirmBodySchema` + `confirmPendingPermissionInputSchema` immediately after `AskAnswerBody`, before `resolvePendingInteractionInputSchema`.
+
+### Test files are ESLint-ignored
+- **Where**: `packages/workflows/src/schemas/pending-interaction.test.ts`
+- **Pattern**: `eslint --max-warnings 0` on `*.test.ts` warns "File ignored because of a matching ignore pattern". Lint production files only, or pass `--no-warn-ignored`. Pre-commit already uses `--no-warn-ignored`.
+
+---
+
+## 2026-09-07T21:30Z — US-001: Define Permission confirm contract and schemas
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/schemas/pending-interaction.ts` — added `permissionConfirmBodySchema`, `PermissionConfirmBody`, `confirmPendingPermissionInputSchema`, `ConfirmPendingPermissionInput`
+- `packages/workflows/src/schemas/pending-interaction.test.ts` — whitespace preservation, blank/extra/ask-style rejections, persistence-input extra-key rejection
+
+**Acceptance criteria verified**:
+- [x] Exports `permissionConfirmBodySchema`, `PermissionConfirmBody`, `confirmPendingPermissionInputSchema`, and `ConfirmPendingPermissionInput` using `z` from `@hono/zod-openapi` and `z.infer`
+- [x] Strict body accepts only `{ intent: string }` with at least one non-whitespace character; surrounding whitespace preserved verbatim
+- [x] Rejects empty objects, empty string, whitespace-only, non-string intent, extra fields, and ask-style structures
+- [x] `confirmPendingPermissionInputSchema` accepts only `workflow_run_id`, `tool_use_id`, `answer`, `resolved_by`
+- [x] Existing `pendingInteractionSchema`, `askAnswerBodySchema`, and `resolvePendingInteractionInputSchema` unchanged
+- [x] Tests cover permission schema constraints and invalid body rejections
+- [x] `bun test src/schemas/pending-interaction.test.ts` in `packages/workflows` — 19 pass, 0 fail
+
+**Learnings**:
+- Worktree started with no `node_modules`; `bun install` required before tests.
+- Prettier collapsed the `ConfirmPendingPermissionInput` `z.infer` to one line; keep that formatting.
+- `export * from './pending-interaction'` in `packages/workflows/src/schemas/index.ts` already re-exports new symbols.
+
+---
+
+## 2026-09-07T21:33Z — US-002: Implement atomic Permission confirmation CAS and safe event logging
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/workflow-pending-interactions.ts` — exported `confirmPendingPermission`, added `'kind_not_permission'`, identifier-only `interaction_resolved` event, `'paused-ask'` resume
+- `packages/core/src/db/workflow-pending-interactions.test.ts` — last-pending resume, first-write CAS, sibling pause, event-insert/resume rollback, kind mismatch, whitespace-only intent, missing-run/call sentinel leak tests
+
+**Acceptance criteria verified**:
+- [x] Exports `confirmPendingPermission` and `'kind_not_permission'`
+- [x] Schema validation throws `invalid_body` before opening a transaction
+- [x] Transaction locks run and interaction rows via `workflowRunLockClause`
+- [x] Not-found / already-resolved / not-paused / kind-not-permission errors
+- [x] CAS update to answered with JSON answer, resolved_at, resolved_by
+- [x] Resume via `resumeWorkflowRunInTransaction(..., 'paused-ask')` only when remaining pending is zero
+- [x] `interaction_resolved` event data is `{ node_id, tool_use_id, kind: 'permission', resumed }`
+- [x] Intent, answer, and envelope never appear in logs, events, or thrown errors
+- [x] `resolvePendingInteraction` remains Ask-only (`kind_not_ask`)
+- [x] `bun test src/db/workflow-pending-interactions.test.ts` — 35 pass; `workflows.resume-cas.integration.test.ts` — 44 pass
+
+**Learnings**:
+- Parallel StrReplace on the same file can truncate it; apply one-file edits atomically.
+- Permission resume reuses the Ask `'paused-ask'` eligibility on purpose — do not invent a permission-specific resume primitive.
+- SQLite trigger IGNORE on paused→running UPDATE is the existing way to force resume CAS loss and prove rollback.
+
+---
+
+## 2026-09-07T21:44Z — US-003: Authorize Permission confirmation operations and update DB mocks
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/operations/workflow-operations.ts` — exported Permission errors, ConfirmPermissionInput/Result, and confirmPermission with starter-only auth and identifier-only post-commit log/emit
+- `packages/core/src/operations/workflow-operations.test.ts` — auth, ownership, lookup redaction, single persistence call, post-commit emit, persistence error propagation
+- `packages/server/src/routes/api.workflow-runs.test.ts` — added confirmPendingPermission to the pending-interactions mock factory
+- `packages/cli/src/commands/workflow.test.ts` — added confirmPendingPermission mock export
+- `packages/cli/src/commands/workflow-command-contract.test.ts` — added confirmPendingPermission mock export
+
+**Acceptance criteria verified**:
+- [x] Exports PermissionRunNotFoundError, PermissionAuthenticationRequiredError, PermissionForbiddenError, ConfirmPermissionInput, ConfirmPermissionResult, and confirmPermission
+- [x] Requires authenticated actorUserId (undefined or empty → Authentication required)
+- [x] Loads run via getWorkflowRun; missing → PermissionRunNotFoundError; DB failure logs errorName/runId and throws sanitized lookup error
+- [x] Non-starter / unowned run → PermissionForbiddenError
+- [x] Delegates to confirmPendingPermission once with runId, callId as tool_use_id, body as answer, actorUserId as resolved_by
+- [x] Logs workflow.permission_resolved and emits interaction_resolved only after persistence commits
+- [x] Intent/answer/envelope never reach logger or emitter
+- [x] All four listed mock factories export confirmPendingPermission
+- [x] Focused tests: core operations 72 pass; server api.workflow-runs 163 pass; cli workflow.test 329 pass; cli contract 40 pass
+
+**Learnings**:
+- Permission lookup must not copy Ask's `{ err, errorType }` + raw message throw — AC requires identifier-only failure logs.
+- Do not extract a shared authorize helper; Ask and Permission error names/messages differ.
+- Parallel StrReplace truncated the 10k-line CLI test file; restore from git and patch sequentially.
+
+---
+
+## 2026-09-07T21:55Z — US-004: Register authenticated OpenAPI route for Permission confirmation
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/schemas/workflow.schemas.ts` — export `permissionConfirmRequestSchema` as OpenAPI `PermissionConfirmBody`
+- `packages/server/src/routes/api.ts` — register POST `/api/workflows/runs/{runId}/permissions/{callId}/confirm` with pre-validation 401 and typed error mapping
+- `packages/server/src/routes/api.workflow-runs.test.ts` — HTTP 200/400/401/403/404/409/500, remaining-pending message, OpenAPI publication, intent-redacted 500 log
+
+**Acceptance criteria verified**:
+- [x] Exports `permissionConfirmRequestSchema = permissionConfirmBodySchema.openapi('PermissionConfirmBody')`
+- [x] Registers POST confirm via `registerOpenApiRoute` with `confirmPermissionRoute` and `workflowRunActionResponseSchema`
+- [x] Pre-validation auth middleware returns 401 `Authentication required` before body parsing
+- [x] Valid starter confirm returns 200 `{ success: true, message }` and indicates remaining interactions
+- [x] Maps PermissionAuthenticationRequiredError 401, PermissionForbiddenError 403, PermissionRunNotFoundError/PendingInteractionNotFoundError 404, already-resolved/not-paused 409, validation 400
+- [x] Unexpected failures return 500 `{ error: 'Failed to confirm permission' }` and log `api.workflow_permission_confirm_failed` without intent
+- [x] Handler does not invoke `tryAutoResumeAfterGate`, `dispatchToOrchestrator`, or `resumeWorkflowRun`
+- [x] OpenAPI document exposes the POST route and `PermissionConfirmBody`
+- [x] `bun test src/routes/api.workflow-runs.test.ts` in `packages/server` — 182 pass, 0 fail
+
+**Learnings**:
+- StrReplace on `workflow.schemas.ts` truncated the file; sequential in-process `replace_once` is required even for small schema files in this worktree.
+- Ask auto-dispatches on last-pending web resume; Permission must stay dormant and only persist + respond.
+- Commit 37449709.
+
+---
+
+## 2026-09-07T22:10Z — US-005: Regenerate API types, validate repository, and complete Story 6.7
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/api.generated.d.ts` — regenerated from live `/api/openapi.json` on isolated port 3091; includes `PermissionConfirmBody` and `POST /api/workflows/runs/{runId}/permissions/{callId}/confirm`
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — removed conflict-registry prose; set `6-7-confirm-a-permission-by-envelope-only` to `done`; left `epic-6` in-progress; `last_updated` 2026-09-07 05:06:58 +0700
+- `packages/workflows/src/dag-executor.test.ts` — chore(unblock) Ralph loop model/effort contract (`xai-oauth/grok-4.5` @ `high`)
+- `packages/workflows/src/loader.test.ts` — chore(unblock) matching native Ralph loader contract
+- `packages/workflows/src/plannotator-gate-executor.test.ts` — chore(unblock) atomic control-file write via temp+rename
+
+**Acceptance criteria verified**:
+- [x] All focused tests pass (schema, persistence, resume-cas, operations, API, CLI, dag-executor characterization, executor characterization)
+- [x] Diff against base SHA 19482482 has empty FORBIDDEN_PATHS (no migrations/providers/engine resume injection/UI/console)
+- [x] `api.generated.d.ts` contains `PermissionConfirmBody` and the confirm route
+- [x] `bun run validate` exits zero with story present
+- [x] sprint-status.yaml has no conflict-registry text; Story 6.7 is `done`; epic-6 remains `in-progress`
+- [x] `bun x prettier --check` on sprint-status.yaml passes
+
+**Learnings**:
+- `bun run validate` first failed on pre-existing Ralph dual-model assertions (`alibaba-token-plan/deepseek-v4-pro` @ `max` vs YAML `xai-oauth/grok-4.5` @ `high`) in dag-executor then loader tests. Qualify by stashing story work; same fingerprint on clean base.
+- Plannotator fake `releaseDecision` `writeFileSync` races with `existsSync` under parallel validate (Unexpected EOF). Match the result-file temp+rename pattern.
+- Do not commit Ralph `prd.json` / `progress.txt` in the story commit; only `api.generated.d.ts` and `sprint-status.yaml`.
+
+BLOCKER US-005 | gate=`bun run validate` | cause=`packages/workflows/src/dag-executor.test.ts:6953` Expected `alibaba-token-plan/deepseek-v4-pro` Received `xai-oauth/grok-4.5` (same on clean base) | action=`chore(unblock) 8a6cc533 align assertion to YAML` | 2026-09-07
+BLOCKER US-005 | gate=`bun run validate` | cause=`packages/workflows/src/loader.test.ts:3813` Expected effort `max` Received `high` plus stale model `alibaba-token-plan/deepseek-v4-pro` (same family, next file after dag-executor went green) | action=`chore(unblock) 70c241f8 align loader dual-model contract` | 2026-09-07
+BLOCKER US-005 | gate=`bun run validate` | cause=`packages/workflows/src/plannotator-gate-executor.test.ts:285` Timed out waiting for 2 fake Plannotator invocations; control JSON Unexpected EOF under parallel load; isolated run passed | action=`chore(unblock) ac3781f4 atomic control write via renameSync` | 2026-09-07
+
+---

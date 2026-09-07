@@ -1,5 +1,5 @@
 /**
- * Shared workflow business logic — approve, reject, status, resume, abandon, AskHuman.
+ * Shared workflow business logic — approve, reject, status, resume, abandon, AskHuman, Permission.
  *
  * Both CLI and command-handler are thin formatting adapters over these functions.
  * Operations throw on errors; callers catch and format for their platform.
@@ -10,6 +10,7 @@ import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import type {
   AskAnswerBody,
   PendingInteraction,
+  PermissionConfirmBody,
 } from '@archon/workflows/schemas/pending-interaction';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
@@ -23,6 +24,7 @@ import type {
   LoopGateRunMetadata,
 } from '@archon/workflows/schemas/workflow-run';
 import {
+  confirmPendingPermission,
   listPendingInteractions,
   resolvePendingInteraction,
 } from '../db/workflow-pending-interactions';
@@ -117,6 +119,41 @@ export interface AnswerAskHumanInput {
 }
 
 export interface AnswerAskHumanResult {
+  run: WorkflowRun;
+  interaction: PendingInteraction;
+  resumed: boolean;
+  remainingPending: number;
+}
+
+export class PermissionRunNotFoundError extends Error {
+  constructor(readonly runId: string) {
+    super(`Workflow run not found: ${runId}`);
+    this.name = 'PermissionRunNotFoundError';
+  }
+}
+
+export class PermissionAuthenticationRequiredError extends Error {
+  constructor() {
+    super('Authentication required');
+    this.name = 'PermissionAuthenticationRequiredError';
+  }
+}
+
+export class PermissionForbiddenError extends Error {
+  constructor(readonly runId: string) {
+    super(`Not allowed to confirm permission for run ${runId}`);
+    this.name = 'PermissionForbiddenError';
+  }
+}
+
+export interface ConfirmPermissionInput {
+  runId: string;
+  callId: string;
+  body: PermissionConfirmBody;
+  actorUserId: string | undefined;
+}
+
+export interface ConfirmPermissionResult {
   run: WorkflowRun;
   interaction: PendingInteraction;
   resumed: boolean;
@@ -333,6 +370,70 @@ function assertAskHumanActor(run: WorkflowRun, actorUserId: string | undefined):
   }
   if (run.user_id === null || run.user_id !== actorUserId) {
     throw new AskHumanForbiddenError(run.id);
+  }
+  return actorUserId;
+}
+
+/**
+ * Confirm one pending Permission interaction.
+ *
+ * Authorizes the run starter, invokes the persistence CAS once, then logs and
+ * emits identifier-only signals after commit. Does not call resumeWorkflowRun;
+ * last-pending resume happens inside the persistence transaction.
+ */
+export async function confirmPermission(
+  input: ConfirmPermissionInput
+): Promise<ConfirmPermissionResult> {
+  const run = await loadPermissionRun(input.runId);
+  const actorUserId = assertPermissionActor(run, input.actorUserId);
+  const resolved = await confirmPendingPermission({
+    workflow_run_id: input.runId,
+    tool_use_id: input.callId,
+    answer: input.body,
+    resolved_by: actorUserId,
+  });
+  getLog().info(
+    {
+      workflowRunId: input.runId,
+      nodeId: resolved.interaction.node_id,
+      toolUseId: resolved.interaction.tool_use_id,
+      resumed: resolved.resumed,
+    },
+    'workflow.permission_resolved'
+  );
+  getWorkflowEventEmitter().emit({
+    type: 'interaction_resolved',
+    runId: input.runId,
+    nodeId: resolved.interaction.node_id,
+    resumed: resolved.resumed,
+  });
+  return {
+    run,
+    interaction: resolved.interaction,
+    resumed: resolved.resumed,
+    remainingPending: resolved.remaining_pending,
+  };
+}
+
+async function loadPermissionRun(runId: string): Promise<WorkflowRun> {
+  let run: WorkflowRun | null;
+  try {
+    run = await workflowDb.getWorkflowRun(runId);
+  } catch (error) {
+    const errorName = error instanceof Error ? error.name : 'UnknownError';
+    getLog().error({ errorName, runId }, 'operations.workflow_permission_lookup_failed');
+    throw new Error(`Failed to look up workflow run ${runId}`);
+  }
+  if (!run) throw new PermissionRunNotFoundError(runId);
+  return run;
+}
+
+function assertPermissionActor(run: WorkflowRun, actorUserId: string | undefined): string {
+  if (actorUserId === undefined || actorUserId === '') {
+    throw new PermissionAuthenticationRequiredError();
+  }
+  if (run.user_id === null || run.user_id !== actorUserId) {
+    throw new PermissionForbiddenError(run.id);
   }
   return actorUserId;
 }

@@ -1,5 +1,5 @@
 # generated: 2026-09-06 00:34:00 +0700
-# last_updated: 2026-09-07 04:01:53 +0700
+# last_updated: 2026-09-07 05:06:58 +0700
 # project: Archon
 # project_key: NOKEY
 # tracking_system: file-system
@@ -34,7 +34,7 @@
 #   - done: Retrospective has been completed
 
 generated: "2026-09-06 00:34:00 +0700"
-last_updated: "2026-09-07 04:01:53 +0700"
+last_updated: "2026-09-07 05:06:58 +0700"
 project: Archon
 feature: workflow-run-view-hitl
 project_key: NOKEY
@@ -58,5 +58,5 @@ development_status:
   6-4-keep-several-asks-outstanding-without-a-second-scheduler: done
   6-5-answer-the-ask-in-the-legacy-node-room: done
   6-6-answer-the-ask-in-the-command-center-room: backlog
-  6-7-confirm-a-permission-by-envelope-only: backlog
+  6-7-confirm-a-permission-by-envelope-only: done
   epic-6-retrospective: optional
