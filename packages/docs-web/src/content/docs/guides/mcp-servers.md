@@ -16,8 +16,10 @@ governed native tools that Archon injects for the current workflow when applicab
 Codex is an explicit exception: its SDK adds declared servers to ambient configuration
 rather than replacing it.
 
-MCP works with Claude, Codex, and Copilot workflow nodes. Pi and OpenCode nodes
+MCP works with Claude, Codex, Copilot, and DeepSeek workflow nodes. Pi and OpenCode nodes
 currently warn and ignore the `mcp` field.
+
+DeepSeek expands MCP environment and header values from ambient process env plus acting-user and codebase env (request values beat ambient). Bare stdio `command` values are resolved through `PATH`. Pinned DSH ACP supports stdio and Streamable HTTP; SSE declarations fail fast before the turn starts instead of being ignored. DeepSeek does not support Archon `allowed_tools` / `denied_tools` (`toolRestrictions` is false), so `allowed_tools: []` cannot create an MCP-only boundary for DeepSeek nodes.
 
 ## Quick Start
 
@@ -127,8 +129,9 @@ Connects to an SSE endpoint.
 ## Environment Variable Expansion
 
 Values in `env` and `headers` fields support `$VAR_NAME` and `${VAR_NAME}` references. They are
-expanded from Archon's process environment at execution time. Codex workflow
-nodes also include codebase-scoped env vars in that expansion.
+expanded from Archon's process environment at execution time. Codex and DeepSeek workflow
+nodes also include acting-user and codebase-scoped env vars in that expansion (request values
+beat ambient).
 
 ```json
 {
@@ -207,7 +210,8 @@ nodes:
 This is useful for sandboxing — the AI can only interact through the MCP server
 and cannot touch the filesystem or run shell commands. Codex currently does not
 support Archon's `allowed_tools` / `denied_tools` restrictions, so this pattern
-is enforced for Claude nodes but not Codex nodes.
+is enforced for Claude nodes but not Codex nodes. DeepSeek also lacks tool restrictions,
+so `allowed_tools: []` cannot create an MCP-only boundary for DeepSeek nodes.
 
 ## Connection Failure Handling
 
@@ -396,6 +400,9 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 
 - **Codex tool restrictions** — Codex nodes support `mcp`, but Archon's
   `allowed_tools` / `denied_tools` restrictions are still ignored by Codex.
+- **DeepSeek transports and tools** — DeepSeek supports stdio and Streamable HTTP MCP,
+  resolves bare stdio commands through `PATH`, and rejects SSE before the turn starts.
+  `allowed_tools` cannot create an MCP-only boundary because DeepSeek `toolRestrictions` is false.
 - **Haiku model** — Tool search (lazy loading for many tools) is not supported on
   Haiku. You'll see a warning. Consider using Sonnet or Opus for MCP nodes.
 - **No load-time validation** — The MCP config file is read at execution time, not
@@ -414,6 +421,8 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 | `MCP server connection failed` | Server process crashed or URL unreachable | Check command/URL, test the server standalone |
 | Plugin MCP missing from workflow output | User-level plugin MCPs are filtered out of workflow warnings | Run with `--verbose` and look for provider MCP debug logs |
 | `allowed_tools` ignored with Codex | Codex provider does not support Archon's tool restrictions yet | Do not rely on `allowed_tools: []` for Codex sandboxing |
+| SSE rejected with DeepSeek | Pinned DSH ACP supports only stdio and Streamable HTTP | Use `type: stdio` or `type: http`; SSE fails fast |
+| `allowed_tools` ignored with DeepSeek | DeepSeek `toolRestrictions` is false | Do not rely on `allowed_tools: []` for DeepSeek MCP-only sandboxing |
 | `Haiku model with MCP servers` | Haiku doesn't support tool search | Use `model: sonnet` or `model: opus` instead |
 
 ## Finding MCP Servers
