@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, Grok, Qoder CLI, OMP CLI, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, Grok, Qoder CLI, OMP CLI, OpenCode, GitHub Copilot, Pi, and DeepSeek Harness as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -21,7 +21,7 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 | Provider | Tier | How it works | On a validation miss |
 |----------|------|--------------|----------------------|
 | Claude, Codex, Grok, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `--json-schema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
-| Pi, Copilot, Qoder CLI, OMP CLI | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
+| Pi, Copilot, Qoder CLI, OMP CLI, DeepSeek | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
 In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
 
@@ -876,6 +876,43 @@ DEFAULT_AI_ASSISTANT=copilot
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [`@github/copilot-sdk`](https://www.npmjs.com/package/@github/copilot-sdk) — upstream SDK.
 
+## DeepSeek Harness (Community Provider)
+
+**Drive DeepSeek models through the pinned DeepSeek Harness (DSH) runtime over ACP.**
+The provider id is `deepseek`. It is registered as `builtIn: false` — a bundled community provider, not a core built-in.
+
+Supply a DashScope token as vendor `deepseek` (per-user API key) or set `DEEPSEEK_API_KEY` in the environment. `assistants.deepseek.baseUrl` overrides request and ambient `DEEPSEEK_BASE_URL`.
+
+Supported config keys: `model`, `baseUrl`, `providerRoute`, `profile`, `permissionMode`, `effort`, and `nodeBin`.
+`providerRoute` defaults to `deepseek-official`. `profile` is fixed to `acp` (other DSH profiles speak a different protocol). Permission defaults to `workspace-write`, and every DSH permission request is auto-cancelled. `danger-full-access` is explicit — it removes that safe permission posture.
+
+A configured model is sent as the exact DSH model option pair `[providerRoute, model]`. There are no built-in tier defaults: DashScope model IDs vary by account and region. Do not treat `deepseek-v3` as a confirmed model id. Use a model advertised by your pinned DSH/DashScope setup, and add `model` only after you confirm that exact account/region id.
+
+`maxTokens` is rejected (`deepseek_unsupported_config`) because pinned DSH ACP exposes only `model` and `reasoning_effort`.
+
+Source and npm installs use the bundled, version-matched DSH package (`@deepseek-ai/dsh`). Standalone compiled Archon binaries fail with `deepseek_runtime_unavailable` — Node cannot execute DSH from Bun's embedded filesystem. Use a source or npm install instead.
+
+The runtime requires a real Node executable, resolved in this order: `DEEPSEEK_NODE_BIN`, `assistants.deepseek.nodeBin`, Node-host `process.execPath`, then `PATH`.
+
+Results omit token and cost usage in v1. Pinned DSH ACP reports context occupancy, not per-request billing tokens.
+
+The Web config API exposes no DeepSeek fields (`SAFE_ASSISTANT_FIELDS` is unchanged). Set these values in `~/.archon/config.yaml` or `.archon/config.yaml`:
+
+```yaml
+assistants:
+  deepseek:
+    baseUrl: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    providerRoute: deepseek-official
+    profile: acp
+    permissionMode: workspace-write
+    effort: high
+```
+
+### See also
+
+- [Provider Capability Matrix](/reference/provider-capabilities/) — generated from the DeepSeek capability declaration.
+- [Configuration Reference](/reference/configuration/) — `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_NODE_BIN`.
+
 ## Per-user credentials and AI Settings
 
 Everything above configures the **install-wide** assistant credentials (env vars, `claude /login`, etc.) — every run uses the same shared keys. On a **shared Archon box** where several people use the same server, each user can instead connect **their own** provider — by API key or subscription — so their runs and chats bill to them, not to the install's shared key.
@@ -972,6 +1009,7 @@ value. Known zeros survive; absent fields stay absent (never rendered as zero).
 | Copilot | One observation per `assistant.usage` event; `cost` is a billing **multiplier**, never USD. Subagent kind only from non-empty `parentToolCallId`. |
 | OMP | Primary stream usage plus fail-soft advisor/subagent transcript enrichment (see [OMP](#omp-cli-community-provider)). |
 | Qoder CLI | No fabricated breakdown — omit when the CLI exposes nothing. |
+| DeepSeek | Not reported in v1; pinned DSH ACP exposes context occupancy but not per-request billing tokens. |
 
 ### Scope, missingness, and coverage
 
