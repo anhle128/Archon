@@ -121,6 +121,7 @@ function createFakeDsh(options?: {
   initialize?: (params: InitializeRequest) => ReturnType<typeof defaultInitialize>;
   resumeError?: Error;
   configError?: Error;
+  configHold?: ReturnType<typeof createDeferred<void>>;
   closeError?: Error;
   promptUpdates?: SessionUpdate[] | ((sessionId: string) => SessionUpdate[]);
   promptHold?: ReturnType<typeof createDeferred<void>>;
@@ -149,8 +150,13 @@ function createFakeDsh(options?: {
     })
     .onRequest(methods.agent.session.setConfigOption, c => {
       calls.push({ method: methods.agent.session.setConfigOption, params: c.params });
-      if (options?.configError) throw options.configError;
-      return { configOptions: [] };
+      return (async (): Promise<{ configOptions: [] }> => {
+        if (options?.configHold !== undefined) {
+          await options.configHold.promise;
+        }
+        if (options?.configError) throw options.configError;
+        return { configOptions: [] };
+      })();
     })
     .onRequest(methods.agent.session.prompt, async c => {
       calls.push({ method: methods.agent.session.prompt, params: c.params });
@@ -515,6 +521,40 @@ describe('driveDeepseekAcpTurn', () => {
     });
   });
 
+  test('aborting during config reports a local aborted result when config rejects', async () => {
+    const hold = createDeferred<void>();
+    const fake = createFakeDsh({
+      configHold: hold,
+      configError: new Error('config cancelled'),
+    });
+    const controller = new AbortController();
+    const chunksPromise = collect(
+      driveDeepseekAcpTurn(
+        fake.app,
+        baseInput({ model: 'deepseek-chat', abortSignal: controller.signal })
+      )
+    );
+    await new Promise<void>(resolve => {
+      const check = (): void => {
+        if (fake.methodsCalled().includes(methods.agent.session.setConfigOption)) resolve();
+        else setTimeout(check, 1);
+      };
+      check();
+    });
+
+    controller.abort();
+    hold.resolve();
+    const chunks = await chunksPromise;
+
+    expect(fake.methodsCalled()).toContain(methods.agent.session.cancel);
+    expect(fake.methodsCalled()).toContain(methods.agent.session.close);
+    expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+      type: 'result',
+      stopReason: 'aborted',
+      errorSubtype: 'deepseek_aborted',
+    });
+  });
+
   test('consumer early return sends cancel for an active session and releases the connection', async () => {
     const hold = createDeferred<void>();
     const fake = createFakeDsh({
@@ -680,23 +720,71 @@ describe('runDeepseekAcpTurn', () => {
     expect((error as DeepseekProviderError).message).toContain('[REDACTED]');
   });
 
+  test('ACP stream failures surface deepseek_acp_error instead of spawn failure', async () => {
+    const child = new FakeChild();
+    const spawnImpl = ((_command: string): ChildProcess => {
+      queueMicrotask(() => {
+        child.stdout.destroy(new Error('stream exploded'));
+      });
+      return child as unknown as ChildProcess;
+    }) as typeof import('node:child_process').spawn;
+
+    const error = await collect(
+      runDeepseekAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 })
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(DeepseekProviderError);
+    expect((error as DeepseekProviderError).subtype).toBe('deepseek_acp_error');
+    expect(child.signals[0]).toBe('SIGTERM');
+  });
+
   test('early child exit surfaces deepseek_spawn_failed with at most 4096 redacted stderr characters', async () => {
     const secret = 'sk-live-secret';
-    const long = `${secret}${'x'.repeat(5000)}`;
+    const requestSecret = 'request-env-token-secret';
+    const long = `${secret} ${requestSecret}${'x'.repeat(5000)}`;
     const child = new FakeChild();
     const spawnImpl = ((_command: string): ChildProcess => {
       queueMicrotask(() => child.crash(1, long));
       return child as unknown as ChildProcess;
     }) as typeof import('node:child_process').spawn;
     const error = await collect(
-      runDeepseekAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 })
+      runDeepseekAcpTurn(
+        processInput({
+          env: {
+            ...processInput().env,
+            ARCHON_DEEPSEEK_EXTRA_TOKEN: requestSecret,
+          },
+        }),
+        { spawn: spawnImpl, terminateGraceMs: 0 }
+      )
     ).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(DeepseekProviderError);
     expect((error as DeepseekProviderError).subtype).toBe('deepseek_spawn_failed');
     expect((error as DeepseekProviderError).message).not.toContain(secret);
+    expect((error as DeepseekProviderError).message).not.toContain(requestSecret);
     expect((error as DeepseekProviderError).message).toContain('[REDACTED]');
     const redacted = (error as DeepseekProviderError).message;
     const stderrPart = redacted.slice(redacted.indexOf('[REDACTED]'));
-    expect(stderrPart.length).toBeLessThanOrEqual(4096 + '[REDACTED]'.length);
+    expect(stderrPart.length).toBeLessThanOrEqual(4096);
+  });
+
+  test('stderr redaction does not leak a secret prefix at the excerpt boundary', async () => {
+    const secret = 'sk-live-secret';
+    const long = `${'x'.repeat(4090)}${secret}${'y'.repeat(5000)}`;
+    const child = new FakeChild();
+    const spawnImpl = ((_command: string): ChildProcess => {
+      queueMicrotask(() => child.crash(1, long));
+      return child as unknown as ChildProcess;
+    }) as typeof import('node:child_process').spawn;
+
+    const error = await collect(
+      runDeepseekAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 })
+    ).catch((caught: unknown) => caught);
+
+    const message = (error as DeepseekProviderError).message;
+    expect(error).toBeInstanceOf(DeepseekProviderError);
+    expect((error as DeepseekProviderError).subtype).toBe('deepseek_spawn_failed');
+    expect(message).not.toContain(secret);
+    expect(message).not.toContain(secret.slice(0, 6));
   });
 });

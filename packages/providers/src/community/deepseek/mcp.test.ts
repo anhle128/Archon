@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join, relative } from 'node:path';
 
 import { DeepseekProviderError } from './errors';
 import { buildDeepseekMcpServers } from './mcp';
@@ -12,14 +12,16 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
 
-async function makeExecutable(name: string): Promise<{ path: string; pathEnv: string }> {
+async function makeExecutable(
+  name: string
+): Promise<{ dir: string; path: string; pathEnv: string }> {
   const dir = await mkdtemp(join(tmpdir(), 'archon-deepseek-mcp-'));
   tempDirs.push(dir);
   const path = join(dir, name);
   await writeFile(path, '#!/usr/bin/env sh\nexit 0\n');
   await chmod(path, 0o755);
   const pathEnv = `${dir}${delimiter}${process.env.PATH ?? '/usr/bin:/bin'}`;
-  return { path, pathEnv };
+  return { dir, path, pathEnv };
 }
 
 function expectSubtype(fn: () => unknown, subtype: string): DeepseekProviderError {
@@ -102,6 +104,21 @@ describe('buildDeepseekMcpServers', () => {
       name: 'pkg',
       command: path,
       args: ['-y', 'demo'],
+      env: [],
+    });
+  });
+
+  test('a bare command found through a relative PATH entry remains absolute in ACP', async () => {
+    const { path } = await makeExecutable('relative-mcp');
+    const relativeDir = relative(process.cwd(), dirname(path));
+    const [server] = buildDeepseekMcpServers(
+      { pkg: { command: 'relative-mcp', args: ['--stdio'] } },
+      { PATH: `${relativeDir}${delimiter}${process.env.PATH ?? '/usr/bin:/bin'}` }
+    );
+    expect(server).toEqual({
+      name: 'pkg',
+      command: path,
+      args: ['--stdio'],
       env: [],
     });
   });

@@ -9,7 +9,8 @@ export interface DeepseekChildEnvInput {
 
 /**
  * Build the DSH child environment from isolated records.
- * Never writes `DSH_PROVIDER_ROUTE`. Does not trim or log `DEEPSEEK_API_KEY`.
+ * Model route selection is sent over ACP, not through DSH environment overrides.
+ * Does not trim or log `DEEPSEEK_API_KEY`.
  */
 export function buildDeepseekChildEnv(input: DeepseekChildEnvInput): Record<string, string> {
   const env: Record<string, string> = {};

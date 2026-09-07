@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { accessSync, constants as fsConstants, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { isAbsolute, resolve } from 'node:path';
 import { BUNDLED_IS_BINARY } from '@archon/paths';
 
 import { DeepseekProviderError } from './errors';
@@ -22,6 +23,10 @@ function definedEnv(env: Record<string, string | undefined>): Record<string, str
   );
 }
 
+function normalizeExecutablePath(path: string): string {
+  return isAbsolute(path) ? path : resolve(path);
+}
+
 function findNodeOnPath(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform
@@ -33,7 +38,9 @@ function findNodeOnPath(
       env: definedEnv(env),
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    return output.split(/\r?\n/)[0]?.trim() || undefined;
+    const first = output.split(/\r?\n/)[0]?.trim();
+    if (!first) return undefined;
+    return normalizeExecutablePath(first);
   } catch {
     return undefined;
   }
@@ -64,6 +71,12 @@ function isUsableNodeBinary(
 }
 
 function assertNodeBinary(path: string, sourceLabel: string, platform: NodeJS.Platform): string {
+  if (!isAbsolute(path)) {
+    throw new DeepseekProviderError(
+      'deepseek_runtime_unavailable',
+      `${sourceLabel} is set to "${path}" but must be an absolute path. Provide a Node.js executable via DEEPSEEK_NODE_BIN, assistants.deepseek.nodeBin, or PATH.`
+    );
+  }
   const status = isUsableNodeBinary(path, platform);
   if (status === 'ok') return path;
   const reason =
@@ -98,7 +111,7 @@ export function resolveDeepseekNodeBinary(
   }
   const fromPath = facts.findNodeOnPath(env, facts.platform);
   if (fromPath) {
-    return assertNodeBinary(fromPath, 'PATH', facts.platform);
+    return assertNodeBinary(normalizeExecutablePath(fromPath), 'PATH', facts.platform);
   }
   throw new DeepseekProviderError(
     'deepseek_runtime_unavailable',

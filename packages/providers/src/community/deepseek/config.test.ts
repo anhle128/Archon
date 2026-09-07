@@ -67,10 +67,13 @@ describe('parseDeepseekConfig', () => {
     expect(() => parseDeepseekConfig({ permissionMode: 'ask' })).toThrow(/permissionMode/);
   });
 
-  test('rejects a providerRoute without a model', () => {
-    expect(() => parseDeepseekConfig({ providerRoute: 'deepseek-official' })).toThrow(
-      /\[route, model\]|model/
-    );
+  test('allows providerRoute without a config model so request-level models can supply the pair', () => {
+    expect(parseDeepseekConfig({ providerRoute: 'deepseek-official' })).toMatchObject({
+      providerRoute: 'deepseek-official',
+    });
+    expect(parseDeepseekConfig({ providerRoute: 'custom-route' })).toMatchObject({
+      providerRoute: 'custom-route',
+    });
   });
 
   test('rejects defined maxTokens naming the unsupported pinned ACP surface', () => {

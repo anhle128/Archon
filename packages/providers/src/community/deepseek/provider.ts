@@ -16,7 +16,12 @@ import {
   resolveDeepseekEffort,
 } from './config';
 import { buildDeepseekChildEnv } from './env';
-import { DeepseekProviderError, toDeepseekErrorResult } from './errors';
+import {
+  collectDeepseekSecretValues,
+  DeepseekProviderError,
+  isDeepseekSecretName,
+  toDeepseekErrorResult,
+} from './errors';
 import { buildDeepseekMcpServers } from './mcp';
 import { resolveBundledDshEntrypoint, resolveDeepseekNodeBinary } from './node-resolver';
 
@@ -36,6 +41,60 @@ function mergeQueryEnv(
   requestEnv: Record<string, string> | undefined
 ): Record<string, string | undefined> {
   return { ...process.env, ...requestEnv };
+}
+
+function messageFromError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function asDeepseekMcpConfigError(error: unknown): DeepseekProviderError {
+  if (error instanceof DeepseekProviderError && error.subtype === 'deepseek_mcp_config_error') {
+    return error;
+  }
+  return new DeepseekProviderError('deepseek_mcp_config_error', messageFromError(error), {
+    cause: error,
+  });
+}
+
+function addSecretValues(secrets: string[], values: readonly string[]): void {
+  for (const value of values) {
+    if (value.length >= 4 && !secrets.includes(value)) {
+      secrets.push(value);
+    }
+  }
+}
+
+function mcpSecretValues(servers: DeepseekProcessInput['mcpServers']): string[] {
+  const secrets: string[] = [];
+  for (const server of servers) {
+    if ('headers' in server) {
+      for (const header of server.headers) {
+        if (isDeepseekSecretName(header.name) && !secrets.includes(header.value)) {
+          secrets.push(header.value);
+        }
+      }
+    }
+    if ('env' in server) {
+      for (const entry of server.env) {
+        if (isDeepseekSecretName(entry.name) && !secrets.includes(entry.value)) {
+          secrets.push(entry.value);
+        }
+      }
+    }
+  }
+  return secrets;
+}
+
+function requireModelForCustomRoute(
+  config: { providerRoute?: string },
+  model: string | undefined
+): void {
+  if (model !== undefined || config.providerRoute === DEFAULT_DEEPSEEK_PROVIDER_ROUTE) return;
+  throw new DeepseekProviderError(
+    'deepseek_unsupported_config',
+    'assistants.deepseek.providerRoute requires a model from assistants.deepseek.model or the request model because DSH model routing is sent as [providerRoute, model].'
+  );
 }
 
 /**
@@ -70,13 +129,16 @@ export class DeepseekProvider implements IAgentProvider {
     const secrets: string[] = [];
     try {
       const config = parseDeepseekConfig(requestOptions?.assistantConfig ?? {});
+      const model = requestOptions?.model ?? config.model;
+      requireModelForCustomRoute(config, model);
+
       const childEnv = buildDeepseekChildEnv({
         ambient: process.env,
         request: requestOptions?.env,
         baseUrl: config.baseUrl,
         permissionMode: config.permissionMode ?? DEFAULT_DEEPSEEK_PERMISSION_MODE,
       });
-      secrets.push(childEnv.DEEPSEEK_API_KEY);
+      addSecretValues(secrets, collectDeepseekSecretValues(childEnv));
 
       const resolveNodeBinary = this.dependencies.resolveNodeBinary ?? resolveDeepseekNodeBinary;
       const resolveDshEntrypoint =
@@ -88,17 +150,21 @@ export class DeepseekProvider implements IAgentProvider {
       let mcpServers = buildDeepseekMcpServers({}, childEnv);
       const mcpPath = requestOptions?.nodeConfig?.mcp;
       if (typeof mcpPath === 'string' && mcpPath.length > 0) {
-        const loaded = await loadMcpConfig(mcpPath, cwd, mergeQueryEnv(requestOptions?.env));
-        const missingVars = uniqueNames(loaded.missingVars);
-        if (missingVars.length > 0) {
-          warnings.push(
-            `DeepSeek MCP config references undefined env vars: ${missingVars.join(', ')}. Servers using them may fail at runtime.`
-          );
+        try {
+          const loaded = await loadMcpConfig(mcpPath, cwd, mergeQueryEnv(requestOptions?.env));
+          const missingVars = uniqueNames(loaded.missingVars);
+          if (missingVars.length > 0) {
+            warnings.push(
+              `DeepSeek MCP config references undefined env vars: ${missingVars.join(', ')}. Servers using them may fail at runtime.`
+            );
+          }
+          mcpServers = buildDeepseekMcpServers(loaded.servers, childEnv);
+          addSecretValues(secrets, mcpSecretValues(mcpServers));
+        } catch (error: unknown) {
+          throw asDeepseekMcpConfigError(error);
         }
-        mcpServers = buildDeepseekMcpServers(loaded.servers, childEnv);
       }
 
-      const model = requestOptions?.model ?? config.model;
       const effort = resolveDeepseekEffort(requestOptions?.nodeConfig?.effort ?? config.effort);
       const outputSchema = requestOptions?.outputFormat?.schema;
       const runTurn =

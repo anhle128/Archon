@@ -21,7 +21,11 @@ import {
 import type { MessageChunk } from '../../types';
 import { AsyncQueue } from './async-queue';
 import { createDeepseekEventState, mapDeepseekSessionUpdate } from './event-bridge';
-import { DeepseekProviderError, redactDeepseekSecrets } from './errors';
+import {
+  collectDeepseekSecretValues,
+  DeepseekProviderError,
+  redactDeepseekSecrets,
+} from './errors';
 import { answerDeepseekPermissionRequest } from './permission';
 
 const STDERR_CAP = 4096;
@@ -118,20 +122,35 @@ function waitMs(ms: number): Promise<void> {
   });
 }
 
-function secretsFromEnv(env: Record<string, string>): string[] {
-  const key = env.DEEPSEEK_API_KEY;
-  return key === undefined || key === '' ? [] : [key];
-}
-
 function toSpawnFailed(
   error: unknown,
   stderrText: string,
   secrets: readonly string[]
 ): DeepseekProviderError {
   const base = redactDeepseekSecrets(errorMessage(error), secrets);
-  const excerpt = redactDeepseekSecrets(stderrText, secrets);
+  const excerpt = redactedStderrExcerpt(stderrText, secrets);
   const message = excerpt.length > 0 ? `${base}\n${excerpt}` : base;
   return new DeepseekProviderError('deepseek_spawn_failed', message, { cause: error });
+}
+
+function toAcpFailed(
+  error: unknown,
+  stderrText: string,
+  secrets: readonly string[]
+): DeepseekProviderError {
+  return withStderr(
+    new DeepseekProviderError(
+      'deepseek_acp_error',
+      redactDeepseekSecrets(errorMessage(error), secrets),
+      { cause: error }
+    ),
+    stderrText,
+    secrets
+  );
+}
+
+function redactedStderrExcerpt(stderrText: string, secrets: readonly string[]): string {
+  return redactDeepseekSecrets(stderrText, secrets).slice(0, STDERR_CAP);
 }
 
 function withStderr(
@@ -142,7 +161,7 @@ function withStderr(
   if (stderrText.length === 0) return error;
   return new DeepseekProviderError(
     error.subtype,
-    `${error.message}\n${redactDeepseekSecrets(stderrText, secrets)}`,
+    `${error.message}\n${redactedStderrExcerpt(stderrText, secrets)}`,
     { cause: error }
   );
 }
@@ -274,6 +293,8 @@ export async function* driveDeepseekAcpTurn(
               if (!aborted) throw error;
             }
           }
+        } catch (error) {
+          if (!aborted) throw error;
         } finally {
           input.abortSignal?.removeEventListener('abort', onAbort);
           if (cancelSent !== undefined) {
@@ -332,7 +353,9 @@ export async function* runDeepseekAcpTurn(
 ): AsyncGenerator<MessageChunk> {
   const spawnFn = dependencies?.spawn ?? spawn;
   const terminateGraceMs = dependencies?.terminateGraceMs ?? DEFAULT_TERMINATE_GRACE_MS;
-  const secrets = secretsFromEnv(input.env);
+  const secrets = collectDeepseekSecretValues(input.env);
+  const stderrBufferCap =
+    STDERR_CAP + Math.max(0, ...secrets.map((secret: string) => secret.length));
 
   let child: ChildProcess;
   try {
@@ -348,9 +371,9 @@ export async function* runDeepseekAcpTurn(
   let stderrText = '';
   if (child.stderr !== null) {
     child.stderr.on('data', (chunk: Buffer | string) => {
-      if (stderrText.length >= STDERR_CAP) return;
+      if (stderrText.length >= stderrBufferCap) return;
       stderrText += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      if (stderrText.length > STDERR_CAP) stderrText = stderrText.slice(0, STDERR_CAP);
+      if (stderrText.length > stderrBufferCap) stderrText = stderrText.slice(0, stderrBufferCap);
     });
   }
 
@@ -417,7 +440,7 @@ export async function* runDeepseekAcpTurn(
     if (error instanceof DeepseekProviderError) {
       throw withStderr(error, stderrText, secrets);
     }
-    throw toSpawnFailed(error, stderrText, secrets);
+    throw toAcpFailed(error, stderrText, secrets);
   } finally {
     finished = true;
     try {

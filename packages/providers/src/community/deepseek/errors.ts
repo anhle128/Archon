@@ -22,6 +22,28 @@ export class DeepseekProviderError extends Error {
   }
 }
 
+const SENSITIVE_ENV_NAME_PATTERN =
+  /(?:API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH(?:ORIZATION)?|COOKIE)/i;
+const MIN_SECRET_LENGTH = 4;
+
+function isRedactableSecret(value: string | undefined): value is string {
+  return value !== undefined && value.length >= MIN_SECRET_LENGTH;
+}
+
+export function isDeepseekSecretName(name: string): boolean {
+  return SENSITIVE_ENV_NAME_PATTERN.test(name);
+}
+
+export function collectDeepseekSecretValues(env: Record<string, string | undefined>): string[] {
+  const secrets: string[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (isDeepseekSecretName(name) && isRedactableSecret(value) && !secrets.includes(value)) {
+      secrets.push(value);
+    }
+  }
+  return secrets;
+}
+
 export function redactDeepseekSecrets(message: string, secrets: readonly string[]): string {
   let redacted = message;
   for (const secret of secrets) {

@@ -102,12 +102,6 @@ export function parseDeepseekConfig(raw: Record<string, unknown>): DeepseekProvi
   const nodeBin = parseTrimmedString(raw, 'nodeBin');
   const effort = resolveDeepseekEffort(raw.effort);
 
-  if (providerRoute !== undefined && model === undefined) {
-    throw new Error(
-      "Invalid assistants.deepseek.providerRoute: a model is required because DSH's model value is an inseparable [route, model] pair."
-    );
-  }
-
   const config: DeepseekProviderDefaults = {
     profile: parseProfile(raw.profile),
     providerRoute: providerRoute ?? DEFAULT_DEEPSEEK_PROVIDER_ROUTE,

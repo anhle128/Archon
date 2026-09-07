@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 import { DeepseekProviderError } from './errors';
 import {
@@ -134,6 +134,39 @@ describe('resolveDeepseekNodeBinary', () => {
       'deepseek_runtime_unavailable'
     );
     expect(configError.message).toContain('assistants.deepseek.nodeBin');
+  });
+
+  test('explicit Node paths must be absolute', async () => {
+    const absolute = await makeFile('relative-node', 0o755);
+    const relativePath = relative(process.cwd(), absolute);
+    const error = expectSubtype(
+      () =>
+        resolveDeepseekNodeBinary(
+          undefined,
+          { DEEPSEEK_NODE_BIN: relativePath },
+          facts({
+            execPath: '/unused',
+          })
+        ),
+      'deepseek_runtime_unavailable'
+    );
+    expect(error.message).toContain('absolute path');
+  });
+
+  test('PATH resolution normalizes relative lookup output to an absolute path', async () => {
+    const pathBin = await makeFile('path-node', 0o755);
+    const relativePath = relative(process.cwd(), pathBin);
+    expect(
+      resolveDeepseekNodeBinary(
+        undefined,
+        {},
+        facts({
+          execPath: '/unused',
+          isNodeHost: false,
+          findNodeOnPath: () => relativePath,
+        })
+      )
+    ).toBe(resolve(relativePath));
   });
 
   test('a non-executable POSIX explicit path fails with its source label', async () => {

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { accessSync, constants as fsConstants, statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 
 import type { McpServer } from '@agentclientprotocol/sdk';
 
@@ -39,7 +39,9 @@ function resolveBareCommand(command: string, env: Record<string, string>): strin
       env,
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-    return output.split(/\r?\n/)[0]?.trim() || undefined;
+    const first = output.split(/\r?\n/)[0]?.trim();
+    if (!first) return undefined;
+    return isAbsolute(first) ? first : resolve(first);
   } catch {
     return undefined;
   }

@@ -174,6 +174,60 @@ describe('DeepseekProvider', () => {
     expect(calls[0]?.profile).toBe('acp');
   });
 
+  test('assistant providerRoute pairs with a request-level model', async () => {
+    const calls: DeepseekProcessInput[] = [];
+    const provider = new DeepseekProvider({
+      runTurn: recordingRunner(calls),
+      resolveNodeBinary: () => '/stub/node',
+      resolveDshEntrypoint: () => '/stub/dsh.js',
+    });
+
+    await collect(
+      provider.sendQuery('hi', '/repo', undefined, {
+        model: 'account-model',
+        assistantConfig: { providerRoute: 'dashscope-route' },
+        env: queryEnv(),
+      })
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.model).toBe('account-model');
+    expect(calls[0]?.providerRoute).toBe('dashscope-route');
+  });
+
+  test('custom providerRoute without an effective model fails before the runner', async () => {
+    const calls: DeepseekProcessInput[] = [];
+    let nodeCalled = false;
+    const provider = new DeepseekProvider({
+      runTurn: recordingRunner(calls),
+      resolveNodeBinary: (): string => {
+        nodeCalled = true;
+        return '/stub/node';
+      },
+      resolveDshEntrypoint: () => '/stub/dsh.js',
+    });
+
+    const chunks = await collect(
+      provider.sendQuery('hi', '/repo', undefined, {
+        assistantConfig: { providerRoute: 'dashscope-route' },
+        env: queryEnv(),
+      })
+    );
+
+    expect(calls).toEqual([]);
+    expect(nodeCalled).toBe(false);
+    expect(chunks).toEqual([
+      {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'deepseek_unsupported_config',
+        errors: [
+          'assistants.deepseek.providerRoute requires a model from assistants.deepseek.model or the request model because DSH model routing is sent as [providerRoute, model].',
+        ],
+      },
+    ]);
+  });
+
   test('nodeConfig.effort beats assistant config effort and is translated', async () => {
     const calls: DeepseekProcessInput[] = [];
     const provider = new DeepseekProvider({
@@ -312,6 +366,33 @@ describe('DeepseekProvider', () => {
     expect(message).toContain('Streamable HTTP');
   });
 
+  test('MCP load errors yield deepseek_mcp_config_error and do not run a turn', async () => {
+    const calls: DeepseekProcessInput[] = [];
+    const provider = new DeepseekProvider({
+      runTurn: recordingRunner(calls),
+      resolveNodeBinary: () => '/stub/node',
+      resolveDshEntrypoint: () => '/stub/dsh.js',
+    });
+
+    const chunks = await collect(
+      provider.sendQuery('hi', '/repo', undefined, {
+        env: queryEnv(),
+        nodeConfig: { mcp: '/definitely/missing/deepseek-mcp.json' },
+      })
+    );
+
+    expect(calls).toEqual([]);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({
+      type: 'result',
+      isError: true,
+      errorSubtype: 'deepseek_mcp_config_error',
+    });
+    expect(chunks[0]?.type === 'result' ? chunks[0].errors?.[0] : undefined).toContain(
+      'MCP config file not found'
+    );
+  });
+
   test('fresh success does not add a resumed property', async () => {
     const calls: DeepseekProcessInput[] = [];
     const provider = new DeepseekProvider({
@@ -373,13 +454,18 @@ describe('DeepseekProvider', () => {
 
   test('unknown runner failure yields one redacted deepseek_acp_error result', async () => {
     const calls: DeepseekProcessInput[] = [];
+    const requestSecret = 'request-token-secret';
     const provider = new DeepseekProvider({
-      runTurn: throwingRunner(calls, new Error(`child died with ${API_KEY} then ${API_KEY}`)),
+      runTurn: throwingRunner(calls, new Error(`child died with ${API_KEY} then ${requestSecret}`)),
       resolveNodeBinary: () => '/stub/node',
       resolveDshEntrypoint: () => '/stub/dsh.js',
     });
 
-    const chunks = await collect(provider.sendQuery('hi', '/repo', undefined, { env: queryEnv() }));
+    const chunks = await collect(
+      provider.sendQuery('hi', '/repo', undefined, {
+        env: queryEnv({ ARCHON_DEEPSEEK_EXTRA_TOKEN: requestSecret }),
+      })
+    );
 
     expect(chunks).toEqual([
       {
@@ -390,6 +476,42 @@ describe('DeepseekProvider', () => {
       },
     ]);
     expect(JSON.stringify(chunks)).not.toContain(API_KEY);
+    expect(JSON.stringify(chunks)).not.toContain(requestSecret);
+  });
+
+  test('runner errors redact MCP header secrets', async () => {
+    const headerSecret = 'Bearer static-mcp-token';
+    const mcpPath = await writeMcpConfig({
+      api: {
+        type: 'http',
+        url: 'https://mcp.example/http',
+        headers: { Authorization: headerSecret },
+      },
+    });
+    const calls: DeepseekProcessInput[] = [];
+    const provider = new DeepseekProvider({
+      runTurn: throwingRunner(calls, new Error(`mcp failed with ${headerSecret}`)),
+      resolveNodeBinary: () => '/stub/node',
+      resolveDshEntrypoint: () => '/stub/dsh.js',
+    });
+
+    const chunks = await collect(
+      provider.sendQuery('hi', '/repo', undefined, {
+        env: queryEnv(),
+        nodeConfig: { mcp: mcpPath },
+      })
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(chunks).toEqual([
+      {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'deepseek_acp_error',
+        errors: ['mcp failed with [REDACTED]'],
+      },
+    ]);
+    expect(JSON.stringify(chunks)).not.toContain(headerSecret);
   });
 
   test('assistant and tool chunks remain in original order', async () => {
