@@ -6,7 +6,8 @@
 **Goal:** Let the authenticated run starter answer or decline every structured Ask inline at its tool invocation in the Command Center agent room, with the same envelope, validity, copy, and warning awaiting chrome as Story 6.5, while teammates see named read-only state and the console composer stays a conversation path.
 
 **Architecture:** Keep console production code isolated under `packages/web/src/experiments/console/**`.
-Consume generated OpenAPI types only from `@/lib/api.generated`, call the existing GET-run embed and Ask POST through console `requestJson`, and duplicate Story 6.5's pure Ask helpers plus a console-owned card shell so NFR4 and FR8 stay intact.
+Consume generated OpenAPI types only from `@/lib/api.generated`, call the existing GET-run embed and Ask POST through console `requestJson`, and mirror only the Story 6.5 helper behavior that the console actually calls.
+Keep the React shell console-owned so NFR4 and FR8 stay intact.
 Do not import legacy React, `@/lib/api` functions, React Query, or `@/components/workflows/*`.
 GET `/api/workflows/runs/:runId` `pending_interactions` remains the only Ask-card source.
 SSE `workflow_status` (mapped from `node_awaiting` / `interaction_resolved`) remains an identifier-only refetch trigger.
@@ -25,7 +26,8 @@ SSE `workflow_status` (mapped from `node_awaiting` / `interaction_resolved`) rem
 - Type-only `api.generated.d.ts` remains allowed.
 - The one sanctioned production-web runtime import remains `@/lib/run-graph`.
 - Console must not import legacy `AskCard`, `WorkflowAskChrome`, `parse-ask-envelope`, `merge-agent-room-items`, `ask-answer-controller`, `ask-card-presentation`, or `awaiting-chrome`.
-- Duplicate those contracts under `packages/web/src/experiments/console/components/ask/` and render them with console-owned markup.
+- Mirror the required pure behavior under `packages/web/src/experiments/console/components/ask/` and render it with console-owned markup.
+- Do not copy the legacy-only, currently unused `mergeAgentRoomItems` or `nodeStatusLabel` exports, and do not introduce any helper with no console production caller.
 - GET `/api/workflows/runs/:runId` `pending_interactions` is the only source of Ask cards.
 - SSE payloads never become cards.
 - Transcript `status` rows remain lifecycle notes and never become Ask cards.
@@ -53,25 +55,25 @@ SSE `workflow_status` (mapped from `node_awaiting` / `interaction_resolved`) rem
 
 ## Verified Repository Facts
 
-- Story 6.6 acceptance criteria are at `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md:507`.
-- NFR4 isolation is at `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md:64` and `eslint.config.mjs:116`.
+- Story 6.6 acceptance criteria are in `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md` under `### Story 6.6: Answer the Ask in the Command Center room`.
+- NFR4 isolation is in the requirements inventory in `_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md` and is enforced by `eslint.config.mjs` plus `packages/web/src/experiments/console/console-isolation.test.ts`.
 - Unified render means envelope, states, validity, and copy, not a shared React module (`ARCHITECTURE-SPINE.md` convention table and Story 6.6 AC).
-- Story 6.5 already added required GET-run fields `pending_interactions`, `viewer_is_starter`, and `starter_display_name` to `packages/web/src/lib/api.generated.d.ts:5084`.
-- `AskAnswerBody` is `{ answers: { questionId: string; value: string | string[] }[] } | { decline: true }` at `api.generated.d.ts:4999`.
-- `WorkflowNodeState.status` already includes `awaiting` and optional `error` at `api.generated.d.ts:5126`.
-- `packages/web/src/lib/run-graph/types.ts:1` already includes `NodeState` `'awaiting'`.
-- Console `getRun` currently drops the GET-run Ask fields at `packages/web/src/experiments/console/skills/runs.ts:70`.
-- Console `inspectStatus` currently maps `awaiting` to `running` at `packages/web/src/experiments/console/components/inspect/inspect-status.ts:4`.
+- Story 6.5 already added required GET-run fields `pending_interactions`, `viewer_is_starter`, and `starter_display_name` to the generated `WorkflowRunDetail` schema in `packages/web/src/lib/api.generated.d.ts`.
+- `AskAnswerBody` is `{ answers: { questionId: string; value: string | string[] }[] } | { decline: true }` in `packages/web/src/lib/api.generated.d.ts`.
+- `WorkflowNodeState.status` already includes `awaiting` and optional `error` in `packages/web/src/lib/api.generated.d.ts`.
+- `NodeState` in `packages/web/src/lib/run-graph/types.ts` already includes `'awaiting'`.
+- Console `getRun` in `packages/web/src/experiments/console/skills/runs.ts` currently drops the GET-run Ask fields.
+- Console `inspectStatus` in `packages/web/src/experiments/console/components/inspect/inspect-status.ts` currently maps `awaiting` to `running`.
 - `build-run-graph-input.test.ts` currently asserts awaiting is normalized to running before layout.
 - `build-console-log-entries.test.ts` currently asserts awaiting display status is `running`.
-- `console-isolation.test.ts:120` currently forbids `pending_interactions`, `AskCard`, `ChatComposer`, `Waiting on you`, and `awaiting` in inspect production files.
-- `ConsoleNodeRoom.test.tsx:149` `assertNoEpicSix` currently forbids those same strings in mounted rooms.
-- `ChatComposer` mounts only on `ChatPage.tsx:314` and sends conversation messages.
-- Run-detail SSE already maps `node_awaiting` / `interaction_resolved` to `workflow_status` and invalidates `K.run` at `packages/web/src/experiments/console/lib/sse.ts:134`.
+- The `inspect and room production files omit premature HITL chrome` case in `console-isolation.test.ts` currently forbids `pending_interactions`, `AskCard`, `ChatComposer`, `Waiting on you`, and `awaiting` in inspect production files.
+- The `assertNoEpicSix` helper in `ConsoleNodeRoom.test.tsx` currently forbids those same strings in mounted rooms.
+- `ChatComposer` mounts only in `ChatPage.tsx` and sends conversation messages.
+- Run-detail SSE already maps `node_awaiting` / `interaction_resolved` to `workflow_status` and invalidates `K.run` in `packages/web/src/experiments/console/lib/sse.ts`.
 - Agent rooms already poll node messages every 1s while `isInspectRunLive` is true, and paused is live.
 - `RunActionBar` returns null while `run.status === 'paused'`.
-- Declared-gate UI remains the log footer `ApprovalContext` / `ApprovalPanel` path in `RunDetailPage.tsx:500`.
-- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml:60` currently has `6-6-answer-the-ask-in-the-command-center-room: backlog`.
+- Declared-gate UI remains the `ApprovalContext` / `ApprovalPanel` log-footer path in `RunDetailPage.tsx`.
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` currently has `6-6-answer-the-ask-in-the-command-center-room: backlog`.
 - Stories 6.1 through 6.5 and 6.7 are already `done`.
 
 ## Locked Design and Interfaces
@@ -121,15 +123,16 @@ export async function answerAskHuman(
 }
 ```
 
-### Duplicated pure Ask modules
+### Console-owned pure Ask modules
 
 Create console-owned copies under `packages/web/src/experiments/console/components/ask/`.
-Copy the Story 6.5 algorithms exactly from the legacy files listed below, changing only import paths so they use console `PendingInteraction`, `AskAnswerBody`, `WorkflowRunActionResponse`, `WorkflowNodeMessage`, and `HttpError`.
+Copy the Story 6.5 algorithms from the legacy files listed below, changing import paths so they use console `PendingInteraction`, `AskAnswerBody`, `WorkflowRunActionResponse`, `WorkflowNodeMessage`, and `HttpError`.
+Keep only exports with an identified console production caller.
 
 | Console file | Copy algorithm from |
 | --- | --- |
 | `parse-ask-envelope.ts` | `packages/web/src/components/workflows/parse-ask-envelope.ts` |
-| `merge-agent-room-items.ts` | `packages/web/src/components/workflows/merge-agent-room-items.ts` |
+| `select-visible-node-ask-interactions.ts` | `selectVisibleNodeAskInteractions` and its private helpers from `packages/web/src/components/workflows/merge-agent-room-items.ts` |
 | `ask-answer-controller.ts` | `packages/web/src/components/workflows/ask-answer-controller.ts` |
 | `ask-card-presentation.ts` | `packages/web/src/components/workflows/ask-card-presentation.ts` |
 | `awaiting-chrome.ts` | `packages/web/src/components/workflows/awaiting-chrome.ts` |
@@ -166,28 +169,18 @@ Multi-select validity requires a non-empty array whose values are listed options
 `parseAskAnswer` recognizes only the strict `{ decline: true }` union member or a non-empty strict `answers` array with non-empty `questionId` and string or string-array `value`.
 
 ```ts
-export type AgentRoomItem =
-  | { kind: 'message'; id: string; message: WorkflowNodeMessage }
-  | { kind: 'ask'; id: string; interaction: PendingInteraction };
-
 export function selectVisibleNodeAskInteractions(input: {
   pending: readonly PendingInteraction[];
   nodeId: string;
   allMessages: readonly WorkflowNodeMessage[];
   visibleMessages: readonly WorkflowNodeMessage[];
 }): PendingInteraction[];
-
-export function mergeAgentRoomItems(
-  visibleMessages: readonly WorkflowNodeMessage[],
-  interactions: readonly PendingInteraction[]
-): AgentRoomItem[];
 ```
 
 Selection keeps `kind === 'ask'`, the selected `node_id`, and status `pending` or `answered`, while preserving GET order and excluding `purged` and `permission` rows.
 An Ask with a tool id found in the full transcript is included only when that tool row is in the selected loop slice.
 An Ask with no matching tool row anywhere is included only when the visible slice reaches the end of the full transcript, including the ordinary whole-node selection.
-The merger sorts visible messages by `seq`, inserts matching cards immediately after the matching tool message, and appends only the remaining already-selected Ask rows.
-Ask item ids use `ask:${interaction.id}`.
+`ConsoleNodeRoom` inserts selected anchored cards immediately after their matching tool message and appends selected unanchored cards after the visible transcript slice.
 
 ```ts
 export type AskActionState =
@@ -262,12 +255,10 @@ export function isAskAwaitingRun(
 ): boolean;
 export function firstAwaitingNodeId(nodes: readonly WorkflowNodeState[]): string | null;
 export function isAskHumanUnsupportedError(error: string | null | undefined): boolean;
-export function nodeStatusLabel(status: WorkflowNodeState['status'] | string): string;
 ```
 
 Run awaiting is exactly `status === 'paused'` with at least one pending Ask.
 Permission rows, answered rows, purged rows, and declared-gate pauses do not contribute to the count.
-The node label for `awaiting` is exactly `waiting on you`.
 CAP-7 matching is a prefix check for `AskHuman is not supported by provider`.
 
 ### Inspect status policy
@@ -304,11 +295,6 @@ export function inspectStatusLabel(value: string): string {
 export function isInspectRunLive(status: string): boolean {
   return status === 'running' || status === 'paused';
 }
-
-export function isInspectLiveNode(status: string): boolean {
-  const mapped = inspectStatus(status);
-  return mapped === 'running' || mapped === 'awaiting';
-}
 ```
 
 `resolveInitialInspectSelection` precedence is exact: valid `?node=` wins, else the first `awaiting` node, else the first `running` node, else declared approval, else the first log row, else none.
@@ -317,7 +303,7 @@ Do not treat awaiting as running.
 `NodeDivider` status union adds `'awaiting'`.
 Its label for awaiting is `waiting on you`.
 Its color class is `text-warning`.
-`RunGraphPanel` `InspectCardStatus` adds `'awaiting'` with warning fill, warning border, warning glyph class, visible `waiting on you`, optional pulse, and `motion-reduce:animate-none`.
+`RunGraphPanel` `InspectCardStatus` adds `'awaiting'` with warning fill, warning border, warning glyph class, visible `waiting on you`, `animate-[pulse_2.4s_ease-in-out_infinite]`, and `motion-reduce:animate-none`.
 `build-run-graph-input` passes `awaiting` through to `@/lib/run-graph` so taken-path stays on.
 
 ### Console Ask card
@@ -427,18 +413,20 @@ When the selected slice is empty and `renderAtEnd` is present, render the end co
 Loading continues to suppress both slots.
 The error state renders its retry UI followed by `renderAtEnd`.
 
-`ConsoleNodeRoom` receives these additional props, all optional with empty defaults so existing inspect tests compile until Task 9 wires them.
+The final `ConsoleNodeRoom` and `ConsoleInspectPane` contracts receive these additional required props.
+Task 10 keeps only the pane's public handoff props optional with empty defaults as a temporary buildable seam for the not-yet-wired page caller.
+Task 11 wires the page and makes the pane props required in the same GREEN change, so the final type checker cannot hide a missing production path.
 
 ```ts
-pendingInteractions?: readonly PendingInteraction[];
-viewerIsStarter?: boolean;
-starterDisplayName?: string | null;
-actionStates?: AskActionStateByRequest;
-onSubmitAsk?: (requestId: string, body: AskAnswerBody) => Promise<void>;
+pendingInteractions: readonly PendingInteraction[];
+viewerIsStarter: boolean;
+starterDisplayName: string | null;
+actionStates: AskActionStateByRequest;
+onSubmitAsk: (requestId: string, body: AskAnswerBody) => Promise<void>;
 ```
 
 Only `resolution.kind === 'agent'` uses those props.
-Compose cards with `selectNodeRoomMessages`, `selectVisibleNodeAskInteractions`, and the same first-actionable-id rule as `NodeTranscriptPane.tsx:106`.
+Compose cards with `selectNodeRoomMessages`, `selectVisibleNodeAskInteractions`, and the same first-actionable-id rule implemented by `packages/web/src/components/workflows/NodeTranscriptPane.tsx`.
 `agentDisplayName` is `row?.label ?? ''`.
 `nowMs` is `Date.now()`.
 Do not pass Ask props into stdout, gate, workflow, route, or loop-group bodies.
@@ -459,11 +447,11 @@ Do not pass pending interactions into `ChatComposer`, `ChatPage`, or `RunActionB
 ### Isolation rewrite
 
 Keep the NFR4 import scan.
-Replace the premature-HITL identifier scan with these exact rules.
+Replace the premature-HITL identifier scan with a final architecture guard.
 
-- Inspect and room production files must not import `ChatComposer` or any `@/components/workflows/` module.
-- Inspect and room production files may contain `pendingInteractions`, `ConsoleAskCard`, `waiting on you`, and `awaiting`.
-- `ChatComposer.tsx` and `ChatPage.tsx` production source must not contain `pendingInteractions`, `answerAskHuman`, `ConsoleAskCard`, or `Waiting for`.
+- `ConsoleNodeRoom`, `ConsoleInspectPane`, and `RunDetailPage` must not import `ChatComposer` or any legacy `components/workflows` module through either alias or relative paths.
+- The room must import its console-owned `ConsoleAskCard`, and the page must import its console-owned `ConsoleAskChrome`.
+- `ChatComposer.tsx` and `ChatPage.tsx` production source must not contain `pendingInteractions`, `answerAskHuman`, `ConsoleAskCard`, or `ConsoleAskChrome`.
 
 ## File Map
 
@@ -474,8 +462,8 @@ Replace the premature-HITL identifier scan with these exact rules.
 | `packages/web/src/experiments/console/skills/runs.ask.test.ts` | Create | Prove encoded answer POST and 409 `HttpError` |
 | `packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts` | Create | Parse questions, answers, draft validity, and request body |
 | `packages/web/src/experiments/console/components/ask/parse-ask-envelope.test.ts` | Create | Prove parser and validity matrices |
-| `packages/web/src/experiments/console/components/ask/merge-agent-room-items.ts` | Create | Select loop-safe Ask rows and interleave them with transcript messages |
-| `packages/web/src/experiments/console/components/ask/merge-agent-room-items.test.ts` | Create | Prove selected-node, loop-slice, anchor, and fallback behavior |
+| `packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts` | Create | Select loop-safe Ask rows for the active node-room slice |
+| `packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts` | Create | Prove selected-node, loop-slice, anchor, and fallback behavior |
 | `packages/web/src/experiments/console/components/ask/ask-answer-controller.ts` | Create | Own independent mutation lifecycle and duplicate suppression |
 | `packages/web/src/experiments/console/components/ask/ask-answer-controller.test.ts` | Create | Prove success, concurrency, 409, and error behavior |
 | `packages/web/src/experiments/console/components/ask/ask-card-presentation.ts` | Create | Derive canonical and optimistic card presentation |
@@ -493,6 +481,7 @@ Replace the premature-HITL identifier scan with these exact rules.
 | `packages/web/src/experiments/console/components/RunGraphPanel.tsx` | Modify | Warning awaiting graph chrome |
 | `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx` | Modify | Prove `waiting on you` and warning tokens |
 | `packages/web/src/experiments/console/lib/format.ts` | Modify | Add `formatDurationMs` |
+| `packages/web/src/experiments/console/lib/format.test.ts` | Modify | Prove millisecond, second, and minute formatting boundaries |
 | `packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx` | Create | Console-owned accessible Ask card |
 | `packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx` | Create | Prove form semantics, copy, focus, actions, summaries, and errors |
 | `packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx` | Create | Run-level awaiting pill or CAP-7 banner |
@@ -517,7 +506,23 @@ Each numbered RED/GREEN cycle below is atomic.
 Add only the named test, run the exact command until it fails for the stated missing behavior rather than an import, syntax, fixture, or environment error, implement only enough production code for that test, rerun to PASS with pristine output, and only then begin the next cycle.
 Sprint YAML is the only test-first exception because it is tracking configuration.
 
-Component suites that import `react-dom/client` must set `process.env.NODE_ENV = 'development'` as the first statement, matching `ConsoleInspectPane.test.tsx:1`.
+Component suites that import `react-dom/client` must set `process.env.NODE_ENV = 'development'` as the first statement, matching `packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx`.
+
+---
+
+## Implementation Preflight
+
+Before editing production code, run `git status --short` from the repository root and preserve every unrelated user change.
+Run the current console boundary, inspect, room, page, and isolation suites to establish a green baseline.
+
+```bash
+cd packages/web
+bun test src/experiments/console/skills/runs.node-messages.test.ts src/experiments/console/components/inspect/inspect-status.test.ts src/experiments/console/components/inspect/console-inspect-selection.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts src/experiments/console/components/graph/build-run-graph-input.test.ts
+bun test src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunGraphPanel.test.tsx src/experiments/console/components/ConsoleNodeRoom.test.tsx src/experiments/console/components/ConsoleInspectPane.test.tsx src/experiments/console/components/RunDetailHeader.test.tsx src/experiments/console/routes/RunDetailPage.test.tsx src/experiments/console/console-isolation.test.ts
+```
+
+Expected result: every command exits 0.
+Stop and investigate any baseline failure before attributing it to Story 6.6.
 
 ---
 
@@ -572,6 +577,24 @@ test('keeps pending interactions, viewer presentation, and string metadata error
   expect(result.viewerIsStarter).toBe(true);
   expect(result.starterDisplayName).toBe('Avery');
   expect(result.runError).toBe('AskHuman is not supported by provider: grok');
+
+  fetchSpy?.mockRestore();
+  stubFetch(() =>
+    jsonResponse({
+      run: { ...detailRun('run/1'), metadata: { error: { unsafe: true } } },
+      events: [],
+      nodeStates: [],
+      pending_interactions: [],
+      usage: null,
+      viewer_is_starter: false,
+      starter_display_name: null,
+    } satisfies RunDetailResponse)
+  );
+  const nonStringError = await getRun('run/1');
+  expect(nonStringError.pendingInteractions).toEqual([]);
+  expect(nonStringError.viewerIsStarter).toBe(false);
+  expect(nonStringError.starterDisplayName).toBeNull();
+  expect(nonStringError.runError).toBeNull();
 });
 ```
 
@@ -582,9 +605,46 @@ Expected failure: `pendingInteractions` is missing on the result.
 
 - [ ] **Step 3: Implement the ConsoleRunDetail fields in `getRun`.**
 
-Use the locked mapping.
-Keep existing `toRun` / `rawEvents` / `approval` behavior.
-Treat a non-string `metadata.error` as `null`.
+Add the generated type aliases beside the existing run-detail aliases.
+
+```ts
+export type PendingInteraction = components['schemas']['PendingInteraction'];
+export type AskAnswerBody = components['schemas']['AskAnswerBody'];
+export type WorkflowRunActionResponse = components['schemas']['WorkflowRunActionResponse'];
+```
+
+Add these properties after `usage` in `ConsoleRunDetail`.
+
+```ts
+pendingInteractions: PendingInteraction[];
+viewerIsStarter: boolean;
+starterDisplayName: string | null;
+runError: string | null;
+```
+
+Replace the body of `getRun` with this exact mapping.
+
+```ts
+export async function getRun(id: string): Promise<ConsoleRunDetail> {
+  const res = await requestJson<RunDetailResponse>(
+    `/api/workflows/runs/${encodeURIComponent(id)}`
+  );
+  const approval = res.run.metadata.approval ?? null;
+  const metadataError = res.run.metadata.error;
+  return {
+    run: toRun(res.run),
+    events: res.events.map(toRunEvent),
+    rawEvents: res.events,
+    nodeStates: res.nodeStates,
+    approval,
+    usage: res.usage,
+    pendingInteractions: res.pending_interactions ?? [],
+    viewerIsStarter: res.viewer_is_starter === true,
+    starterDisplayName: res.starter_display_name,
+    runError: typeof metadataError === 'string' ? metadataError : null,
+  };
+}
+```
 
 - [ ] **Step 4: Rerun the GET-run Ask-field test and verify GREEN.**
 
@@ -596,6 +656,46 @@ Expected result: PASS.
 Create `runs.ask.test.ts` using the same `spyOn(globalThis, 'fetch')` pattern as `runs.node-messages.test.ts`.
 
 ```ts
+import { afterEach, expect, spyOn, test } from 'bun:test';
+import { HttpError } from '../lib/http';
+import { answerAskHuman } from './runs';
+
+type FetchSpy = ReturnType<typeof spyOn<typeof globalThis, 'fetch'>>;
+let fetchSpy: FetchSpy | undefined;
+
+afterEach(() => {
+  fetchSpy?.mockRestore();
+  fetchSpy = undefined;
+});
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function stubFetch(handler: (url: string) => Response): FetchSpy {
+  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(((input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    return Promise.resolve(handler(url));
+  }) as typeof fetch);
+  return fetchSpy;
+}
+
+function ensureWindow(): void {
+  if (typeof (globalThis as { window?: { location: { origin: string } } }).window === 'undefined') {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { location: { origin: 'http://localhost', hostname: 'localhost' } },
+    });
+  }
+}
+```
+
+Add these two tests below the helpers.
+
+```ts
 test('answerAskHuman posts an encoded URL and JSON body', async () => {
   stubFetch(url => {
     expect(url).toBe('/api/workflows/runs/run%2F1/ask/toolu%20a/answer');
@@ -605,6 +705,7 @@ test('answerAskHuman posts an encoded URL and JSON body', async () => {
   expect(result).toEqual({ success: true, message: 'ok' });
   const init = fetchSpy?.mock.calls[0]?.[1] as RequestInit;
   expect(init.method).toBe('POST');
+  expect(new Headers(init.headers).get('Content-Type')).toBe('application/json');
   expect(init.body).toBe(JSON.stringify({ decline: true }));
 });
 
@@ -628,6 +729,23 @@ Expected failure: `answerAskHuman` is not exported.
 
 - [ ] **Step 7: Add `answerAskHuman` with the locked URL and JSON POST.**
 
+```ts
+export async function answerAskHuman(
+  runId: string,
+  requestId: string,
+  body: AskAnswerBody
+): Promise<WorkflowRunActionResponse> {
+  return requestJson<WorkflowRunActionResponse>(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/ask/${encodeURIComponent(requestId)}/answer`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }
+  );
+}
+```
+
 - [ ] **Step 8: Rerun both skill files and verify GREEN.**
 
 Run `cd packages/web && bun test src/experiments/console/skills/runs.node-messages.test.ts src/experiments/console/skills/runs.ask.test.ts`.
@@ -636,7 +754,7 @@ Expected result: PASS.
 - [ ] **Step 9: Format and commit Task 1.**
 
 ```bash
-cd packages/web && bun x prettier --write src/experiments/console/skills/runs.ts src/experiments/console/skills/runs.node-messages.test.ts src/experiments/console/skills/runs.ask.test.ts
+bun x prettier --write packages/web/src/experiments/console/skills/runs.ts packages/web/src/experiments/console/skills/runs.node-messages.test.ts packages/web/src/experiments/console/skills/runs.ask.test.ts
 git add packages/web/src/experiments/console/skills/runs.ts packages/web/src/experiments/console/skills/runs.node-messages.test.ts packages/web/src/experiments/console/skills/runs.ask.test.ts
 git commit -m "feat(web): expose console Ask run fields and answer POST"
 ```
@@ -655,15 +773,35 @@ git commit -m "feat(web): expose console Ask run fields and answer POST"
 
 - [ ] **Step 1: Write the failing parser suite.**
 
-Port the tables from `packages/web/src/components/workflows/parse-ask-envelope.test.ts` into the console file, importing from `./parse-ask-envelope`.
-Required cases: empty questions, duplicate ids, invalid selection, missing allowOther, single listed option, single Other with trim, empty Other, multi empty array, multi listed plus Other, `draftToAnswerBody` order, `{ decline: true }`, answers array, extra keys rejected.
+Create the console test by copying the already-approved Story 6.5 behavioral table byte-for-byte.
+The test already imports `./parse-ask-envelope`, so it will exercise the console module and fail until that module exists.
+
+```bash
+cp packages/web/src/components/workflows/parse-ask-envelope.test.ts \
+  packages/web/src/experiments/console/components/ask/parse-ask-envelope.test.ts
+```
+
+Before running it, confirm the copied table includes malformed envelopes, duplicate ids, listed and Other choices, empty multi-select, ordered request bodies, decline decoding, and strict extra-key rejection.
 
 - [ ] **Step 2: Run the parser tests and verify RED.**
 
 Run `cd packages/web && bun test src/experiments/console/components/ask/parse-ask-envelope.test.ts`.
 Expected failure: module not found.
 
-- [ ] **Step 3: Copy `packages/web/src/components/workflows/parse-ask-envelope.ts` into the console path and change only the `AskAnswerBody` import to `../../skills/runs`.**
+- [ ] **Step 3: Add the parser implementation from the approved Story 6.5 source.**
+
+Copy the implementation, then replace its production API import with the console-owned generated-type re-export.
+
+```bash
+cp packages/web/src/components/workflows/parse-ask-envelope.ts \
+  packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts
+```
+
+The only source change from the copied file is this import.
+
+```ts
+import type { AskAnswerBody } from '../../skills/runs';
+```
 
 - [ ] **Step 4: Rerun the parser tests and verify GREEN.**
 
@@ -673,106 +811,294 @@ Expected result: PASS.
 - [ ] **Step 5: Format and commit Task 2.**
 
 ```bash
-cd packages/web && bun x prettier --write src/experiments/console/components/ask/parse-ask-envelope.ts src/experiments/console/components/ask/parse-ask-envelope.test.ts
+bun x prettier --write packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts packages/web/src/experiments/console/components/ask/parse-ask-envelope.test.ts
 git add packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts packages/web/src/experiments/console/components/ask/parse-ask-envelope.test.ts
 git commit -m "feat(web): parse console Ask envelopes without legacy imports"
 ```
 
-### Task 3: Duplicate loop-safe Ask placement
+### Task 3: Add loop-safe Ask selection
 
 **Files:**
 
-- Create: `packages/web/src/experiments/console/components/ask/merge-agent-room-items.ts`
-- Create: `packages/web/src/experiments/console/components/ask/merge-agent-room-items.test.ts`
+- Create: `packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts`
+- Create: `packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts`
 
 **Interfaces:**
 
 - Consumes: `PendingInteraction` and `WorkflowNodeMessage` from `../../skills/runs`.
-- Produces: `AgentRoomItem`, `selectVisibleNodeAskInteractions`, `mergeAgentRoomItems`.
+- Produces: `selectVisibleNodeAskInteractions`.
 
-- [ ] **Step 1: Write the failing merge suite.**
+- [ ] **Step 1: Write the failing selector suite.**
 
-Port the cases from `packages/web/src/components/workflows/merge-agent-room-items.test.ts` using `WorkflowNodeMessage` instead of `WorkflowNodeMessageResponse`.
-Required cases: other node excluded, permission excluded, purged excluded, GET order preserved, anchored Ask hidden in another loop slice, unanchored Ask shown only at transcript tail, merge inserts after matching tool id, unanchored Ask appended, item id `ask:${interaction.id}`.
+Create a focused table with literal expected interaction ids.
+Use complete generated-shape fixtures, not partial type assertions.
 
-- [ ] **Step 2: Run the merge tests and verify RED.**
+```ts
+import { describe, expect, test } from 'bun:test';
+import type { PendingInteraction, WorkflowNodeMessage } from '../../skills/runs';
+import { selectVisibleNodeAskInteractions } from './select-visible-node-ask-interactions';
 
-Run `cd packages/web && bun test src/experiments/console/components/ask/merge-agent-room-items.test.ts`.
+const CREATED_AT = '2026-09-07T00:00:00.000Z';
+
+function interaction(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
+  return {
+    id: 'ask-1',
+    workflow_run_id: 'run-1',
+    node_id: 'review',
+    tool_use_id: 'tool-1',
+    kind: 'ask',
+    status: 'pending',
+    envelope: { questions: [] },
+    answer: null,
+    provider_session_id: 'session-1',
+    created_at: CREATED_AT,
+    resolved_at: null,
+    resolved_by: null,
+    ...overrides,
+  };
+}
+
+function message(
+  id: string,
+  seq: number,
+  kind: 'text' | 'tool',
+  toolId?: string
+): WorkflowNodeMessage {
+  return kind === 'tool'
+    ? {
+        id,
+        seq,
+        kind,
+        payload: { name: 'AskHuman', id: toolId ?? id, input: {} },
+        created_at: CREATED_AT,
+      }
+    : { id, seq, kind, payload: { text: id }, created_at: CREATED_AT };
+}
+
+describe('selectVisibleNodeAskInteractions', () => {
+  test('keeps only visible pending or answered Ask rows for the selected node', () => {
+    const all = [message('m1', 1, 'tool', 'tool-1')];
+    const selected = selectVisibleNodeAskInteractions({
+      pending: [
+        interaction(),
+        interaction({ id: 'answered', tool_use_id: 'tool-1', status: 'answered' }),
+        interaction({ id: 'purged', tool_use_id: 'tool-1', status: 'purged' }),
+        interaction({ id: 'permission', tool_use_id: 'tool-1', kind: 'permission' }),
+        interaction({ id: 'other-node', node_id: 'ship', tool_use_id: 'tool-1' }),
+      ],
+      nodeId: 'review',
+      allMessages: all,
+      visibleMessages: all,
+    });
+    expect(selected.map(item => item.id)).toEqual(['ask-1', 'answered']);
+  });
+
+  test('does not leak an anchored Ask into a different loop slice', () => {
+    const first = message('m1', 1, 'tool', 'tool-1');
+    const second = message('m2', 2, 'tool', 'tool-2');
+    expect(
+      selectVisibleNodeAskInteractions({
+        pending: [interaction({ tool_use_id: 'tool-1' })],
+        nodeId: 'review',
+        allMessages: [first, second],
+        visibleMessages: [second],
+      })
+    ).toEqual([]);
+  });
+
+  test('shows an unanchored Ask only when the visible slice reaches the transcript tail', () => {
+    const first = message('m1', 1, 'text');
+    const last = message('m2', 2, 'text');
+    const current = interaction({ tool_use_id: 'tool-missing' });
+    expect(
+      selectVisibleNodeAskInteractions({
+        pending: [current],
+        nodeId: 'review',
+        allMessages: [first, last],
+        visibleMessages: [first],
+      })
+    ).toEqual([]);
+    expect(
+      selectVisibleNodeAskInteractions({
+        pending: [current],
+        nodeId: 'review',
+        allMessages: [first, last],
+        visibleMessages: [last],
+      }).map(item => item.id)
+    ).toEqual(['ask-1']);
+    expect(
+      selectVisibleNodeAskInteractions({
+        pending: [current],
+        nodeId: 'review',
+        allMessages: [],
+        visibleMessages: [],
+      }).map(item => item.id)
+    ).toEqual(['ask-1']);
+  });
+});
+```
+
+- [ ] **Step 2: Run the selector tests and verify RED.**
+
+Run `cd packages/web && bun test src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts`.
 Expected failure: module not found.
 
-- [ ] **Step 3: Copy the legacy merge module, switching types to `WorkflowNodeMessage`.**
+- [ ] **Step 3: Add only the selector and its private helpers.**
 
-- [ ] **Step 4: Rerun the merge tests and verify GREEN.**
+Copy `collectToolIds`, `sortedBySeq`, `visibleReachesTranscriptTail`, and `selectVisibleNodeAskInteractions` from `packages/web/src/components/workflows/merge-agent-room-items.ts`.
+Do not copy `AgentRoomItem` or `mergeAgentRoomItems` because no console production path calls them.
+Use this exact import and replace every `WorkflowNodeMessageResponse` annotation with `WorkflowNodeMessage`.
 
-Run `cd packages/web && bun test src/experiments/console/components/ask/merge-agent-room-items.test.ts`.
+```ts
+import type { PendingInteraction, WorkflowNodeMessage } from '../../skills/runs';
+```
+
+- [ ] **Step 4: Rerun the selector tests and verify GREEN.**
+
+Run `cd packages/web && bun test src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts`.
 Expected result: PASS.
 
 - [ ] **Step 5: Format and commit Task 3.**
 
 ```bash
-cd packages/web && bun x prettier --write src/experiments/console/components/ask/merge-agent-room-items.ts src/experiments/console/components/ask/merge-agent-room-items.test.ts
-git add packages/web/src/experiments/console/components/ask/merge-agent-room-items.ts packages/web/src/experiments/console/components/ask/merge-agent-room-items.test.ts
-git commit -m "feat(web): merge console Ask cards into agent transcripts"
+bun x prettier --write packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts
+git add packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.ts packages/web/src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts
+git commit -m "feat(web): select visible console Ask interactions"
 ```
 
-### Task 4: Duplicate mutation controller and presentation
+### Task 4: Add the Ask mutation controller
 
 **Files:**
 
 - Create: `packages/web/src/experiments/console/components/ask/ask-answer-controller.ts`
 - Create: `packages/web/src/experiments/console/components/ask/ask-answer-controller.test.ts`
-- Create: `packages/web/src/experiments/console/components/ask/ask-card-presentation.ts`
-- Create: `packages/web/src/experiments/console/components/ask/ask-card-presentation.test.ts`
 
 **Interfaces:**
 
-- Consumes: `AskAnswerBody`, `WorkflowRunActionResponse`, `PendingInteraction`, `WorkflowNodeState`, and `HttpError`.
-- Produces: `createAskAnswerController` and `resolveAskCardPresentation`.
+- Consumes: `AskAnswerBody`, `WorkflowRunActionResponse`, and console `HttpError`.
+- Produces: `AskActionStateByRequest` and `createAskAnswerController`.
 
 - [ ] **Step 1: Write the failing controller suite.**
 
-Port `packages/web/src/components/workflows/ask-answer-controller.test.ts`.
-Use `new HttpError(409, '/ask', 'taken')` for the late-answer case instead of a generic status object.
-Required cases: duplicate in-flight submit posts once, two request ids post concurrently, success emits accepted then invalidate, 409 emits rejected-late then invalidate, other errors emit `Failed to answer.` or the thrown message without invalidate, invalidate failure warns and keeps accepted state.
+Copy the approved Story 6.5 suite, switch its API types to `../../skills/runs`, import `HttpError` from `../../lib/http`, and replace the generic 409 fixture with a real console HTTP error.
+
+```bash
+cp packages/web/src/components/workflows/ask-answer-controller.test.ts \
+  packages/web/src/experiments/console/components/ask/ask-answer-controller.test.ts
+```
+
+The changed imports and 409 row are exactly:
+
+```ts
+import type { AskAnswerBody, WorkflowRunActionResponse } from '../../skills/runs';
+import { HttpError } from '../../lib/http';
+
+// In the rejected/failed table:
+{
+  name: '409',
+  error: new HttpError(409, '/ask', 'taken'),
+  expected: { phase: 'rejected-late' },
+  invalidateCalls: 1,
+}
+```
 
 - [ ] **Step 2: Run the controller tests and verify RED.**
 
 Run `cd packages/web && bun test src/experiments/console/components/ask/ask-answer-controller.test.ts`.
 Expected failure: module not found.
 
-- [ ] **Step 3: Copy the legacy controller and replace `getApiErrorStatus(error) === 409` with `error instanceof HttpError && error.status === 409`.**
+- [ ] **Step 3: Add the controller implementation.**
+
+Copy the legacy source, replace the API imports with the console imports below, and replace the 409 condition exactly.
+
+```bash
+cp packages/web/src/components/workflows/ask-answer-controller.ts \
+  packages/web/src/experiments/console/components/ask/ask-answer-controller.ts
+```
+
+```ts
+import type { AskAnswerBody, WorkflowRunActionResponse } from '../../skills/runs';
+import { HttpError } from '../../lib/http';
+
+// Replace getApiErrorStatus(error) === 409 with:
+error instanceof HttpError && error.status === 409
+```
 
 - [ ] **Step 4: Rerun the controller tests and verify GREEN.**
 
 Run `cd packages/web && bun test src/experiments/console/components/ask/ask-answer-controller.test.ts`.
 Expected result: PASS.
 
-- [ ] **Step 5: Write the failing presentation suite.**
+- [ ] **Step 5: Format and commit Task 4 from the repository root.**
 
-Port `packages/web/src/components/workflows/ask-card-presentation.test.ts` onto console types.
-Required cases: sending, accepted local answer, canonical answer wins summary, rejected-late survives canonical answer, malformed canonical answer, failed-resume prefix, unrelated node failure stays answered, pending error keeps pending.
+```bash
+bun x prettier --write packages/web/src/experiments/console/components/ask/ask-answer-controller.ts packages/web/src/experiments/console/components/ask/ask-answer-controller.test.ts
+git add packages/web/src/experiments/console/components/ask/ask-answer-controller.ts packages/web/src/experiments/console/components/ask/ask-answer-controller.test.ts
+git commit -m "feat(web): control console Ask answer mutations"
+```
 
-- [ ] **Step 6: Run the presentation tests and verify RED.**
+### Task 5: Add canonical and optimistic Ask presentation
+
+**Files:**
+
+- Create: `packages/web/src/experiments/console/components/ask/ask-card-presentation.ts`
+- Create: `packages/web/src/experiments/console/components/ask/ask-card-presentation.test.ts`
+
+**Interfaces:**
+
+- Consumes: `PendingInteraction`, `WorkflowNodeState`, `AskActionState`, and `parseAskAnswer`.
+- Produces: `AskCardPresentation` and `resolveAskCardPresentation`.
+
+- [ ] **Step 1: Write the failing presentation suite.**
+
+Copy the Story 6.5 table and replace only its generated type import.
+
+```bash
+cp packages/web/src/components/workflows/ask-card-presentation.test.ts \
+  packages/web/src/experiments/console/components/ask/ask-card-presentation.test.ts
+```
+
+```ts
+import type { AskAnswerBody, PendingInteraction } from '../../skills/runs';
+```
+
+- [ ] **Step 2: Run the presentation tests and verify RED.**
 
 Run `cd packages/web && bun test src/experiments/console/components/ask/ask-card-presentation.test.ts`.
 Expected failure: module not found.
 
-- [ ] **Step 7: Copy the legacy presentation module, switching `WorkflowNodeStateResponse` to `WorkflowNodeState`.**
+- [ ] **Step 3: Add the presentation implementation.**
 
-- [ ] **Step 8: Rerun controller and presentation tests and verify GREEN.**
-
-Run `cd packages/web && bun test src/experiments/console/components/ask/ask-answer-controller.test.ts src/experiments/console/components/ask/ask-card-presentation.test.ts`.
-Expected result: PASS.
-
-- [ ] **Step 9: Format and commit Task 4.**
+Copy the Story 6.5 implementation.
+Use the console type import below and replace every `WorkflowNodeStateResponse` reference with `WorkflowNodeState`.
 
 ```bash
-cd packages/web && bun x prettier --write src/experiments/console/components/ask/ask-answer-controller.ts src/experiments/console/components/ask/ask-answer-controller.test.ts src/experiments/console/components/ask/ask-card-presentation.ts src/experiments/console/components/ask/ask-card-presentation.test.ts
-git add packages/web/src/experiments/console/components/ask/ask-answer-controller.ts packages/web/src/experiments/console/components/ask/ask-answer-controller.test.ts packages/web/src/experiments/console/components/ask/ask-card-presentation.ts packages/web/src/experiments/console/components/ask/ask-card-presentation.test.ts
-git commit -m "feat(web): derive console Ask mutation and card presentation"
+cp packages/web/src/components/workflows/ask-card-presentation.ts \
+  packages/web/src/experiments/console/components/ask/ask-card-presentation.ts
 ```
 
-### Task 5: Promote awaiting inspect chrome
+```ts
+import type {
+  AskAnswerBody,
+  PendingInteraction,
+  WorkflowNodeState,
+} from '../../skills/runs';
+```
+
+- [ ] **Step 4: Rerun parser and presentation tests and verify GREEN.**
+
+Run `cd packages/web && bun test src/experiments/console/components/ask/parse-ask-envelope.test.ts src/experiments/console/components/ask/ask-card-presentation.test.ts`.
+Expected result: PASS.
+
+- [ ] **Step 5: Format and commit Task 5 from the repository root.**
+
+```bash
+bun x prettier --write packages/web/src/experiments/console/components/ask/ask-card-presentation.ts packages/web/src/experiments/console/components/ask/ask-card-presentation.test.ts
+git add packages/web/src/experiments/console/components/ask/ask-card-presentation.ts packages/web/src/experiments/console/components/ask/ask-card-presentation.test.ts
+git commit -m "feat(web): derive console Ask card presentation"
+```
+
+### Task 6: Derive awaiting state and initial inspect selection
 
 **Files:**
 
@@ -784,29 +1110,49 @@ git commit -m "feat(web): derive console Ask mutation and card presentation"
 - Modify: `packages/web/src/experiments/console/components/inspect/console-inspect-selection.test.ts`
 - Modify: `packages/web/src/experiments/console/components/inspect/build-console-log-entries.test.ts`
 - Modify: `packages/web/src/experiments/console/components/graph/build-run-graph-input.test.ts`
-- Modify: `packages/web/src/experiments/console/components/NodeDivider.tsx`
-- Modify: `packages/web/src/experiments/console/components/NodeDivider.test.tsx`
-- Modify: `packages/web/src/experiments/console/components/RunGraphPanel.tsx`
-- Modify: `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx`
 
 **Interfaces:**
 
 - Consumes: `InspectStatus`, `WorkflowNodeState`, `PendingInteraction`, `Run['status']`.
-- Produces: awaiting as a first-class inspect status with warning copy.
+- Produces: pending-Ask count, CAP-7 classification, first-awaiting navigation, `awaiting` pass-through, and deterministic initial selection.
 
 - [ ] **Step 1: Write the failing awaiting-chrome suite.**
 
-Port `packages/web/src/components/workflows/awaiting-chrome.test.ts` onto console types.
-Required cases: pending ask count ignores permission/answered/purged, `isAskAwaitingRun` requires paused plus count>0, `firstAwaitingNodeId` returns the first projector `awaiting` node, CAP-7 prefix match, `nodeStatusLabel('awaiting') === 'waiting on you'`.
+Copy the Story 6.5 suite, switch its imports to console types, and remove the `nodeStatusLabel` import and three label assertions because `inspectStatusLabel` is the console's existing label owner.
+
+```bash
+cp packages/web/src/components/workflows/awaiting-chrome.test.ts \
+  packages/web/src/experiments/console/components/ask/awaiting-chrome.test.ts
+```
+
+```ts
+import type { PendingInteraction, WorkflowNodeState } from '../../skills/runs';
+```
 
 - [ ] **Step 2: Run awaiting-chrome tests and verify RED.**
 
 Run `cd packages/web && bun test src/experiments/console/components/ask/awaiting-chrome.test.ts`.
 Expected failure: module not found.
 
-- [ ] **Step 3: Copy the legacy awaiting-chrome module onto console `Run` / `WorkflowNodeState` types.**
+- [ ] **Step 3: Add the used awaiting helpers.**
 
-- [ ] **Step 4: Invert inspect-status tests to the locked policy.**
+Copy `countPendingAsks`, `isAskAwaitingRun`, `firstAwaitingNodeId`, and `isAskHumanUnsupportedError` from the legacy module.
+Do not copy `nodeStatusLabel` because console production already owns that behavior in `inspectStatusLabel`.
+Use this import.
+
+```ts
+import type { Run } from '../../primitives/run';
+import type { PendingInteraction, WorkflowNodeState } from '../../skills/runs';
+```
+
+Use `Run['status']` for `isAskAwaitingRun` and `WorkflowNodeState` for `firstAwaitingNodeId`.
+
+- [ ] **Step 4: Rerun the awaiting-helper suite and verify GREEN.**
+
+Run `cd packages/web && bun test src/experiments/console/components/ask/awaiting-chrome.test.ts`.
+Expected result: PASS.
+
+- [ ] **Step 5: Write failing status, log, and graph-input expectations.**
 
 Replace `maps typed awaiting to running` with these assertions.
 
@@ -819,54 +1165,235 @@ test('labels typed awaiting as waiting on you', () => {
   expect(inspectStatusLabel('awaiting')).toBe('waiting on you');
 });
 
-test('treats running and awaiting as live nodes', () => {
-  expect(isInspectLiveNode('running')).toBe(true);
-  expect(isInspectLiveNode('awaiting')).toBe(true);
-  expect(isInspectLiveNode('pending')).toBe(false);
-});
 ```
 
 Keep `isInspectRunLive` covering only `running` and `paused`.
+In `build-console-log-entries.test.ts`, rename `maps awaiting node status to running display status` to `keeps awaiting as the display status` and expect `displayStatus` to equal `'awaiting'`.
+In `build-run-graph-input.test.ts`, rename `normalizes awaiting to running before layout` to `passes awaiting through to layout as on-path`, expect the node's `nodeState` to equal `'awaiting'`, and keep `incoming?.taken` equal to `true`.
 
-- [ ] **Step 5: Run inspect-status tests and verify RED.**
-
-Run `cd packages/web && bun test src/experiments/console/components/inspect/inspect-status.test.ts`.
-Expected failure: `inspectStatus('awaiting')` is `'running'`.
-
-- [ ] **Step 6: Implement the locked `inspect-status.ts`.**
-
-- [ ] **Step 7: Update selection, log, graph-input, divider, and graph-panel tests and production code together.**
-
-Change `resolveInitialInspectSelection` so the first awaiting node wins over a later running node.
-Rename the invalid-query test to `an invalid query falls back to the first awaiting node` and keep selecting `review` in the existing fixture.
-Add one new test where `review` is `running` and `ship` is `awaiting` and the selection is `ship`.
-Change `build-console-log-entries.test.ts` `maps awaiting node status to running display status` to expect `displayStatus === 'awaiting'`.
-Change `build-run-graph-input.test.ts` `normalizes awaiting to running before layout` to `passes awaiting through to layout as on-path` with `nodeState === 'awaiting'` and `incoming?.taken === true`.
-Add `'awaiting'` to `NodeDivider` status maps with label `waiting on you` and class `text-warning`.
-Add `'awaiting'` to `RunGraphPanel` `cardStatus`, warning fill/border/glyph, visible `waiting on you`, and replace `expect(text).not.toContain('awaiting')` with `expect(text).toContain('waiting on you')`.
-
-- [ ] **Step 8: Run the Task 5 suites and verify GREEN.**
+- [ ] **Step 6: Run the three status-propagation suites and verify RED.**
 
 ```bash
 cd packages/web
-bun test src/experiments/console/components/ask/awaiting-chrome.test.ts src/experiments/console/components/inspect/inspect-status.test.ts src/experiments/console/components/inspect/console-inspect-selection.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts src/experiments/console/components/graph/build-run-graph-input.test.ts src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunGraphPanel.test.tsx
+bun test src/experiments/console/components/inspect/inspect-status.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts src/experiments/console/components/graph/build-run-graph-input.test.ts
+```
+
+Expected failures are the old `awaiting`-to-`running` normalization in all three consumers.
+
+- [ ] **Step 7: Implement only the status policy.**
+
+Replace `inspect-status.ts` with this exact implementation.
+
+```ts
+export type InspectStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'awaiting';
+
+export function inspectStatus(value: string): InspectStatus {
+  if (
+    value === 'pending' ||
+    value === 'running' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'skipped' ||
+    value === 'awaiting'
+  ) {
+    return value;
+  }
+  return 'pending';
+}
+
+export function inspectStatusLabel(value: string): string {
+  return value === 'awaiting' ? 'waiting on you' : value;
+}
+
+export function isInspectRunLive(status: string): boolean {
+  return status === 'running' || status === 'paused';
+}
+```
+
+Do not add `isInspectLiveNode` because there is no production caller.
+
+- [ ] **Step 8: Rerun the three status-propagation suites and verify GREEN.**
+
+```bash
+cd packages/web
+bun test src/experiments/console/components/inspect/inspect-status.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts src/experiments/console/components/graph/build-run-graph-input.test.ts
 ```
 
 Expected result: PASS.
 
-- [ ] **Step 9: Format and commit Task 5.**
+- [ ] **Step 9: Write failing initial-selection precedence tests.**
 
-```bash
-cd packages/web && bun x prettier --write src/experiments/console/components/ask/awaiting-chrome.ts src/experiments/console/components/ask/awaiting-chrome.test.ts src/experiments/console/components/inspect/inspect-status.ts src/experiments/console/components/inspect/inspect-status.test.ts src/experiments/console/components/inspect/console-inspect-selection.ts src/experiments/console/components/inspect/console-inspect-selection.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts src/experiments/console/components/graph/build-run-graph-input.test.ts src/experiments/console/components/NodeDivider.tsx src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunGraphPanel.tsx src/experiments/console/components/RunGraphPanel.test.tsx
-git add packages/web/src/experiments/console/components/ask/awaiting-chrome.ts packages/web/src/experiments/console/components/ask/awaiting-chrome.test.ts packages/web/src/experiments/console/components/inspect/inspect-status.ts packages/web/src/experiments/console/components/inspect/inspect-status.test.ts packages/web/src/experiments/console/components/inspect/console-inspect-selection.ts packages/web/src/experiments/console/components/inspect/console-inspect-selection.test.ts packages/web/src/experiments/console/components/inspect/build-console-log-entries.test.ts packages/web/src/experiments/console/components/graph/build-run-graph-input.test.ts packages/web/src/experiments/console/components/NodeDivider.tsx packages/web/src/experiments/console/components/NodeDivider.test.tsx packages/web/src/experiments/console/components/RunGraphPanel.tsx packages/web/src/experiments/console/components/RunGraphPanel.test.tsx
-git commit -m "feat(web): show console awaiting chrome as waiting on you"
+Rename the invalid-query selection test to `an invalid query falls back to the first awaiting node` and keep its expected `review` selection.
+Add this case to `console-inspect-selection.test.ts`.
+
+```ts
+test('awaiting wins over an earlier running node', () => {
+  expect(
+    resolveInitialInspectSelection({
+      requestedNodeId: null,
+      nodeStates: [
+        nodeState({ nodeId: 'review', name: 'Review', status: 'running' }),
+        nodeState({ nodeId: 'ship', name: 'Ship', status: 'awaiting' }),
+      ],
+      rows: [
+        row({ id: 'review-row', nodeId: 'review', status: 'running' }),
+        row({ id: 'ship-row', nodeId: 'ship', status: 'awaiting' }),
+      ],
+      approvalNodeId: null,
+    })
+  ).toEqual({ nodeId: 'ship', logRowId: 'ship-row' });
+});
 ```
 
-### Task 6: Build the console Ask card
+- [ ] **Step 10: Run the initial-selection suite and verify RED.**
+
+Run `cd packages/web && bun test src/experiments/console/components/inspect/console-inspect-selection.test.ts`.
+Expected failures are approval or running selection winning over the awaiting node.
+
+- [ ] **Step 11: Implement only the awaiting-first selection branch.**
+
+In `resolveInitialInspectSelection`, insert the awaiting lookup before the existing running lookup.
+
+```ts
+const awaiting = nodeStates.find(state => inspectStatus(state.status) === 'awaiting');
+if (awaiting !== undefined) return selectionForNode(awaiting.nodeId, rows);
+
+const running = nodeStates.find(state => inspectStatus(state.status) === 'running');
+if (running !== undefined) return selectionForNode(running.nodeId, rows);
+```
+
+- [ ] **Step 12: Run the Task 6 suites and verify GREEN.**
+
+```bash
+cd packages/web
+bun test src/experiments/console/components/ask/awaiting-chrome.test.ts src/experiments/console/components/inspect/inspect-status.test.ts src/experiments/console/components/inspect/console-inspect-selection.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts src/experiments/console/components/graph/build-run-graph-input.test.ts
+```
+
+Expected result: PASS.
+
+- [ ] **Step 13: Format and commit Task 6 from the repository root.**
+
+```bash
+bun x prettier --write packages/web/src/experiments/console/components/ask/awaiting-chrome.ts packages/web/src/experiments/console/components/ask/awaiting-chrome.test.ts packages/web/src/experiments/console/components/inspect/inspect-status.ts packages/web/src/experiments/console/components/inspect/inspect-status.test.ts packages/web/src/experiments/console/components/inspect/console-inspect-selection.ts packages/web/src/experiments/console/components/inspect/console-inspect-selection.test.ts packages/web/src/experiments/console/components/inspect/build-console-log-entries.test.ts packages/web/src/experiments/console/components/graph/build-run-graph-input.test.ts
+git add packages/web/src/experiments/console/components/ask/awaiting-chrome.ts packages/web/src/experiments/console/components/ask/awaiting-chrome.test.ts packages/web/src/experiments/console/components/inspect/inspect-status.ts packages/web/src/experiments/console/components/inspect/inspect-status.test.ts packages/web/src/experiments/console/components/inspect/console-inspect-selection.ts packages/web/src/experiments/console/components/inspect/console-inspect-selection.test.ts packages/web/src/experiments/console/components/inspect/build-console-log-entries.test.ts packages/web/src/experiments/console/components/graph/build-run-graph-input.test.ts
+git commit -m "feat(web): preserve console awaiting inspect state"
+```
+
+### Task 7: Render awaiting warning chrome in Logs and Graph
+
+**Files:**
+
+- Modify: `packages/web/src/experiments/console/components/NodeDivider.tsx`
+- Modify: `packages/web/src/experiments/console/components/NodeDivider.test.tsx`
+- Modify: `packages/web/src/experiments/console/components/RunGraphPanel.tsx`
+- Modify: `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx`
+
+**Interfaces:**
+
+- Consumes: the `awaiting` `InspectStatus` and `inspectStatusLabel` from Task 6.
+- Produces: warning-colored `waiting on you` chrome in both console renderers.
+
+- [ ] **Step 1: Write failing divider and graph-card tests.**
+
+Add this test to `NodeDivider.test.tsx`.
+
+```ts
+test('renders awaiting as warning waiting-on-you chrome', async () => {
+  await act(async () => {
+    renderDivider({ status: 'awaiting' });
+  });
+  const status = [...host.querySelectorAll('span')].find(
+    item => (item.textContent ?? '').trim() === 'waiting on you · 00:01 · $0.25 / ≈$0.30 · 2t'
+  );
+  expect(status).toBeDefined();
+  expect(status?.className).toContain('text-warning');
+});
+```
+
+Add an awaiting node to the graph-panel test fixture and assert the real card's output and styling.
+
+```ts
+const waitingCard = host.querySelector('[data-node-id="review"]');
+expect(waitingCard?.textContent).toContain('waiting on you');
+expect(waitingCard?.getAttribute('title')).toContain('waiting on you');
+expect(waitingCard?.className).toContain('animate-[pulse_2.4s_ease-in-out_infinite]');
+expect(waitingCard?.className).toContain('motion-reduce:animate-none');
+expect(waitingCard?.querySelector('span[aria-hidden]')?.className).toContain('text-warning');
+```
+
+Set `review` to `awaiting` in that test only so the existing route, selection, and zoom coverage remains independent.
+
+- [ ] **Step 2: Run both suites and verify RED.**
+
+Run `cd packages/web && bun test src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunGraphPanel.test.tsx`.
+Expected failures are the missing divider status member and the graph card falling back to pending chrome.
+
+- [ ] **Step 3: Implement the divider and graph status branches.**
+
+Add `'awaiting'` to `NodeDividerProps['status']` and to both maps.
+
+```ts
+awaiting: 'waiting on you',
+```
+
+```ts
+awaiting: 'text-warning',
+```
+
+Add `'awaiting'` to `InspectCardStatus` and `cardStatus`.
+Add these exact switch branches.
+
+```ts
+// statusFill
+case 'awaiting':
+  return 'color-mix(in oklch, var(--warning), transparent 90%)';
+
+// statusBorder
+case 'awaiting':
+  return 'color-mix(in oklch, var(--warning), transparent 40%)';
+
+// statusGlyphClass
+case 'awaiting':
+  return 'text-warning';
+```
+
+Replace the graph-card animation expression with this exact branch.
+
+```ts
+${
+  status === 'running'
+    ? 'animate-pulse'
+    : status === 'awaiting'
+      ? 'animate-[pulse_2.4s_ease-in-out_infinite] motion-reduce:animate-none'
+      : ''
+}
+```
+
+- [ ] **Step 4: Rerun both suites and verify GREEN.**
+
+Run `cd packages/web && bun test src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunGraphPanel.test.tsx`.
+Expected result: PASS.
+
+- [ ] **Step 5: Format and commit Task 7 from the repository root.**
+
+```bash
+bun x prettier --write packages/web/src/experiments/console/components/NodeDivider.tsx packages/web/src/experiments/console/components/NodeDivider.test.tsx packages/web/src/experiments/console/components/RunGraphPanel.tsx packages/web/src/experiments/console/components/RunGraphPanel.test.tsx
+git add packages/web/src/experiments/console/components/NodeDivider.tsx packages/web/src/experiments/console/components/NodeDivider.test.tsx packages/web/src/experiments/console/components/RunGraphPanel.tsx packages/web/src/experiments/console/components/RunGraphPanel.test.tsx
+git commit -m "feat(web): render console awaiting warning chrome"
+```
+
+### Task 8: Build the console Ask card
 
 **Files:**
 
 - Modify: `packages/web/src/experiments/console/lib/format.ts`
+- Modify: `packages/web/src/experiments/console/lib/format.test.ts`
 - Create: `packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx`
 - Create: `packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx`
 
@@ -875,40 +1402,178 @@ git commit -m "feat(web): show console awaiting chrome as waiting on you"
 - Consumes: `ConsoleAskCardProps`, parser, presentation, `formatDurationMs`.
 - Produces: `ConsoleAskCard` and `ConsoleInvalidAskCard`.
 
-- [ ] **Step 1: Write the failing card suite.**
+- [ ] **Step 1: Write the failing duration-format boundary test.**
 
-Set `process.env.NODE_ENV = 'development'` first.
-Use `installHappyDom` and `createRoot` like `ConsoleNodeRoom.test.tsx`.
-Port the behavioral cases from `packages/web/src/components/workflows/AskCard.test.tsx` onto `ConsoleAskCard`.
-Required assertions: `aria-label="question from agent, 2 questions"`, header `Claude is asking`, Submit disabled until valid, Other requires non-empty text, teammate copy `Waiting for Avery to answer` with no Submit/Decline, starter Submit/Decline present, decline dialog description `The agent will be told you declined`, sending shows `Sending…`, answered `Answered · by you`, teammate answered omits `by you`, declined `Declined`, rejected-late `Already answered`, failed-resume stamp, invalid card `Invalid Ask payload` with `role="alert"` and no Submit, `View payload` disclosure present.
+Import `formatDurationMs` in `packages/web/src/experiments/console/lib/format.test.ts` and add this table.
 
-- [ ] **Step 2: Run the card tests and verify RED.**
+```ts
+describe('formatDurationMs', () => {
+  test('formats millisecond, second, and minute boundaries', () => {
+    expect(formatDurationMs(0)).toBe('0ms');
+    expect(formatDurationMs(999)).toBe('999ms');
+    expect(formatDurationMs(1000)).toBe('1.0s');
+    expect(formatDurationMs(59999)).toBe('60.0s');
+    expect(formatDurationMs(60000)).toBe('1.0m');
+    expect(formatDurationMs(90000)).toBe('1.5m');
+  });
+});
+```
 
-Run `cd packages/web && bun test src/experiments/console/components/ask/ConsoleAskCard.test.tsx`.
-Expected failure: module not found.
+- [ ] **Step 2: Run the formatter test and verify RED.**
 
-- [ ] **Step 3: Add `formatDurationMs` to console `lib/format.ts` with the locked body.**
+Run `cd packages/web && bun test src/experiments/console/lib/format.test.ts --test-name-pattern "formatDurationMs"`.
+Expected failure: `formatDurationMs` is not exported.
 
-- [ ] **Step 4: Implement `ConsoleAskCard` and `ConsoleInvalidAskCard` with native HTML and the locked copy.**
+- [ ] **Step 3: Add `formatDurationMs` with the locked body and verify GREEN.**
 
-Replicate the Story 6.5 state machine, including separate Other-selected flags.
-Use `<dialog>` instead of shadcn `AlertDialog`.
-Do not import `@/components/ui/*`.
+Add this exact export to `packages/web/src/experiments/console/lib/format.ts`.
 
-- [ ] **Step 5: Rerun the card tests and verify GREEN.**
+```ts
+export function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${String(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60000).toFixed(1)}m`;
+}
+```
 
-Run `cd packages/web && bun test src/experiments/console/components/ask/ConsoleAskCard.test.tsx`.
+Run `cd packages/web && bun test src/experiments/console/lib/format.test.ts --test-name-pattern "formatDurationMs"`.
 Expected result: PASS.
 
-- [ ] **Step 6: Format and commit Task 6.**
+- [ ] **Step 4: Write the failing console card suite from the approved Story 6.5 suite.**
+
+Copy the complete legacy suite so every lifecycle and validity row remains literal and mutation-sensitive.
 
 ```bash
-cd packages/web && bun x prettier --write src/experiments/console/lib/format.ts src/experiments/console/components/ask/ConsoleAskCard.tsx src/experiments/console/components/ask/ConsoleAskCard.test.tsx
-git add packages/web/src/experiments/console/lib/format.ts packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx
+cp packages/web/src/components/workflows/AskCard.test.tsx \
+  packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx
+```
+
+Apply these exact test-only substitutions.
+
+```ts
+import type { AskAnswerBody, PendingInteraction } from '../../skills/runs';
+import { formatDurationMs } from '../../lib/format';
+import type { ConsoleAskCardProps } from './ConsoleAskCard';
+import type { AskCardPresentation } from './ask-card-presentation';
+import type { AskQuestion } from './parse-ask-envelope';
+```
+
+Rename the component module to `./ConsoleAskCard`, `AskCardProps` to `ConsoleAskCardProps`, the `AskCard` export to `ConsoleAskCard`, and the `InvalidAskCard` export to `ConsoleInvalidAskCard`.
+Keep the existing complete fixtures, static state table, full-draft submission assertion, Other identity assertion, and focus assertion.
+In the decline test, query `dialog`, assert `dialog.open` is `true` after the first Decline click, assert the exact description, click Cancel and assert `dialog.open` is `false`, reopen it, click the dialog's Decline button, and assert `onDecline` ran exactly once while `onSubmit` never ran.
+The test's first physical statement remains `process.env.NODE_ENV = 'development';`.
+
+- [ ] **Step 5: Run the card suite and verify RED.**
+
+Run `cd packages/web && bun test src/experiments/console/components/ask/ConsoleAskCard.test.tsx`.
+Expected failure: the console card module does not exist.
+
+- [ ] **Step 6: Add the console-owned card implementation.**
+
+Start from `packages/web/src/components/workflows/AskCard.tsx` so the approved state, summary, validity, payload, focus, and copy logic stays identical.
+Use only these imports.
+
+```ts
+import { useMemo, useRef, useState } from 'react';
+import type { AskAnswerBody, PendingInteraction } from '../../skills/runs';
+import { ensureUtc, formatDurationMs } from '../../lib/format';
+import type { AskCardPresentation } from './ask-card-presentation';
+import {
+  draftToAnswerBody,
+  isAskDraftValid,
+  type AskDraft,
+  type AskQuestion,
+} from './parse-ask-envelope';
+```
+
+Rename `AskCardProps` to `ConsoleAskCardProps`, `AskCard` to `ConsoleAskCard`, and `InvalidAskCard` to `ConsoleInvalidAskCard`.
+Copy `elapsedWaitingMs`, `formatAnswerValue`, `answerSummaries`, `PayloadDisclosure`, `ResolvedStamp`, the four draft-state maps, the `useMemo` draft projection, `draftValid`, `isPending`, `lockAnswers`, `showActions`, `waitingLabel`, every choice handler, and `handleSubmit` without behavioral changes.
+Replace the legacy `declineOpen` state with this native-dialog control.
+
+```ts
+const declineDialogRef = useRef<HTMLDialogElement | null>(null);
+
+function openDeclineDialog(): void {
+  declineDialogRef.current?.showModal();
+}
+
+function closeDeclineDialog(): void {
+  declineDialogRef.current?.close();
+}
+```
+
+Replace `Card`, `CardHeader`, `CardContent`, and `CardFooter` with plain `div` elements while retaining their children.
+The outer elevated surface is:
+
+```tsx
+<div className="rounded-lg border border-warning bg-surface-elevated shadow-sm">
+```
+
+Use `p-4` on the header, `space-y-4 px-4 pb-4` on the content, and `flex flex-col items-stretch gap-3 px-4 pb-4` on the footer.
+Replace every shadcn `Button` with a native `button` carrying the same `type`, disabled rule, click handler, and visible copy.
+Keep the nested `fieldset`, `legend`, radio, checkbox, Other `textarea`, disabled behavior, auto-focus rule, summaries, semantic `time`, inline error, and payload disclosure exactly as specified in Locked Design and as exercised by the copied test.
+Replace the legacy AlertDialog subtree with this exact native confirmation inside the starter-actions branch.
+
+```tsx
+<button
+  type="button"
+  className="rounded-md border border-border px-3 py-2 text-sm text-text-primary"
+  onClick={openDeclineDialog}
+>
+  Decline
+</button>
+<dialog
+  ref={declineDialogRef}
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby={`${interaction.id}:decline-title`}
+  aria-describedby={`${interaction.id}:decline-description`}
+  className="rounded-lg border border-border bg-surface-elevated p-4 text-text-primary"
+>
+  <h2 id={`${interaction.id}:decline-title`} className="text-sm font-medium">
+    Decline this ask?
+  </h2>
+  <p
+    id={`${interaction.id}:decline-description`}
+    className="mt-2 text-sm text-text-secondary"
+  >
+    The agent will be told you declined
+  </p>
+  <div className="mt-4 flex justify-end gap-2">
+    <button type="button" onClick={closeDeclineDialog}>
+      Cancel
+    </button>
+    <button
+      type="button"
+      onClick={(): void => {
+        closeDeclineDialog();
+        onDecline();
+      }}
+    >
+      Decline
+    </button>
+  </div>
+</dialog>
+```
+
+The `aria-labelledby` and `aria-describedby` values are template literals using `${interaction.id}`.
+The explicit `role="dialog"` is required because `packages/web/src/experiments/console/lib/keymap.ts` suppresses route shortcuts only for `[role="dialog"][aria-modal="true"]`.
+Do not import `@/components/ui/*` or any legacy workflow module.
+
+- [ ] **Step 7: Rerun formatter and card suites and verify GREEN.**
+
+Run `cd packages/web && bun test src/experiments/console/lib/format.test.ts src/experiments/console/components/ask/ConsoleAskCard.test.tsx`.
+Expected result: PASS with no React warnings.
+
+- [ ] **Step 8: Format and commit Task 8 from the repository root.**
+
+```bash
+bun x prettier --write packages/web/src/experiments/console/lib/format.ts packages/web/src/experiments/console/lib/format.test.ts packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx
+git add packages/web/src/experiments/console/lib/format.ts packages/web/src/experiments/console/lib/format.test.ts packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx
 git commit -m "feat(web): render console-owned Ask cards"
 ```
 
-### Task 7: Build the console run Ask chrome
+### Task 9: Build the console run Ask chrome
 
 **Files:**
 
@@ -922,30 +1587,55 @@ git commit -m "feat(web): render console-owned Ask cards"
 
 - [ ] **Step 1: Write the failing chrome suite.**
 
-Port `packages/web/src/components/workflows/WorkflowAskChrome.test.tsx` onto `ConsoleAskChrome`.
-Required cases: paused plus two pending asks renders `Awaiting input (2)` and `aria-live="polite"`, click calls graph then first awaiting node, click with no awaiting node is a no-op, CAP-7 failed run renders the full error with `role="alert"` and `text-error` and no `Awaiting input`, declared-gate pause with empty pending renders null.
+Copy the approved Story 6.5 component test.
+
+```bash
+cp packages/web/src/components/workflows/WorkflowAskChrome.test.tsx \
+  packages/web/src/experiments/console/components/ask/ConsoleAskChrome.test.tsx
+```
+
+Switch `PendingInteraction` and `WorkflowNodeStateResponse` to `PendingInteraction` and `WorkflowNodeState` from `../../skills/runs`.
+Rename the imported module to `./ConsoleAskChrome`, `WorkflowAskChromeProps` to `ConsoleAskChromeProps`, and the rendered export to `ConsoleAskChrome`.
+Retain the literal cases for the count, callback order, no-node no-op, CAP-7 banner, and declared-gate null render.
 
 - [ ] **Step 2: Run the chrome tests and verify RED.**
 
 Run `cd packages/web && bun test src/experiments/console/components/ask/ConsoleAskChrome.test.tsx`.
 Expected failure: module not found.
 
-- [ ] **Step 3: Implement `ConsoleAskChrome` with the locked markup and callbacks.**
+- [ ] **Step 3: Add `ConsoleAskChrome` from the approved legacy shell.**
+
+Copy the legacy implementation, then make these exact type and name substitutions.
+
+```bash
+cp packages/web/src/components/workflows/WorkflowAskChrome.tsx \
+  packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx
+```
+
+```ts
+import type { Run } from '../../primitives/run';
+import type { PendingInteraction, WorkflowNodeState } from '../../skills/runs';
+```
+
+Rename `WorkflowAskChromeProps` to `ConsoleAskChromeProps` and `WorkflowAskChrome` to `ConsoleAskChrome`.
+Use `Run['status']` for `status` and `readonly WorkflowNodeState[]` for `nodeStates`.
+Keep the error-first branch, null branch, guarded node lookup, callback order, exact copy, and warning/error classes byte-for-byte.
+Add `mx-6 mt-3 w-fit` to both returned roots so the component sits directly below `RunDetailHeader` without an empty wrapper when it returns `null`.
 
 - [ ] **Step 4: Rerun the chrome tests and verify GREEN.**
 
 Run `cd packages/web && bun test src/experiments/console/components/ask/ConsoleAskChrome.test.tsx`.
 Expected result: PASS.
 
-- [ ] **Step 5: Format and commit Task 7.**
+- [ ] **Step 5: Format and commit Task 9 from the repository root.**
 
 ```bash
-cd packages/web && bun x prettier --write src/experiments/console/components/ask/ConsoleAskChrome.tsx src/experiments/console/components/ask/ConsoleAskChrome.test.tsx
+bun x prettier --write packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx packages/web/src/experiments/console/components/ask/ConsoleAskChrome.test.tsx
 git add packages/web/src/experiments/console/components/ask/ConsoleAskChrome.tsx packages/web/src/experiments/console/components/ask/ConsoleAskChrome.test.tsx
 git commit -m "feat(web): add console Ask awaiting pill and CAP-7 banner"
 ```
 
-### Task 8: Place Ask cards in the Command Center agent room
+### Task 10: Place Ask cards in the Command Center agent room
 
 **Files:**
 
@@ -956,27 +1646,152 @@ git commit -m "feat(web): add console Ask awaiting pill and CAP-7 banner"
 
 **Interfaces:**
 
-- Consumes: optional Ask props, `selectNodeRoomMessages`, `selectVisibleNodeAskInteractions`, `ConsoleAskCard`.
+- Consumes: required Ask props, `selectNodeRoomMessages`, `selectVisibleNodeAskInteractions`, `ConsoleAskCard`.
 - Produces: cards inline at tool invocation in the persistent room.
 
 - [ ] **Step 1: Write the failing room placement tests.**
 
 Remove `assertNoEpicSix`.
-Replace it with `assertNoConversationComposer(host)` that forbids `ChatComposer` and `Reply…`.
-Keep existing transcript, polling, and room-kind coverage.
-Add these cases.
+Replace it with a helper that asserts the room contains neither `ChatComposer` nor `Reply…`.
+Extend the `runs` type import with `AskAnswerBody` and `PendingInteraction` and add this complete fixture.
 
-1. A pending Ask whose `tool_use_id` matches a visible tool row renders `ConsoleAskCard` immediately after that tool and not in a composer.
-2. Two pending asks on one node render two independent cards.
-3. A loop-iteration room hides an Ask anchored in another iteration.
-4. An unanchored current Ask appears at the end when the visible slice reaches the transcript tail, including when the transcript is empty.
-5. A permission row never renders a card.
-6. Stdout and gate rooms ignore pending interactions.
-7. A malformed envelope renders `Invalid Ask payload` without Submit.
-8. Teammate pending cards show `Waiting for Avery to answer` and no Submit/Decline.
-9. Transcript fetch error still renders `renderAtEnd` cards after Retry.
-10. Header status for `selectedRow.status === 'awaiting'` is `waiting on you`.
-11. Existing loop-iteration fixture no longer expects the header to say `running` solely because the row is awaiting.
+```ts
+function ask(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
+  return {
+    id: 'ask-1',
+    workflow_run_id: 'run-1',
+    node_id: 'review',
+    tool_use_id: 'tool-1',
+    kind: 'ask',
+    status: 'pending',
+    envelope: {
+      questions: [
+        {
+          id: 'q1',
+          prompt: 'Ship it?',
+          selection: 'single',
+          options: ['Ship', 'Hold'],
+          allowOther: false,
+        },
+      ],
+    },
+    answer: null,
+    provider_session_id: 'session-1',
+    created_at: CREATED_AT,
+    resolved_at: null,
+    resolved_by: null,
+    ...overrides,
+  };
+}
+```
+
+Add `pendingInteractions: []`, `viewerIsStarter: true`, `starterDisplayName: 'Avery'`, `actionStates: {}`, and an async no-op `onSubmitAsk` to the existing `renderRoom` defaults.
+Then add literal tests for these room-only responsibilities.
+
+```ts
+test('places independent anchored Ask cards after their tool rows', async () => {
+  const messages: WorkflowNodeMessage[] = [
+    ...FIXTURE,
+    {
+      id: 'm9',
+      seq: 9,
+      kind: 'tool',
+      payload: { name: 'AskHuman', id: 'tool-2', input: {} },
+      created_at: CREATED_AT,
+    },
+  ];
+  await act(async () => {
+    renderRoom({
+      selectedRow: row({ nodeId: 'review', label: 'Review', status: 'awaiting' }),
+      nodeStates: [nodeState({ nodeId: 'review', name: 'Review', status: 'awaiting' })],
+      pendingInteractions: [
+        ask(),
+        ask({ id: 'ask-2', tool_use_id: 'tool-2' }),
+      ],
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages }),
+    });
+  });
+  await flushUntil('two Ask cards', () => host.querySelectorAll('form').length === 2);
+  const firstTool = [...host.querySelectorAll('span')].find(
+    item => (item.textContent ?? '').trim() === 'Read'
+  );
+  const firstCard = host.querySelector('form');
+  expect(firstTool).toBeDefined();
+  expect(firstCard).not.toBeNull();
+  expect((firstTool?.compareDocumentPosition(firstCard) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING)
+    .not.toBe(0);
+  expect(host.textContent).toContain('waiting on you');
+  assertNoConversationComposer(host);
+});
+
+test('appends an unanchored Ask for an empty transcript and keeps it on fetch error', async () => {
+  await act(async () => {
+    renderRoom({
+      pendingInteractions: [ask({ tool_use_id: 'not-yet-persisted' })],
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+    });
+  });
+  await flushUntil('empty transcript Ask', () => host.querySelector('form') !== null);
+  expect(host.textContent).not.toContain("Node hasn't produced output");
+
+  invalidate('run-node-messages');
+  await act(async () => {
+    renderRoom({
+      run: run({ id: 'run-error-ask' }),
+      pendingInteractions: [ask({ workflow_run_id: 'run-error-ask', tool_use_id: 'missing' })],
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => {
+        throw new Error('boom');
+      },
+    });
+  });
+  await flushUntil('error and Ask', () =>
+    (host.textContent ?? '').includes('Failed to load node transcript')
+  );
+  expect(host.querySelector('form')).not.toBeNull();
+  expect(host.textContent).toContain('Retry');
+});
+
+test('maps malformed and teammate cards but never renders Ask in stdout rooms', async () => {
+  await act(async () => {
+    renderRoom({
+      viewerIsStarter: false,
+      pendingInteractions: [ask({ envelope: { broken: true } })],
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: FIXTURE }),
+    });
+  });
+  await flushUntil('invalid Ask', () => (host.textContent ?? '').includes('Invalid Ask payload'));
+  expect(host.textContent).not.toContain('Submit');
+
+  await act(async () => {
+    renderRoom({
+      viewerIsStarter: false,
+      pendingInteractions: [ask()],
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: FIXTURE }),
+    });
+  });
+  await flushUntil('teammate Ask', () =>
+    (host.textContent ?? '').includes('Waiting for Avery to answer')
+  );
+  expect(host.textContent).not.toContain('Submit');
+  expect(host.textContent).not.toContain('Decline');
+
+  await act(async () => {
+    renderRoom({
+      nodeId: 'setup',
+      selectedRow: row({ nodeId: 'setup', label: 'Setup' }),
+      definitionNodes: [{ id: 'setup', bash: 'echo ok' }],
+      nodeStates: [nodeState({ nodeId: 'setup', name: 'Setup', status: 'completed' })],
+      pendingInteractions: [ask({ node_id: 'setup' })],
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+    });
+  });
+  await flush();
+  expect(host.querySelector('form')).toBeNull();
+});
+```
+
+Keep the existing loop-slice test and change its awaiting header expectation from `running` to `waiting on you`.
+The pure Task 3 suite remains the mutation guard for cross-iteration, permission, purged, and transcript-tail selection.
 
 - [ ] **Step 2: Run ConsoleNodeRoom tests and verify RED.**
 
@@ -985,25 +1800,260 @@ Expected failure: Ask cards are absent or header still says `running`.
 
 - [ ] **Step 3: Implement generic transcript slots and agent-only Ask composition in `ConsoleNodeRoom`.**
 
-Follow the locked room-composition rules and the `NodeTranscriptPane.tsx:80-191` first-actionable and renderAfterMessage/renderAtEnd split.
-Thread the optional Ask props through `ConsoleInspectPane` into `ConsoleNodeRoom` with empty defaults.
+Change `AgentTranscript` to this generic slot contract.
+
+```tsx
+function AgentTranscript({
+  messages,
+  renderAfterMessage,
+  renderAtEnd,
+}: {
+  messages: readonly WorkflowNodeMessage[];
+  renderAfterMessage?: (message: WorkflowNodeMessage) => ReactNode;
+  renderAtEnd?: ReactNode;
+}): ReactElement {
+  if (messages.length === 0) {
+    return renderAtEnd === undefined ? (
+      <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>
+    ) : (
+      <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">{renderAtEnd}</div>
+    );
+  }
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+      {messages.map(message => (
+        <div key={message.id}>
+          {renderTranscriptItem(message)}
+          {renderAfterMessage?.(message)}
+        </div>
+      ))}
+      {renderAtEnd}
+    </div>
+  );
+}
+```
+
+Add the required Ask props from Locked Design to `ConsoleNodeRoomProps`.
+Import the console card, parser, selector, presentation resolver, and action-state types only from `./ask/*`.
+After `row` is derived, compute `allMessages` as an empty array on query error, compute `visibleMessages` with `selectNodeRoomMessages`, and compute `visibleAsks` with `selectVisibleNodeAskInteractions` only for `resolution.kind === 'agent'`.
+Split `visibleAsks` into anchored and unanchored arrays using the visible transcript's tool ids.
+Build `orderedAsks` in visible-message order followed by unanchored GET order.
+Choose `firstActionableId` as the first row for which the viewer is starter, status is pending, the envelope parses, and `resolveAskCardPresentation(...).viewState` is pending.
+Use `row.label`, `row.nodeId`, and one `const nowMs = Date.now()` for every card in that render.
+For a valid row, pass the exact card props from Locked Design and call `void onSubmitAsk(interaction.tool_use_id, body)` or `void onSubmitAsk(interaction.tool_use_id, { decline: true })`.
+For a malformed row, render `ConsoleInvalidAskCard`.
+Pass anchored cards through `renderAfterMessage` only when the message is a matching tool row, and pass unanchored cards through `renderAtEnd`.
+Loading continues to render only `Loading node transcript`.
+In the error branch, keep the existing error and Retry controls inside a wrapper and render the unanchored card array immediately after that wrapper.
+
+Add this local helper beside the transcript helpers.
+
+```ts
+function collectToolIds(messages: readonly WorkflowNodeMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.kind === 'tool') {
+      ids.add(message.payload.id);
+    }
+  }
+  return ids;
+}
+```
+
+Use this exact derivation.
+
+```tsx
+const allMessages = messagesQuery.error === undefined ? (messagesQuery.data?.messages ?? []) : [];
+const visibleMessages =
+  row === null ? [] : selectNodeRoomMessages(allMessages, row.selection);
+const visibleAsks =
+  row !== null && resolution?.kind === 'agent'
+    ? selectVisibleNodeAskInteractions({
+        pending: pendingInteractions,
+        nodeId: row.nodeId,
+        allMessages,
+        visibleMessages,
+      })
+    : [];
+const visibleToolIds = collectToolIds(visibleMessages);
+const anchoredAsks = visibleAsks.filter(interaction =>
+  visibleToolIds.has(interaction.tool_use_id)
+);
+const unanchoredAsks = visibleAsks.filter(
+  interaction => !visibleToolIds.has(interaction.tool_use_id)
+);
+const orderedAsks = [
+  ...visibleMessages.flatMap(message =>
+    message.kind === 'tool'
+      ? anchoredAsks.filter(interaction => interaction.tool_use_id === message.payload.id)
+      : []
+  ),
+  ...unanchoredAsks,
+];
+const selectedNodeState =
+  row === null ? undefined : nodeStates.find(state => state.nodeId === row.nodeId);
+const firstActionableId = orderedAsks.find(interaction => {
+  if (!viewerIsStarter || interaction.status !== 'pending') return false;
+  if (parseAskEnvelope(interaction.envelope) === null) return false;
+  return (
+    resolveAskCardPresentation({
+      interaction,
+      action: actionStates[interaction.tool_use_id],
+      nodeStatus: selectedNodeState?.status,
+      nodeError: selectedNodeState?.error,
+    }).viewState === 'pending'
+  );
+})?.id;
+const nowMs = Date.now();
+const agentDisplayName = row?.label ?? '';
+const roomNodeId = row?.nodeId ?? '';
+
+const renderAskCard = (interaction: PendingInteraction): ReactElement => {
+  const questions = parseAskEnvelope(interaction.envelope);
+  if (questions === null) {
+    return (
+      <ConsoleInvalidAskCard
+        key={interaction.id}
+        interaction={interaction}
+        agentDisplayName={agentDisplayName}
+        nodeId={roomNodeId}
+      />
+    );
+  }
+  const requestId = interaction.tool_use_id;
+  return (
+    <ConsoleAskCard
+      key={interaction.id}
+      interaction={interaction}
+      questions={questions}
+      presentation={resolveAskCardPresentation({
+        interaction,
+        action: actionStates[requestId],
+        nodeStatus: selectedNodeState?.status,
+        nodeError: selectedNodeState?.error,
+      })}
+      viewerIsStarter={viewerIsStarter}
+      starterDisplayName={starterDisplayName}
+      agentDisplayName={agentDisplayName}
+      nodeId={roomNodeId}
+      autoFocus={interaction.id === firstActionableId}
+      nowMs={nowMs}
+      onSubmit={(body): void => {
+        void onSubmitAsk(requestId, body);
+      }}
+      onDecline={(): void => {
+        void onSubmitAsk(requestId, { decline: true });
+      }}
+    />
+  );
+};
+```
+
+Keep the loading branch before either slot is rendered.
+Replace the successful agent body with this exact call.
+
+```tsx
+body = (
+  <AgentTranscript
+    messages={visibleMessages}
+    renderAfterMessage={(message: WorkflowNodeMessage): ReactNode =>
+      message.kind === 'tool'
+        ? anchoredAsks
+            .filter(interaction => interaction.tool_use_id === message.payload.id)
+            .map(renderAskCard)
+        : undefined
+    }
+    renderAtEnd={
+      unanchoredAsks.length === 0 ? undefined : unanchoredAsks.map(renderAskCard)
+    }
+  />
+);
+```
+
+Replace the agent error body with this exact wrapper so authoritative pending rows stay actionable during a transcript fetch failure.
+
+```tsx
+body = (
+  <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-[13px] text-text-secondary">
+      <p>Failed to load node transcript</p>
+      <button
+        type="button"
+        className="text-[12px] text-primary transition-colors hover:text-accent-bright"
+        onClick={(): void => {
+          messagesQuery.refetch();
+        }}
+      >
+        Retry
+      </button>
+    </div>
+    {unanchoredAsks.length === 0 ? null : (
+      <div className="flex flex-col gap-3 p-3">{unanchoredAsks.map(renderAskCard)}</div>
+    )}
+  </div>
+);
+```
 
 - [ ] **Step 4: Extend `ConsoleInspectPane.test.tsx` so switching Log to Graph does not remount the room and the Ask card remains.**
+
+Add the five Ask props to `ConsoleInspectPaneProps` as optional for this task only, destructure them with `[]`, `false`, `null`, `{}`, and an async no-op defaults, and pass the resulting values unchanged into `ConsoleNodeRoom`.
+Extend the pane test's run-skill type import with `PendingInteraction` and add these exact defaults to `baseProps`.
+
+```ts
+pendingInteractions: [],
+viewerIsStarter: true,
+starterDisplayName: 'Avery',
+actionStates: {},
+onSubmitAsk: async (): Promise<void> => undefined,
+```
+
+In the pane persistence test, add this complete unanchored row before creating `props`.
+
+```ts
+const pendingAsk: PendingInteraction = {
+  id: 'ask-plan',
+  workflow_run_id: 'run-1',
+  node_id: 'plan',
+  tool_use_id: 'tool-not-persisted',
+  kind: 'ask',
+  status: 'pending',
+  envelope: {
+    questions: [
+      {
+        id: 'q1',
+        prompt: 'Ship it?',
+        selection: 'single',
+        options: ['Ship', 'Hold'],
+        allowOther: false,
+      },
+    ],
+  },
+  answer: null,
+  provider_session_id: 'session-1',
+  created_at: CREATED_AT,
+  resolved_at: null,
+  resolved_by: null,
+};
+const props = baseProps({ loadMessages, pendingInteractions: [pendingAsk] });
+```
+
+After the initial transcript flush, record `const formBefore = host.querySelector('form');` and assert it is non-null.
+After the Log-to-Graph switch, assert `host.querySelector('form')` is exactly `formBefore` in addition to the existing room and loader identity assertions.
 
 - [ ] **Step 5: Rerun room and pane tests and verify GREEN.**
 
 Run `cd packages/web && bun test src/experiments/console/components/ConsoleNodeRoom.test.tsx src/experiments/console/components/ConsoleInspectPane.test.tsx`.
 Expected result: PASS.
 
-- [ ] **Step 6: Format and commit Task 8.**
+- [ ] **Step 6: Format and commit Task 10 from the repository root.**
 
 ```bash
-cd packages/web && bun x prettier --write src/experiments/console/components/ConsoleNodeRoom.tsx src/experiments/console/components/ConsoleNodeRoom.test.tsx src/experiments/console/components/ConsoleInspectPane.tsx src/experiments/console/components/ConsoleInspectPane.test.tsx
+bun x prettier --write packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx packages/web/src/experiments/console/components/ConsoleInspectPane.tsx packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx
 git add packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx packages/web/src/experiments/console/components/ConsoleInspectPane.tsx packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx
 git commit -m "feat(web): place Ask cards in the console agent room"
 ```
 
-### Task 9: Wire run-detail ownership, chrome, and composer isolation
+### Task 11: Wire run-detail ownership, chrome, and composer isolation
 
 **Files:**
 
@@ -1019,45 +2069,321 @@ git commit -m "feat(web): place Ask cards in the console agent room"
 
 - [ ] **Step 1: Write the failing header copy test.**
 
-When `run.status === 'paused'` and the caller passes `askAwaiting`, the header shows `Awaiting input` and does not show `Waiting for approval`.
-When paused without ask awaiting, keep `Waiting for approval`.
+Extend the local `renderHeader` helper with `askAwaiting?: boolean` and add:
+
+```ts
+test('uses Awaiting input only for an Ask pause', () => {
+  const ask = renderHeader({
+    usage: usage(),
+    runOverrides: { status: 'paused' },
+    askAwaiting: true,
+  });
+  expect(ask).toContain('Awaiting input');
+  expect(ask).not.toContain('Waiting for approval');
+
+  const gate = renderHeader({
+    usage: usage(),
+    runOverrides: { status: 'paused' },
+    askAwaiting: false,
+  });
+  expect(gate).toContain('Waiting for approval');
+  expect(gate).not.toContain('Awaiting input');
+});
+```
 
 - [ ] **Step 2: Run header tests and verify RED.**
 
 Run `cd packages/web && bun test src/experiments/console/components/RunDetailHeader.test.tsx --test-name-pattern "Awaiting input"`.
 Expected failure: copy still `Waiting for approval`.
 
-- [ ] **Step 3: Add an optional `askAwaiting?: boolean` prop to `RunDetailHeader` and use the locked paused copy.**
+- [ ] **Step 3: Add the header prop and minimal conditional copy.**
+
+Add `askAwaiting?: boolean` to `RunDetailHeaderProps`, default it to `false` in the destructuring, and replace the status label expression with:
+
+```tsx
+{isPaused && askAwaiting ? 'Awaiting input' : statusLabel[run.status]}
+```
 
 - [ ] **Step 4: Write failing RunDetailPage tests.**
 
-Required cases: `ConsoleAskChrome` receives GET-run pending interactions; clicking `Awaiting input (n)` sets view to graph and selects the first awaiting node; CAP-7 banner uses the mapped `runError`; `createAskAnswerController` is constructed with `answerAskHuman` and invalidates `K.run`; action state resets when `runId` changes; `a`/`r` keymap `when` is false for an Ask pause with `approval == null`; Chat composer is not rendered on the run detail page; declared-gate footer still renders when `run.approval` exists and pending asks are empty.
+Replace the existing run-skill type import with this exact import.
+
+```ts
+import type {
+  PendingInteraction,
+  RunDetailResponse,
+  WorkflowEvent,
+  WorkflowNodeState,
+} from '../skills/runs';
+```
+
+Add the request record beside the other mutable test state, reset it in `beforeEach`, and add the complete fixture below beside `nodeState`.
+
+```ts
+let answerPosts: Array<{ path: string; body: unknown }> = [];
+
+// In beforeEach:
+answerPosts = [];
+
+function ask(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
+  return {
+    id: 'ask-1',
+    workflow_run_id: runId,
+    node_id: 'review',
+    tool_use_id: 'tool-1',
+    kind: 'ask',
+    status: 'pending',
+    envelope: {
+      questions: [
+        {
+          id: 'q1',
+          prompt: 'Ship it?',
+          selection: 'single',
+          options: ['Ship', 'Hold'],
+          allowOther: false,
+        },
+      ],
+    },
+    answer: null,
+    provider_session_id: 'session-1',
+    created_at: CREATED_AT,
+    resolved_at: null,
+    resolved_by: null,
+    ...overrides,
+  };
+}
+```
+
+Extend `stubPageFetch` options with these exact fields.
+
+```ts
+pendingInteractions?: PendingInteraction[];
+viewerIsStarter?: boolean;
+starterDisplayName?: string | null;
+```
+
+Replace the GET-run response defaults with these values.
+
+```ts
+pending_interactions: options.pendingInteractions ?? [],
+usage: null,
+viewer_is_starter: options.viewerIsStarter ?? false,
+starter_display_name: options.starterDisplayName ?? null,
+```
+
+Extend the fetch mock implementation signature to accept `init`, and add this branch before the final unmocked response.
+
+```ts
+if (
+  path.startsWith(`/api/workflows/runs/${encodeURIComponent(runId)}/ask/`) &&
+  path.endsWith('/answer')
+) {
+  if (init?.method !== 'POST') throw new Error('Ask answer must use POST');
+  if (new Headers(init.headers).get('Content-Type') !== 'application/json') {
+    throw new Error('Ask answer must use JSON');
+  }
+  if (typeof init.body !== 'string') throw new Error('Ask answer body must be JSON text');
+  answerPosts.push({ path, body: JSON.parse(init.body) as unknown });
+  return Promise.resolve(jsonResponse({ success: true, message: 'ok' }));
+}
+```
+
+The updated mock callback signature is `(input: RequestInfo | URL, init?: RequestInit)` and the outer cast remains `as typeof fetch`.
+Then add these integration cases.
+
+```ts
+test('jumps to an awaiting room, answers through the skill, and keeps gate keys inactive', async () => {
+  const pending = ask();
+  stubPageFetch({
+    status: 'paused',
+    nodeStates: [
+      nodeState({ nodeId: 'review', name: 'Review', status: 'awaiting' }),
+      nodeState({ nodeId: 'build', name: 'Build', status: 'running' }),
+    ],
+    pendingInteractions: [pending],
+    viewerIsStarter: true,
+    starterDisplayName: 'Avery',
+  });
+  await act(async () => {
+    renderPage('?node=build');
+  });
+  await flushUntil('awaiting chrome', () =>
+    (host.textContent ?? '').includes('Awaiting input (1)')
+  );
+
+  await act(async () => {
+    tabButton('Awaiting input (1)').click();
+  });
+  await flushUntil(
+    'review Ask room',
+    () =>
+      host.querySelector('[data-testid="console-run-graph-scroller"]') !== null &&
+      host.querySelector('[aria-label="review room"] form') !== null
+  );
+  expect(locationSearch()).toContain('node=review');
+
+  const choice = host.querySelector('input[type="radio"][value="Ship"]');
+  if (!(choice instanceof HTMLInputElement)) throw new Error('missing Ship choice');
+  await act(async () => {
+    choice.click();
+  });
+  const submit = [...host.querySelectorAll('button')].find(
+    button => (button.textContent ?? '').trim() === 'Submit'
+  );
+  if (!(submit instanceof HTMLButtonElement)) throw new Error('missing Submit');
+  expect(submit.disabled).toBe(false);
+  await act(async () => {
+    submit.click();
+  });
+  await flushUntil('accepted answer', () => (host.textContent ?? '').includes('Answered · by you'));
+  expect(answerPosts).toEqual([
+    {
+      path: `/api/workflows/runs/${encodeURIComponent(runId)}/ask/tool-1/answer`,
+      body: { answers: [{ questionId: 'q1', value: 'Ship' }] },
+    },
+  ]);
+
+  document.body.focus();
+  const approveKey = new KeyboardEvent('keydown', { key: 'a', cancelable: true });
+  const rejectKey = new KeyboardEvent('keydown', { key: 'r', cancelable: true });
+  window.dispatchEvent(approveKey);
+  window.dispatchEvent(rejectKey);
+  expect(approveKey.defaultPrevented).toBe(false);
+  expect(rejectKey.defaultPrevented).toBe(false);
+  expect(host.textContent).not.toContain('Reply…');
+});
+
+test('renders CAP-7 failure as error chrome without an awaiting pill', async () => {
+  const message = 'AskHuman is not supported by provider: grok';
+  stubPageFetch({ status: 'failed', metadata: { error: message } });
+  await act(async () => {
+    renderPage();
+  });
+  await flushUntil('CAP-7 banner', () => (host.textContent ?? '').includes(message));
+  const alert = host.querySelector('[role="alert"]');
+  expect(alert?.className).toContain('text-error');
+  expect(host.textContent).not.toContain('Awaiting input (');
+});
+```
+
+Keep the existing paused Plannotator test as the declared-gate regression and assert it still renders `Waiting for approval` with no Ask pill.
 
 - [ ] **Step 5: Run RunDetailPage tests and verify RED.**
 
 Run `cd packages/web && bun test src/experiments/console/routes/RunDetailPage.test.tsx`.
 Expected failure: Ask chrome and controller are unwired.
 
-- [ ] **Step 6: Implement page wiring with the locked ownership rules.**
+- [ ] **Step 6: Implement page-owned state, controller, chrome, and prop wiring.**
 
-Pass `pendingInteractions`, `viewerIsStarter`, `starterDisplayName`, `actionStates`, and `onSubmitAsk` into `ConsoleInspectPane`.
-Render `ConsoleAskChrome` under the header.
-Do not add Ask props to `ChatComposer` or `RunActionBar`.
+Add these console-owned imports and replace the existing `../skills/runs` type import with the exact import below.
+
+```ts
+import { ConsoleAskChrome } from '../components/ask/ConsoleAskChrome';
+import {
+  createAskAnswerController,
+  type AskActionState,
+  type AskActionStateByRequest,
+} from '../components/ask/ask-answer-controller';
+import { isAskAwaitingRun } from '../components/ask/awaiting-chrome';
+import type { AskAnswerBody, ArtifactFile, ConsoleRunDetail } from '../skills/runs';
+```
+
+Keep state keyed by the route run id so navigation cannot display an old request id for one paint.
+
+```ts
+const [askActions, setAskActions] = useState<{
+  runId: string | undefined;
+  states: AskActionStateByRequest;
+}>({ runId, states: {} });
+const actionStates = askActions.runId === runId ? askActions.states : {};
+const selectedNodeIdRef = useRef<string | null>(null);
+selectedNodeIdRef.current = inspectSelection.nodeId;
+
+const setAskActionState = useCallback(
+  (requestId: string, state: AskActionState): void => {
+    setAskActions(current => ({
+      runId,
+      states: {
+        ...(current.runId === runId ? current.states : {}),
+        [requestId]: state,
+      },
+    }));
+  },
+  [runId]
+);
+
+const askController = useMemo(
+  () =>
+    runId === undefined
+      ? null
+      : createAskAnswerController({
+          runId,
+          postAnswer: skill.answerAskHuman,
+          setActionState: setAskActionState,
+          invalidate: async (): Promise<void> => {
+            invalidate(K.run(runId));
+            const selectedNodeId = selectedNodeIdRef.current;
+            if (selectedNodeId !== null) {
+              invalidate(K.nodeMessages(runId, selectedNodeId));
+            }
+          },
+          now: (): Date => new Date(),
+        }),
+  [runId, setAskActionState]
+);
+
+const submitAsk = useCallback(
+  (requestId: string, body: AskAnswerBody): Promise<void> =>
+    askController?.submit(requestId, body) ?? Promise.resolve(),
+  [askController]
+);
+```
+
+Keep these hooks above all early returns.
+In the same change, remove the temporary optional markers and defaults from the five `ConsoleInspectPane` Ask props so they match the required final contract in Locked Design.
+Pass `pendingInteractions`, `viewerIsStarter`, `starterDisplayName`, `actionStates`, and `submitAsk` into `ConsoleInspectPane`.
+Render the chrome immediately after `RunDetailHeader`.
+
+```tsx
+<RunDetailHeader
+  run={run}
+  projectId={projectId}
+  projectName={project?.name ?? projectId}
+  usage={detail.usage}
+  askAwaiting={isAskAwaitingRun(run.status, detail.pendingInteractions)}
+/>
+<ConsoleAskChrome
+  status={run.status}
+  pendingInteractions={detail.pendingInteractions}
+  nodeStates={inspectNodeStates}
+  runError={detail.runError}
+  onRequestGraphView={(): void => {
+    setViewPersist('graph');
+  }}
+  onSelectAwaitingNode={(nodeId: string): void => {
+    onInspectSelect(nodeId);
+  }}
+/>
+```
+
+Add `const hasDeclaredGate = isPaused && detail?.run.approval != null;` beside `isPaused`.
+Change both `a` and `r` binding predicates to `(): boolean => hasDeclaredGate` and replace `isPaused` with `hasDeclaredGate` in the binding memo dependencies.
+Do not add Ask props to `ChatComposer`, `ChatPage`, `RunActionBar`, or the declared-gate footer.
 
 - [ ] **Step 7: Rerun header and page tests and verify GREEN.**
 
 Run `cd packages/web && bun test src/experiments/console/components/RunDetailHeader.test.tsx src/experiments/console/routes/RunDetailPage.test.tsx`.
 Expected result: PASS.
 
-- [ ] **Step 8: Format and commit Task 9.**
+- [ ] **Step 8: Format and commit Task 11 from the repository root.**
 
 ```bash
-cd packages/web && bun x prettier --write src/experiments/console/routes/RunDetailPage.tsx src/experiments/console/routes/RunDetailPage.test.tsx src/experiments/console/components/RunDetailHeader.tsx src/experiments/console/components/RunDetailHeader.test.tsx
+bun x prettier --write packages/web/src/experiments/console/routes/RunDetailPage.tsx packages/web/src/experiments/console/routes/RunDetailPage.test.tsx packages/web/src/experiments/console/components/RunDetailHeader.tsx packages/web/src/experiments/console/components/RunDetailHeader.test.tsx
 git add packages/web/src/experiments/console/routes/RunDetailPage.tsx packages/web/src/experiments/console/routes/RunDetailPage.test.tsx packages/web/src/experiments/console/components/RunDetailHeader.tsx packages/web/src/experiments/console/components/RunDetailHeader.test.tsx
 git commit -m "feat(web): wire console run-detail Ask ownership"
 ```
 
-### Task 10: Isolation, docs, validate, and close tracking
+### Task 12: Isolation, docs, validate, and close tracking
 
 **Files:**
 
@@ -1067,22 +2393,70 @@ git commit -m "feat(web): wire console run-detail Ask ownership"
 
 **Interfaces:**
 
-- Consumes: completed Tasks 1 through 9.
+- Consumes: completed Tasks 1 through 11.
 - Produces: NFR4 proof, README contract, sprint done.
 
-- [ ] **Step 1: Rewrite the premature-HITL isolation test to the locked rules and add ChatPage/ChatComposer source guards.**
+- [ ] **Step 1: Replace the obsolete premature-HITL isolation guard with the final architecture guard.**
 
 Keep the existing NFR4 import scan unchanged.
+Delete `FORBIDDEN_INSPECT_IDENTIFIERS` and `FORBIDDEN_INSPECT_STRINGS`.
+Replace the `inspect and room production files omit premature HITL chrome` test with this exact test.
 
-- [ ] **Step 2: Run isolation tests and verify RED if the README still describes awaiting as running.**
+```ts
+test('Ask UI stays console-owned and out of the conversation composer', async () => {
+  const askSurfaceFiles = [
+    'components/ConsoleNodeRoom.tsx',
+    'components/ConsoleInspectPane.tsx',
+    'routes/RunDetailPage.tsx',
+  ];
+  const importViolations: string[] = [];
+  for (const relativePath of askSurfaceFiles) {
+    const source = await readFile(join(CONSOLE_ROOT, relativePath), 'utf8');
+    for (const site of parseImports(source)) {
+      if (site.spec.includes('components/workflows') || site.spec.endsWith('/ChatComposer')) {
+        importViolations.push(`${relativePath} imports ${site.spec}`);
+      }
+    }
+  }
+  expect(importViolations).toEqual([]);
+
+  const room = compact(
+    await readFile(join(CONSOLE_ROOT, 'components/ConsoleNodeRoom.tsx'), 'utf8')
+  );
+  const page = compact(await readFile(join(CONSOLE_ROOT, 'routes/RunDetailPage.tsx'), 'utf8'));
+  expect(room).toContain("from'./ask/ConsoleAskCard'");
+  expect(page).toContain("from'../components/ask/ConsoleAskChrome'");
+
+  const chatViolations: string[] = [];
+  for (const relativePath of ['components/ChatComposer.tsx', 'routes/ChatPage.tsx']) {
+    const source = await readFile(join(CONSOLE_ROOT, relativePath), 'utf8');
+    for (const identifier of [
+      'pendingInteractions',
+      'answerAskHuman',
+      'ConsoleAskCard',
+      'ConsoleAskChrome',
+    ]) {
+      if (source.includes(identifier)) {
+        chatViolations.push(`${relativePath} contains ${identifier}`);
+      }
+    }
+  }
+  expect(chatViolations).toEqual([]);
+});
+```
+
+- [ ] **Step 2: Run the final architecture guard.**
 
 Run `cd packages/web && bun test src/experiments/console/console-isolation.test.ts`.
-Expected result after the rewrite: PASS only if production files already obey the new rules from Tasks 8 and 9.
+Expected result: PASS only if the completed room and page use console-owned Ask modules and the conversation composer remains isolated.
 
 - [ ] **Step 3: Replace the README Epic 6 handoff paragraph with this exact text.**
 
 ```md
-- **AskHuman.** Command Center agent rooms render structured Ask cards from GET-run `pending_interactions` at the matching tool invocation. Awaiting chrome uses warning tokens and `waiting on you` / `Awaiting input (n)`. Console still must not import production UI modules, React Query, `@/lib/api` functions, or legacy Ask React modules. `ChatComposer` on the chat page is not an Ask path.
+- **AskHuman.** Command Center agent rooms render structured Ask cards from GET-run `pending_interactions` at the matching tool invocation.
+  Awaiting chrome uses warning tokens and `waiting on you` / `Awaiting input (n)`.
+  Console still must not import production UI modules, React Query, `@/lib/api` functions, or legacy Ask React modules.
+  `ChatComposer` on the chat page is not an Ask path.
 ```
 
 - [ ] **Step 4: Run focused console Ask and inspect suites.**
@@ -1090,7 +2464,7 @@ Expected result after the rewrite: PASS only if production files already obey th
 ```bash
 cd packages/web
 bun test src/experiments/console/skills/runs.node-messages.test.ts src/experiments/console/skills/runs.ask.test.ts
-bun test src/experiments/console/components/ask/parse-ask-envelope.test.ts src/experiments/console/components/ask/merge-agent-room-items.test.ts src/experiments/console/components/ask/ask-answer-controller.test.ts src/experiments/console/components/ask/ask-card-presentation.test.ts src/experiments/console/components/ask/awaiting-chrome.test.ts src/experiments/console/components/ask/ConsoleAskCard.test.tsx src/experiments/console/components/ask/ConsoleAskChrome.test.tsx
+bun test src/experiments/console/components/ask/parse-ask-envelope.test.ts src/experiments/console/components/ask/select-visible-node-ask-interactions.test.ts src/experiments/console/components/ask/ask-answer-controller.test.ts src/experiments/console/components/ask/ask-card-presentation.test.ts src/experiments/console/components/ask/awaiting-chrome.test.ts src/experiments/console/components/ask/ConsoleAskCard.test.tsx src/experiments/console/components/ask/ConsoleAskChrome.test.tsx
 bun test src/experiments/console/components/inspect/inspect-status.test.ts src/experiments/console/components/inspect/console-inspect-selection.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts src/experiments/console/components/graph/build-run-graph-input.test.ts
 bun test src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunGraphPanel.test.tsx src/experiments/console/components/ConsoleNodeRoom.test.tsx src/experiments/console/components/ConsoleInspectPane.test.tsx src/experiments/console/components/RunDetailHeader.test.tsx src/experiments/console/routes/RunDetailPage.test.tsx src/experiments/console/console-isolation.test.ts
 ```
@@ -1129,7 +2503,7 @@ Leave `epic-6-retrospective: optional`.
 Run `bun -e 'const text = await Bun.file("_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml").text(); Bun.YAML.parse(text); console.log("valid")'`.
 Run `git diff --check`.
 
-- [ ] **Step 9: Commit Task 10.**
+- [ ] **Step 9: Commit Task 12.**
 
 ```bash
 git add packages/web/src/experiments/console/console-isolation.test.ts packages/web/src/experiments/console/README.md _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml
@@ -1151,6 +2525,7 @@ Do not close issue 91 directly unless the later PR workflow links it with `Close
 - [ ] Decline is a first-class action behind exact copy `The agent will be told you declined`.
 - [ ] One POST answers the whole card through `/api/workflows/runs/:runId/ask/:requestId/answer`.
 - [ ] Two Ask cards on one node have independent sending, error, accepted, and duplicate states.
+- [ ] The decline confirmation is a native modal `dialog` with explicit `role="dialog"`, so global route shortcuts stay suppressed while it is open.
 - [ ] A teammate or unsigned viewer sees `Waiting for <starter> to answer` and no Submit or Decline.
 - [ ] Warning awaiting chrome uses `waiting on you` and `Awaiting input (n)` and never error tokens.
 - [ ] Clicking the awaiting pill opens Graph and selects the first awaiting node.
@@ -1162,19 +2537,3 @@ Do not close issue 91 directly unless the later PR workflow links it with `Close
 - [ ] Permission rows are not rendered.
 - [ ] Focused console tests, legacy Ask regressions, type-check, lint, formatting, and `bun run validate` all pass.
 - [ ] Sprint tracking marks `6-6-answer-the-ask-in-the-command-center-room` and `epic-6` done.
-
-## Open Questions
-
-1. Should the duplicated parser live in a second sanctioned `@/lib` module instead of `experiments/console/components/ask/`?
-Provisional default: keep the duplicate under console.
-NFR4 currently names `@/lib/run-graph` as the only sanctioned runtime exception, and Story 6.6 AC forbids importing legacy Ask React while still requiring console isolation.
-
-2. Should the runs-feed `PendingInputBanner` and global `statusLabel.paused = 'Waiting for approval'` change for Ask-paused runs?
-Provisional default: no.
-Story 6.6 is the Command Center room and run-detail chrome; the feed remains declared-gate language unless a later story retargets it.
-
-3. Should decline confirmation use a custom overlay instead of native `dialog`?
-Provisional default: native `dialog`.
-Console cannot import shadcn `AlertDialog`, and native `dialog` preserves the exact copy and focus trap without a new primitive.
-
-The approved Story 6.6 artifacts and current repository provide enough information for the locked defaults above.
