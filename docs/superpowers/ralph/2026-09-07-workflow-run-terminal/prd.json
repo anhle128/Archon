@@ -133,8 +133,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/server/src/routes/terminal/session-manager.ts, session-manager.test.ts. Verified bun test src/routes/terminal/session-manager.test.ts (15 pass)."
     },
     {
       "id": "US-007",
@@ -162,8 +162,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/server/src/routes/terminal/endpoint.ts, endpoint.test.ts, index.ts, server-fetch.test.ts; packages/server/src/index.ts; packages/server/package.json. Verified bun test src/routes/terminal/ (81 pass)."
     },
     {
       "id": "US-008",
@@ -184,8 +184,8 @@
         "US-004"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/package.json, packages/web/vite.config.ts, bun.lock, packages/web/src/components/workflows/terminal/protocol.ts, protocol.test.ts, client.ts, client.test.ts, xterm-session.ts, xterm-session.test.ts. 21 terminal tests + full packages/web test suite, tsc, eslint, prettier."
     },
     {
       "id": "US-009",
@@ -204,8 +204,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/components/workflows/terminal/terminal-status.tsx, terminal-status.test.tsx, terminal-tab.tsx, terminal-tab.test.tsx; packages/web/src/components/workflows/source-control/dag-run-tabs.tsx, dag-run-tabs.test.tsx; packages/web/src/components/workflows/WorkflowExecution.tsx, WorkflowExecution.test.tsx. Verified NODE_ENV=development bun test for terminal + dag-run-tabs + WorkflowExecution (36 pass), full packages/web test script, tsc, eslint, prettier."
     },
     {
       "id": "US-010",
@@ -224,8 +224,8 @@
         "US-009"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/docs-web/src/content/docs/adapters/web.md, reference/api.md, reference/security.md. Verified server terminal tests (81 pass), focused web tests (36 pass), bun run build:web, bun run type-check, git diff --check, and bun run validate."
     }
   ]
 }

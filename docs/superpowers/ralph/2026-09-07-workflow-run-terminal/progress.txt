@@ -1,5 +1,32 @@
 ## Codebase Patterns
 
+### Operator docs insertion points
+- **Where**: `packages/docs-web/src/content/docs/adapters/web.md`, `reference/api.md`, `reference/security.md`
+- **Pattern**: Execution Detail Page lists Graph, Logs, optional Chat, Source Control, Terminal. WebSocket docs go after run actions and before `## Commands`, and must say the route is not in OpenAPI. Threat-model copy goes under `## Secrets Handling` before Target repo `.env` isolation. Keep full Markdown sentences on one physical line.
+- **Example**: `#### Run Terminal WebSocket`
+
+### Legacy DAG terminal tab body
+- **Where**: `packages/web/src/components/workflows/source-control/dag-run-tabs.tsx`, `WorkflowExecution.tsx`, `terminal/terminal-tab.tsx`
+- **Pattern**: `WorkflowRunView` includes `'terminal'`. Put `<TabsTrigger value="terminal">Terminal</TabsTrigger>` immediately after Source Control. `resolveWorkflowExecutionBody` returns `'terminal'` only for DAG + `activeView === 'terminal'`; every non-DAG view stays `'sequential'`. Render `<TerminalTab key={runId} runId={runId} />`. Overlay `TerminalStatus` when not connected; show connected copy in the toolbar. Static-render `TerminalTab` tests so `useEffect` never mounts xterm. Decode `&#x27;` when asserting copy that contains apostrophes.
+- **Example**: `if (input.activeView === 'terminal') return 'terminal';`
+
+### Injected browser terminal ports
+- **Where**: `packages/web/src/components/workflows/terminal/client.ts`, `xterm-session.ts`
+- **Pattern**: Inject location, sessionStorage, socket factory, clock, and timers into `createRunTerminalClient`. Inject Terminal/FitAddon/ResizeObserver/requestFrame/client factories into `mountXtermSession`. Never `mock.module()`. Mirror server control parsing locally — do not import `@archon/server`. Split input with `TextEncoder` on code points. `disconnect()` keeps the resume token; `closeSession()` sends `{ type: 'close' }` and clears it. Close code 4001 is a non-reconnecting error.
+- **Example**: `url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';`
+
+### Injected terminal endpoint deps
+- **Where**: `packages/server/src/routes/terminal/endpoint.ts` (`createTerminalEndpoint`)
+- **Pattern**: Inject auth, run lookup, target resolution, spawn, and the session manager. Default deps import `getAuth`, `isApiGateEnabled`, `userDb.findOrCreateUserByPlatformIdentity`, `workflowDb.getWorkflowRun`, and `isolationEnvDb.getById`. Never `mock.module()`. Origin check runs before auth. `createFetchWithTerminal` intercepts `TERMINAL_PATH_RE` before Hono and preserves `undefined` on a successful upgrade.
+- **Example**: `if (endpoint.matches(pathname)) return endpoint.handleUpgrade(request, server);`
+
+### Injected session manager clock, tokens, and sockets
+- **Where**: `packages/server/src/routes/terminal/session-manager.ts` (`createTerminalSessionManager`)
+- **Pattern**: Inject `randomBytes`, `setTimeout`, `clearTimeout`, and a lifecycle logger. Tests use fake sockets (`send` result queue, `getBufferedAmount`) and fake PTYs. Key by `${userId}:${runId}`. Copy every PTY chunk. Compare resume tokens with `timingSafeEqual` after `isResumeToken`. Centralize removal in `destroy(key, reason)`: delete map entry, cancel timer, kill PTY, close socket. Socket identity checks so replaced sockets cannot mutate the current session.
+- **Example**: `if (session?.socket !== socket) return undefined;`
+
+
+
 ### Injected Bun.spawn for PTY tests
 - **Where**: `packages/server/src/routes/terminal/pty.ts` (`spawnTerminalPty`)
 - **Pattern**: Inject `spawn?: typeof Bun.spawn`. Unit tests pass a fake subprocess; only the POSIX Ctrl-C case uses production `Bun.spawn`. Use inline `terminal: { cols, rows, name: 'xterm-256color', data }` — never `new Bun.Terminal()`. Fail fast if `subprocess.terminal` is absent. `kill()` is idempotent: `SIGTERM` then `terminal.close()`. Container specs omit `cwd` because `docker exec -w` already sets it.
@@ -168,3 +195,148 @@
 
 ---
 
+## 2026-09-08 — US-006: Manage reconnectable workflow terminal sessions
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/terminal/session-manager.ts` — in-memory per-user/run manager with takeover, replay, reconnect, backpressure, overflow, expiry, exit, and shutdown
+- `packages/server/src/routes/terminal/session-manager.test.ts` — fake PTY/socket/timer coverage of the Task 6 lifecycle matrix
+
+**Acceptance criteria verified**:
+- [x] Create packages/server/src/routes/terminal/session-manager.ts and test file packages/server/src/routes/terminal/session-manager.test.ts.
+- [x] Export TerminalSocket, TerminalSessionManager interfaces and createTerminalSessionManager factory.
+- [x] Key sessions by '${userId}:${runId}' and generate 64-character lowercase hex resume tokens using crypto randomBytes(32).
+- [x] When a second active socket connects for an existing key, take over the session: clear pending output, attach replacement socket, replay bounded buffer suffix, and close old socket with code 4001.
+- [x] Old socket close callback does not mutate or detach the replacement session.
+- [x] When a socket disconnects, retain the session for RECONNECT_MS (120,000 ms); reattach only when valid matching resumeToken is supplied.
+- [x] Invalid or missing resumeToken on a disconnected session destroys the old PTY and allows creating a fresh session.
+- [x] Maintain in-memory replay buffer retaining at most the newest REPLAY_MAX_BYTES (256 KiB) of binary output; never persist to disk.
+- [x] Handle Bun send() return values: -1 sets backpressure flag and queues subsequent chunks; 0 detaches socket; positive integer confirms bytes sent.
+- [x] Enforce PENDING_MAX_BYTES (1 MiB) ceiling across socket buffered amount and pending queue; overflow sends error message, closes with code 1011, and destroys session.
+- [x] drain(socket) flushes application queue in order until empty or send() returns -1.
+- [x] Explicit closeSession, process exit, expiry timer, and destroyAll() kill the PTY idempotently and remove the map entry.
+- [x] Lifecycle logging emits only terminal.session_started, terminal.session_reconnected, terminal.session_completed, terminal.session_failed, terminal.session_expired, terminal.pty_exited with safe metadata (no commands, paths, tokens, handles, or output).
+- [x] All unit tests pass via bun test src/routes/terminal/session-manager.test.ts in packages/server.
+
+**Learnings**:
+- Prior iteration committed US-006 (`d488016a`) without flipping `passes` in prd.json. Re-ran the exact gate this iteration (15 pass) and marked it complete; no second implementation pass.
+- Inject timers/randomBytes/logger; never `mock.module()` for session tests.
+- `destroy` must delete the map entry before `pty.kill()` so replaced-socket and double-destroy paths stay idempotent.
+
+---
+
+## 2026-09-08 — US-007: Serve authenticated workflow terminal WebSockets
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/terminal/endpoint.ts` — auth/upgrade factory, WebSocket callbacks, locked error JSON
+- `packages/server/src/routes/terminal/endpoint.test.ts` — origin, auth precedence, solo, 426/404/500, hostile query params, attach/unavailable/spawn, frame dispatch
+- `packages/server/src/routes/terminal/index.ts` — `createTerminalEndpoint` + `createFetchWithTerminal`
+- `packages/server/src/routes/terminal/server-fetch.test.ts` — terminal path intercepts before Hono; unrelated paths pass through
+- `packages/server/src/index.ts` — wrap `Bun.serve` fetch, register websocket, `destroyAll()` at shutdown start
+- `packages/server/package.json` — isolated `bun test src/routes/terminal/` after checkout-gate
+
+**Acceptance criteria verified**:
+- [x] Create packages/server/src/routes/terminal/endpoint.ts and test file packages/server/src/routes/terminal/endpoint.test.ts.
+- [x] Implement createTerminalEndpoint(deps) resolving identity: 1) Better Auth session, 2) ARCHON_WEB_AUTH_HEADER header, 3) SOLO_TERMINAL_USER_ID ('solo') if API gate is disabled; throws 401 if gate enabled and no auth.
+- [x] handleUpgrade validates same-origin, requires GET and Upgrade: websocket headers (426 otherwise), decodes runId, looks up workflow run (404 if missing), validates resume query param, and calls server.upgrade with runId, userId, resumeToken.
+- [x] WebSocket open callback attempts manager.attachExisting; if not attached, resolves target, sends locked unavailable control frame on unavailable targets, or spawns PTY and calls manager.create.
+- [x] WebSocket message callback parses JSON control frame; dispatches input and resize to manager; destroys session on binary frames or malformed JSON.
+- [x] WebSocket close and drain callbacks delegate to manager.disconnect and manager.drain.
+- [x] Create packages/server/src/routes/terminal/index.ts exporting createTerminalEndpoint and createFetchWithTerminal.
+- [x] Create packages/server/src/routes/terminal/server-fetch.test.ts proving exact terminal path intercepts before Hono and unrelated paths pass to app.fetch.
+- [x] Modify packages/server/src/index.ts to wrap Bun.serve fetch with createFetchWithTerminal, register terminalEndpoint.websocket, and call terminalEndpoint.destroyAll() during shutdown.
+- [x] Modify packages/server/package.json test script to add isolated 'bun test src/routes/terminal/' leg.
+- [x] All server terminal tests pass via bun test src/routes/terminal/.
+
+**Learnings**:
+- Plan Task 7 tests fail RED because `./endpoint` / `./index` do not exist; implement after watching those errors.
+- `function f(x = default)` treats an explicit `undefined` as omitted. Use a Symbol sentinel when a test must pass `undefined` through.
+- A `findOrCreateUser` harness override replaces the recording stub unless the helper wraps it.
+- `destroyAll()` belongs before `stopCleanupScheduler()` in shutdown.
+
+---
+
+## 2026-09-08 — US-008: Connect xterm to reconnectable run terminal sockets
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/package.json` — exact `@xterm/xterm@5.5.0` and `@xterm/addon-fit@0.10.0`
+- `bun.lock` — lockfile for those dependencies
+- `packages/web/vite.config.ts` — `/api` proxy `ws: true`
+- `packages/web/src/components/workflows/terminal/protocol.ts` — server control parse + UTF-8 input chunking
+- `packages/web/src/components/workflows/terminal/protocol.test.ts` — ready/exit/unavailable/error and multi-byte chunk tests
+- `packages/web/src/components/workflows/terminal/client.ts` — same-origin reconnecting WebSocket client
+- `packages/web/src/components/workflows/terminal/client.test.ts` — fake socket/storage/clock/timer coverage
+- `packages/web/src/components/workflows/terminal/xterm-session.ts` — xterm + FitAddon + ResizeObserver mount
+- `packages/web/src/components/workflows/terminal/xterm-session.test.ts` — injected factory coverage
+
+**Acceptance criteria verified**:
+- [x] Add exact dependencies @xterm/xterm@5.5.0 and @xterm/addon-fit@0.10.0 to packages/web/package.json; update bun.lock.
+- [x] Update packages/web/vite.config.ts to set ws: true in the /api proxy configuration.
+- [x] Create protocol.ts and protocol.test.ts: parseServerControlMessage validates ready, exit, unavailable, error; chunkTerminalInput splits on UTF-8 code-point boundaries.
+- [x] Create client.ts and client.test.ts: createRunTerminalClient connects to same-origin /api/workflows/runs/:runId/terminal with binaryType 'arraybuffer'.
+- [x] Resume token in sessionStorage, cleared on close/exit/unavailable/error; resize cached until ready; backoff [250, 500, 1000, 2000, 5000] ms up to 120s.
+- [x] Close code 4001 transitions to 'Terminal opened in another tab.' without reconnecting.
+- [x] Create xterm-session.ts and xterm-session.test.ts: Terminal, FitAddon, ResizeObserver, CSS variables, input/output/resize wiring.
+- [x] All client unit tests pass via bun test in packages/web.
+
+**Learnings**:
+- Plan Task 8 tests fail RED because `./protocol` / `./client` / `./xterm-session` do not exist; implement after watching those errors.
+- Default `getComputedStyle` shorthand throws in bun tests with no DOM; look up `globalThis.getComputedStyle` lazily and fall back from `document.documentElement` to the host element.
+- `clearTimeout` cannot take `unknown`; wrap the default timer port so injected fake timer ids stay typed.
+
+---
+
+
+## 2026-09-08 — US-009: Add a Terminal tab to legacy workflow run details
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/terminal/terminal-status.tsx` — locked visible copy for every `TerminalClientState`
+- `packages/web/src/components/workflows/terminal/terminal-status.test.tsx` — exact copy assertions, including HTML-decoded apostrophes
+- `packages/web/src/components/workflows/terminal/terminal-tab.tsx` — xterm.css import, mount host, overlay/toolbar status, Close terminal
+- `packages/web/src/components/workflows/terminal/terminal-tab.test.tsx` — region, host, and Close terminal static render
+- `packages/web/src/components/workflows/source-control/dag-run-tabs.tsx` — `WorkflowRunView` `'terminal'` + trigger after Source Control
+- `packages/web/src/components/workflows/source-control/dag-run-tabs.test.tsx` — tab order Graph, Logs, optional Chat, Source Control, Terminal
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — DAG-only `'terminal'` body renders `<TerminalTab key={runId} runId={runId} />`
+- `packages/web/src/components/workflows/WorkflowExecution.test.tsx` — DAG terminal maps to `'terminal'`; non-DAG stays `'sequential'`
+
+**Acceptance criteria verified**:
+- [x] Create packages/web/src/components/workflows/terminal/terminal-status.tsx and test file terminal-status.test.tsx rendering exact copy for Connecting…, Connected, Reconnecting…, Terminal closed., Terminal opened in another tab., exit codes/signals, and error messages.
+- [x] Create packages/web/src/components/workflows/terminal/terminal-tab.tsx and test file terminal-tab.test.tsx importing xterm.css, hosting xterm container, displaying status, and providing 'Close terminal' button.
+- [x] Modify packages/web/src/components/workflows/source-control/dag-run-tabs.tsx and its test to add 'Terminal' tab trigger immediately after 'Source Control' for DAG runs.
+- [x] Modify packages/web/src/components/workflows/WorkflowExecution.tsx and its test: extend WorkflowRunView with 'terminal', map activeView 'terminal' to body 'terminal' only for DAG runs, and render <TerminalTab key={runId} runId={runId} />.
+- [x] Ensure experimental Console (packages/web/src/experiments/console/) remains completely untouched.
+- [x] All component tests pass via NODE_ENV=development bun test in packages/web.
+
+**Learnings**:
+- Plan Task 9 tests fail RED because `./terminal-status` / `./terminal-tab` do not exist and `'terminal'` is not a `WorkflowRunView`.
+- `renderToStaticMarkup` HTML-escapes apostrophes as `&#x27;`; decode before asserting unavailable copy.
+- Annotate the `useEffect` cleanup as `(): void` or `@typescript-eslint/explicit-function-return-type` fails.
+- Static-render `TerminalTab` so `useEffect` does not spawn xterm/WebSocket in component tests.
+
+---
+
+
+## 2026-09-08 — US-010: Document workflow run terminal access and validate system
+
+**Status**: PASSED
+**Files changed**:
+- `packages/docs-web/src/content/docs/adapters/web.md` — Terminal tab on Execution Detail Page: target resolution, 2-minute reconnect, Close terminal, non-persistence, host-shell permissions
+- `packages/docs-web/src/content/docs/reference/api.md` — Run Terminal WebSocket URL, frames, identity, same-origin, non-OpenAPI status
+- `packages/docs-web/src/content/docs/reference/security.md` — Interactive run terminal shell authority, env allowlists, secret stripping, audit privacy
+
+**Acceptance criteria verified**:
+- [x] Modify packages/docs-web/src/content/docs/adapters/web.md to document the Terminal tab under Execution Detail Page, including target resolution, 2-minute reconnect, and non-persistence.
+- [x] Modify packages/docs-web/src/content/docs/reference/api.md under workflow runs to document the Run Terminal WebSocket protocol, URL, frames, and non-OpenAPI status.
+- [x] Modify packages/docs-web/src/content/docs/reference/security.md under Secrets Handling to document shell authority, environment allowlists, secret stripping, and audit privacy.
+- [x] Execute automated validation: (cd packages/server && bun test src/routes/terminal/), (cd packages/web && NODE_ENV=development bun test src/components/workflows/terminal/ src/components/workflows/source-control/dag-run-tabs.test.tsx src/components/workflows/WorkflowExecution.test.tsx), bun run build:web, bun run type-check, and git diff --check.
+- [x] Execute full repository validation: bun run validate exits 0.
+
+**Learnings**:
+- Plan Task 10 is documentation plus the existing focused and repository gates; do not invent extra REST routes or OpenAPI regeneration.
+- `git diff --check` is a no-output success; `bun run validate` re-runs type-check, lint, format, install smoke, and the full per-package test matrix.
+- Manual host/container walkthroughs are plan steps, not US-010 acceptance criteria.
+
+---
