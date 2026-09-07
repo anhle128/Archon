@@ -66,11 +66,13 @@ export function ConsoleApp(): ReactElement {
   return (
     <div className="console-root flex h-screen w-screen flex-col bg-surface text-text-primary">
       <div className="flex min-h-0 flex-1">
-        <ProjectRail
-          onAddProject={() => {
-            setAddOpen(true);
-          }}
-        />
+        <div className="hidden min-h-0 lg:block">
+          <ProjectRail
+            onAddProject={() => {
+              setAddOpen(true);
+            }}
+          />
+        </div>
         <main className="flex min-w-0 flex-1 flex-col">
           <Routes>
             <Route index element={<RunsPage />} />

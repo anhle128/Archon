@@ -2140,6 +2140,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workflows/runs/{runId}/review-feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit inline Plannotator review feedback */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["ReviewFeedbackBody"];
+                };
+            };
+            responses: {
+                /** @description Feedback accepted or idempotent duplicate */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ReviewFeedbackResponse"];
+                    };
+                };
+                /** @description Bad request — wrong gate, session, or run state */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Workflow run not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Conflict — another submission already pending, or changed-body retry */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workflows/runs/{runId}/approve": {
         parameters: {
             query?: never;
@@ -2754,7 +2832,12 @@ export interface paths {
         /** List one workflow node transcript */
         get: {
             parameters: {
-                query?: never;
+                query?: {
+                    afterSeq?: number | null;
+                    limit?: number;
+                    occurrenceId?: string;
+                    attemptId?: string;
+                };
                 header?: never;
                 path: {
                     runId: string;
@@ -2771,6 +2854,73 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["WorkflowNodeMessagesResponse"];
+                    };
+                };
+                /** @description Bad request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Server error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workflows/runs/{runId}/nodes/{nodeId}/messages/{messageId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one retained workflow node transcript message */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    runId: string;
+                    nodeId: string;
+                    messageId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Full retained transcript row */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkflowNodeMessage"];
                     };
                 };
                 /** @description Not found */
@@ -4990,6 +5140,24 @@ export interface components {
         RetryWorkflowNodeBody: {
             checkoutStrategy?: components["schemas"]["RetryWorkflowNodeCheckoutStrategy"];
         };
+        ReviewFeedbackResponse: {
+            /** Format: uuid */
+            requestId: string;
+            /** Format: uuid */
+            reviewSessionId: string;
+            /** @enum {string} */
+            status: "accepted" | "claimed" | "processed" | "superseded" | "failed";
+            submittedAt: string;
+        };
+        ReviewFeedbackBody: {
+            nodeId: string;
+            gateId: string;
+            /** Format: uuid */
+            reviewSessionId: string;
+            /** Format: uuid */
+            requestId: string;
+            feedback: string;
+        };
         ApproveWorkflowRunBody: {
             comment?: string;
         };
@@ -5040,8 +5208,35 @@ export interface components {
         };
         WorkflowNodeMessagesResponse: {
             messages: components["schemas"]["WorkflowNodeMessage"][];
+            nextCursor?: string;
+            hasMore?: boolean;
+            highWatermark?: number;
         };
         WorkflowNodeMessage: {
+            metadata?: {
+                execution?: {
+                    /** Format: uuid */
+                    occurrence_id: string;
+                    /** Format: uuid */
+                    attempt_id: string;
+                    retry_epoch?: number;
+                    loop_ancestry?: {
+                        node_id: string;
+                        iteration: number;
+                    }[];
+                    route_activation_seq?: number;
+                };
+                stream_id?: string;
+                message_id?: string;
+                block_id?: string;
+                /** @enum {string} */
+                text_mode?: "complete" | "delta" | "snapshot";
+                /** @enum {string} */
+                tool_phase?: "call" | "result";
+                truncated?: boolean;
+                /** @enum {string} */
+                output_state?: "full" | "truncated" | "missing" | "unknown";
+            } | null;
             /** @enum {string} */
             kind: "text";
             payload: {
@@ -5051,6 +5246,30 @@ export interface components {
             seq: number;
             created_at: string;
         } | {
+            metadata?: {
+                execution?: {
+                    /** Format: uuid */
+                    occurrence_id: string;
+                    /** Format: uuid */
+                    attempt_id: string;
+                    retry_epoch?: number;
+                    loop_ancestry?: {
+                        node_id: string;
+                        iteration: number;
+                    }[];
+                    route_activation_seq?: number;
+                };
+                stream_id?: string;
+                message_id?: string;
+                block_id?: string;
+                /** @enum {string} */
+                text_mode?: "complete" | "delta" | "snapshot";
+                /** @enum {string} */
+                tool_phase?: "call" | "result";
+                truncated?: boolean;
+                /** @enum {string} */
+                output_state?: "full" | "truncated" | "missing" | "unknown";
+            } | null;
             /** @enum {string} */
             kind: "tool";
             payload: {
@@ -5063,6 +5282,30 @@ export interface components {
             seq: number;
             created_at: string;
         } | {
+            metadata?: {
+                execution?: {
+                    /** Format: uuid */
+                    occurrence_id: string;
+                    /** Format: uuid */
+                    attempt_id: string;
+                    retry_epoch?: number;
+                    loop_ancestry?: {
+                        node_id: string;
+                        iteration: number;
+                    }[];
+                    route_activation_seq?: number;
+                };
+                stream_id?: string;
+                message_id?: string;
+                block_id?: string;
+                /** @enum {string} */
+                text_mode?: "complete" | "delta" | "snapshot";
+                /** @enum {string} */
+                tool_phase?: "call" | "result";
+                truncated?: boolean;
+                /** @enum {string} */
+                output_state?: "full" | "truncated" | "missing" | "unknown";
+            } | null;
             /** @enum {string} */
             kind: "status";
             payload: {
@@ -5085,6 +5328,7 @@ export interface components {
             usage: components["schemas"]["NullableUsageReport"];
             viewer_is_starter: boolean;
             starter_display_name: string | null;
+            nodeExecutions?: components["schemas"]["NodeExecution"][];
         };
         WorkflowEvent: {
             id: string;
@@ -5168,6 +5412,18 @@ export interface components {
             created_at: string;
             resolved_at: string | null;
             resolved_by: string | null;
+            execution_scope?: {
+                /** Format: uuid */
+                occurrence_id: string;
+                /** Format: uuid */
+                attempt_id: string;
+                retry_epoch?: number;
+                loop_ancestry?: {
+                    node_id: string;
+                    iteration: number;
+                }[];
+                route_activation_seq?: number;
+            } | null;
         };
         NullableUsageReport: {
             scope: {
@@ -5244,6 +5500,28 @@ export interface components {
                 filterScope: "date-project-run-node";
             };
         } | null;
+        NodeExecution: {
+            node_id: string;
+            node_type?: string;
+            status: string;
+            /** Format: uuid */
+            occurrence_id?: string;
+            /** Format: uuid */
+            attempt_id?: string;
+            retry_epoch?: number;
+            loop_ancestry?: {
+                node_id: string;
+                iteration: number;
+            }[];
+            route_activation_seq?: number;
+            started_at?: string;
+            ended_at?: string;
+            duration_ms?: number;
+            start_offset_ms?: number;
+            error?: string;
+            unknown_scope?: boolean;
+            unknown_reason?: string;
+        };
         GitChangesResponse: {
             files: components["schemas"]["GitChangedFile"][];
             revision: string;

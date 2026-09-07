@@ -16,7 +16,11 @@ import { createLogger } from '@archon/paths';
 import { readFileSync, rmSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { ApprovalContext, WorkflowRun } from './schemas/workflow-run';
+import type {
+  ApprovalContext,
+  ReviewFeedbackSubmission,
+  WorkflowRun,
+} from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 import {
   buildAnnotateArgv,
@@ -71,6 +75,12 @@ interface Exit {
 type Phase = NonNullable<ApprovalContext['phase']>;
 type GateOutcome = 'continue' | 'approved' | 'rejected' | 'superseded';
 
+/** Paired gate outcome with optional updated approval (present on 'continue'). */
+interface GateOutcomeResult {
+  outcome: GateOutcome;
+  approval?: ApprovalContext;
+}
+
 export type PlannotatorGateSupervisorResult =
   | { kind: 'approved'; output: string }
   | { kind: 'superseded' };
@@ -91,6 +101,9 @@ export async function runPlannotatorGateSupervisor(
   let childResult: Exit | undefined;
   let phase: Phase = 'waiting_decision';
   let attempt = 0;
+  // Tracks the reviewSessionId minted by the most recent waiting_decision transition.
+  // Used by inline-feedback claim arbitration.
+  let activeReviewSessionId: string | null = null;
 
   await deps.store.pauseWorkflowRun(deps.runId, {
     type: 'plannotator_gate',
@@ -182,12 +195,13 @@ export async function runPlannotatorGateSupervisor(
           }
         }
         phase = 'waiting_decision';
-        const waiting = await setPhase(deps, documentPath, 'waiting_decision', reviewUrl);
-        const waitingResult = await finishGateOutcome(deps, waiting);
+        const waitingFull = await setPhaseResult(deps, documentPath, 'waiting_decision', reviewUrl);
+        const waitingResult = await finishGateOutcome(deps, waitingFull.outcome);
         if (waitingResult) {
           await dropChild();
           return waitingResult;
         }
+        activeReviewSessionId = waitingFull.approval?.reviewSessionId ?? null;
         if (reviewUrl !== undefined) {
           try {
             await deps.store.createWorkflowEvent({
@@ -219,7 +233,49 @@ export async function runPlannotatorGateSupervisor(
           await dropChild();
           return midResult;
         }
-        if (childResult === undefined) continue;
+        // Check for a pending inline feedback submission that needs claiming.
+        // Arbitrate queued inline feedback even when the native child exited
+        // in this same poll — durable accepted feedback wins over native.
+        const inlineResult = await checkInlineFeedback(deps, activeReviewSessionId);
+        if (inlineResult) {
+          await dropChild();
+          // Re-use the annotated-decision rework path with inline feedback.
+          phase = 'reworking';
+          const reworkPhase = await setPhase(deps, documentPath, 'reworking');
+          const reworkResult = await finishGateOutcome(deps, reworkPhase);
+          if (reworkResult) return reworkResult;
+          try {
+            const raw = await deps.runReworkAgent({
+              documentPath,
+              annotations: inlineResult.feedback,
+            });
+            const afterRework = await checkResolved(deps);
+            const afterReworkResult = await finishGateOutcome(deps, afterRework);
+            if (afterReworkResult) return afterReworkResult;
+            documentPath = parseDocumentPathFromNodeOutput(raw);
+          } catch (err) {
+            const afterFail = await checkResolved(deps);
+            const afterFailResult = await finishGateOutcome(deps, afterFail);
+            if (afterFailResult) return afterFailResult;
+            phase = 'idle';
+            const idleAfterFail = await setPhase(deps, documentPath, 'idle');
+            const idleAfterFailResult = await finishGateOutcome(deps, idleAfterFail);
+            if (idleAfterFailResult) return idleAfterFailResult;
+            throw err instanceof Error
+              ? err
+              : new Error(`plannotator gate rework failed: ${String(err)}`);
+          }
+          phase = 'waiting_decision';
+          const nextFull = await setPhaseResult(deps, documentPath, 'waiting_decision');
+          const nextResult = await finishGateOutcome(deps, nextFull.outcome);
+          if (nextResult) return nextResult;
+          activeReviewSessionId = nextFull.approval?.reviewSessionId ?? null;
+          continue;
+        }
+
+        if (childResult === undefined) {
+          continue;
+        }
 
         const exited = childResult;
         await dropChild();
@@ -261,6 +317,18 @@ export async function runPlannotatorGateSupervisor(
         }
 
         if (decision.kind === 'approved') {
+          // Native approval: claim the decision before recording it.
+          // If inline already claimed, ignore this native result (child was superseded).
+          if (activeReviewSessionId) {
+            const claimed = await deps.store.claimGateDecision({
+              runId: deps.runId,
+              nodeId: deps.nodeId,
+              gateId: deps.gateId,
+              reviewSessionId: activeReviewSessionId,
+              source: 'native',
+            });
+            if (!claimed.claimed) continue;
+          }
           const recorded = await recordApproval(deps, decision.feedback);
           const recordedResult = await finishGateOutcome(deps, recorded);
           if (recordedResult) return recordedResult;
@@ -268,6 +336,18 @@ export async function runPlannotatorGateSupervisor(
         }
 
         if (decision.kind === 'annotated') {
+          // Native annotation: claim the decision before processing rework.
+          // If inline already claimed, ignore this native result (child was superseded).
+          if (activeReviewSessionId) {
+            const claimed = await deps.store.claimGateDecision({
+              runId: deps.runId,
+              nodeId: deps.nodeId,
+              gateId: deps.gateId,
+              reviewSessionId: activeReviewSessionId,
+              source: 'native',
+            });
+            if (!claimed.claimed) continue;
+          }
           phase = 'reworking';
           const reworkPhase = await setPhase(deps, documentPath, 'reworking');
           const reworkResult = await finishGateOutcome(deps, reworkPhase);
@@ -299,9 +379,10 @@ export async function runPlannotatorGateSupervisor(
           }
 
           phase = 'waiting_decision';
-          const next = await setPhase(deps, documentPath, 'waiting_decision');
-          const nextResult = await finishGateOutcome(deps, next);
+          const nextFull = await setPhaseResult(deps, documentPath, 'waiting_decision');
+          const nextResult = await finishGateOutcome(deps, nextFull.outcome);
           if (nextResult) return nextResult;
+          activeReviewSessionId = nextFull.approval?.reviewSessionId ?? null;
           continue;
         }
 
@@ -368,6 +449,17 @@ async function setPhase(
   phase: Phase,
   reviewUrl?: string
 ): Promise<GateOutcome> {
+  const r = await setPhaseResult(deps, document, phase, reviewUrl);
+  return r.outcome;
+}
+
+/** Like setPhase but returns the updated approval when outcome is 'continue'. */
+async function setPhaseResult(
+  deps: PlannotatorGateSupervisorDeps,
+  document: string,
+  phase: Phase,
+  reviewUrl?: string
+): Promise<GateOutcomeResult> {
   const result = await deps.store.transitionPlannotatorGate({
     runId: deps.runId,
     nodeId: deps.nodeId,
@@ -376,12 +468,42 @@ async function setPhase(
     phase,
     reviewUrl: reviewUrl ?? null,
   });
-  if (result.outcome === 'updated') return 'continue';
-  if (result.outcome === 'resolved') return result.resolved;
-  if (result.outcome === 'superseded') return 'superseded';
+  if (result.outcome === 'updated') return { outcome: 'continue', approval: result.approval };
+  if (result.outcome === 'resolved') return { outcome: result.resolved };
+  if (result.outcome === 'superseded') return { outcome: 'superseded' };
   const run = await requireRun(deps.store, deps.runId);
-  if (!ownsGate(deps, readApproval(run))) return 'superseded';
+  if (!ownsGate(deps, readApproval(run))) return { outcome: 'superseded' };
   throw new Error(`plannotator gate aborted: run '${deps.runId}' is ${result.status}`);
+}
+
+/**
+ * Check whether an inline feedback submission is ready to be consumed.
+ * Returns the submission if this supervisor wins the claim; null otherwise.
+ * Only fires when there is an active reviewSessionId.
+ */
+async function checkInlineFeedback(
+  deps: PlannotatorGateSupervisorDeps,
+  reviewSessionId: string | null
+): Promise<ReviewFeedbackSubmission | null> {
+  if (!reviewSessionId) return null;
+  const run = await requireRun(deps.store, deps.runId);
+  assertNotTerminal(run);
+  const approval = readApproval(run);
+  if (approval == null || !ownsGate(deps, approval)) return null;
+  if (approval.reviewSessionId !== reviewSessionId) return null;
+  const sub = approval.feedbackSubmission;
+  if (sub?.status !== 'accepted') return null;
+
+  const claimed = await deps.store.claimGateDecision({
+    runId: deps.runId,
+    nodeId: deps.nodeId,
+    gateId: deps.gateId,
+    reviewSessionId,
+    source: 'inline',
+    requestId: sub.requestId,
+  });
+  if (!claimed.claimed) return null;
+  return claimed.receipt ?? sub;
 }
 
 async function recordApproval(

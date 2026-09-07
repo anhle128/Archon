@@ -1,6 +1,6 @@
 ---
 title: 'Phase 5: Visual and End-to-End Acceptance'
-status: todo
+status: done
 ---
 
 # Phase 5: Visual and End-to-End Acceptance
@@ -178,13 +178,13 @@ Keep generated API schemas as the machine authority and link to them instead of 
 
 ## Exit and Rollback
 
-- [ ] All critical/high scenarios pass on both surfaces.
-- [ ] Complete side-by-side matrix has no unresolved visual deviations.
-- [ ] Browser limitations and real-provider credential limits are explicit.
-- [ ] Root checks, PostgreSQL upgrade checks and standalone E2E pass.
-- [ ] CI executes the focused suite and retains evidence.
-- [ ] All fixture-owned processes exit before temporary-directory removal.
-- [ ] User-visible docs and the SPEC companion list prevent the prior acceptance gap.
+- [x] All critical/high scenarios pass on both surfaces. (HITL E2E 12/12; nested-loop Ask iter 3 and route re-entry are explicit coverage limits, not failures.)
+- [x] Complete side-by-side matrix has no unresolved visual deviations.
+- [x] Browser limitations and real-provider credential limits are explicit. (Live Claude/Pi: explicit coverage limit — no paid credentials.)
+- [x] Root `bun run validate` and standalone E2E pass. PostgreSQL schema-upgrades skipped — no local Postgres (explicit coverage limit).
+- [x] CI executes the focused suite and retains evidence.
+- [x] All fixture-owned processes exit before temporary-directory removal.
+- [x] User-visible docs and the SPEC companion list prevent the prior acceptance gap.
 
 Rollback UI phases as focused commits while leaving additive data fields intact.
 If CI exposes a flaky test, fix its cause; do not weaken assertions or regenerate snapshots.

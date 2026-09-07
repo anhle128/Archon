@@ -4,6 +4,7 @@
  * Types are derived with `z.infer`. Import `z` from `@hono/zod-openapi`.
  */
 import { z } from '@hono/zod-openapi';
+import { transcriptExecutionScopeSchema } from './node-execution';
 
 const pendingJsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -21,6 +22,7 @@ export const pendingInteractionSchema = z
     created_at: z.union([z.date(), z.string()]),
     resolved_at: z.union([z.date(), z.string()]).nullable(),
     resolved_by: z.string().min(1).nullable(),
+    execution_scope: transcriptExecutionScopeSchema.nullable().optional(),
   })
   .strict();
 
@@ -34,6 +36,7 @@ export const insertPendingInteractionSchema = pendingInteractionSchema
     kind: true,
     envelope: true,
     provider_session_id: true,
+    execution_scope: true,
   })
   .strict();
 

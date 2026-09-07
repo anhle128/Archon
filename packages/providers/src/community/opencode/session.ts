@@ -189,7 +189,21 @@ export async function* streamOpencodeSession(
             const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
             const text = delta ?? (typeof part.text === 'string' ? part.text : '');
             if (text) {
-              yield { type: 'assistant', content: text };
+              const messageId =
+                typeof part.messageID === 'string' && part.messageID.length > 0
+                  ? part.messageID
+                  : lastAssistantMessageId;
+              const blockId =
+                typeof part.id === 'string' && part.id.length > 0 ? part.id : undefined;
+              yield {
+                type: 'assistant',
+                content: text,
+                textMode: delta !== undefined ? 'delta' : 'snapshot',
+                ...(messageId !== undefined && messageId.length > 0
+                  ? { messageId, streamId: messageId }
+                  : {}),
+                ...(blockId !== undefined ? { blockId } : {}),
+              };
             }
             continue;
           }
@@ -229,6 +243,7 @@ export async function* streamOpencodeSession(
                   toolOutput: typeof state?.output === 'string' ? state.output : '',
                   ...(callId ? { toolCallId: callId } : {}),
                   toolOutcome: 'success',
+                  outputState: 'full' as const,
                 };
               } else if (status === 'error') {
                 completedToolCalls.add(callId);
@@ -238,6 +253,7 @@ export async function* streamOpencodeSession(
                   toolOutput: typeof state?.error === 'string' ? state.error : 'Tool failed',
                   ...(callId ? { toolCallId: callId } : {}),
                   toolOutcome: 'error',
+                  outputState: 'full' as const,
                 };
               }
             }

@@ -364,6 +364,8 @@ describe('OmpProvider', () => {
       toolName: 'read',
       toolOutput: 'contents',
       toolCallId: 'tool-1',
+      toolOutcome: 'success',
+      outputState: 'full',
     });
     expect(chunks.at(-1)).toMatchObject({
       type: 'result',

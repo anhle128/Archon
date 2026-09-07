@@ -284,3 +284,33 @@ body {
 .chat-markdown tr:nth-child(even) td {
   background: var(--surface);
 }
+
+/* =========================================================================
+ * Run-view semantic tokens (scoped to both run-view roots only).
+ * Roots: .legacy-run-view (WorkflowExecution) and .console-run-view
+ * (RunDetailPage). These properties do not apply sitewide.
+ * ========================================================================= */
+
+.legacy-run-view,
+.console-run-view {
+  /* Agent message typography — matches mockup .pmsg-text */
+  --rv-agent-font-size: 12.5px;
+  --rv-agent-line-height: 1.5;
+
+  /* Tool card inset surface — matches mockup .ptool */
+  --rv-tool-card-bg: var(--surface-inset);
+  --rv-tool-card-border: 1px solid var(--border);
+  --rv-tool-card-radius: var(--radius);
+  --rv-tool-card-padding: 8px 10px;
+  --rv-tool-io-font-size: 11px;
+
+  /* Ask card — matches mockup .ask-card */
+  --rv-ask-card-border-color: var(--warning);
+  --rv-ask-card-radius: var(--radius);
+  --rv-ask-card-padding: 12px 14px;
+
+  /* Inspect panel dimensions */
+  --rv-panel-default-width: 460px;
+  --rv-panel-min-width: 320px;
+  --rv-panel-max-width: 720px;
+}

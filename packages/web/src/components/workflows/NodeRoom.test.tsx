@@ -183,6 +183,9 @@ describe('NodeRoom', () => {
     expect(loaded).toContain('aria-label="review room"');
     expect(loaded.split('role="region"').length - 1).toBe(1);
     expect(loaded).toContain('first');
+    expect(loaded).toContain('ptool');
+    expect(loaded).not.toContain('rounded-full');
+    expect(loaded).not.toContain('<details');
     expect(loaded).toContain('Read');
     expect(visibleText(loaded)).toContain('"path": "a.ts"');
     expect(loaded).toContain('started');

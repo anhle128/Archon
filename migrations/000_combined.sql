@@ -749,6 +749,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_messages (
   seq INTEGER NOT NULL CHECK (seq >= 1),
   kind VARCHAR(16) NOT NULL CHECK (kind IN ('text', 'tool', 'status')),
   payload JSONB NOT NULL,
+  metadata JSONB,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_workflow_node_messages_run_node_seq
     UNIQUE (workflow_run_id, node_id, seq)
@@ -774,12 +775,19 @@ CREATE TABLE IF NOT EXISTS remote_agent_pending_interactions (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   resolved_at TIMESTAMP WITH TIME ZONE,
   resolved_by VARCHAR(255),
+  execution_scope JSONB,
   CONSTRAINT uq_pending_interactions_run_tool_use
     UNIQUE (workflow_run_id, tool_use_id)
 );
 
 COMMENT ON TABLE remote_agent_pending_interactions IS
   'Structured pending AskHuman and permission interactions; unique per (workflow_run_id, tool_use_id); cascade-deletes with the run.';
+
+ALTER TABLE remote_agent_workflow_node_messages
+  ADD COLUMN IF NOT EXISTS metadata JSONB;
+
+ALTER TABLE remote_agent_pending_interactions
+  ADD COLUMN IF NOT EXISTS execution_scope JSONB;
 
 -- ============================================================================
 -- Indexes and column comments
@@ -996,6 +1004,8 @@ COMMENT ON COLUMN remote_agent_workflow_node_messages.kind IS
   'text, tool, or status.';
 COMMENT ON COLUMN remote_agent_workflow_node_messages.payload IS
   'Discriminated JSON payload matching kind.';
+COMMENT ON COLUMN remote_agent_workflow_node_messages.metadata IS
+  'Nullable execution/stream metadata; absent on rows from older writers.';
 
 -- Pending interactions
 COMMENT ON COLUMN remote_agent_pending_interactions.workflow_run_id IS
@@ -1020,3 +1030,5 @@ COMMENT ON COLUMN remote_agent_pending_interactions.resolved_at IS
   'When the interaction was answered or purged; NULL while pending.';
 COMMENT ON COLUMN remote_agent_pending_interactions.resolved_by IS
   'Identity of the resolver; NULL while pending.';
+COMMENT ON COLUMN remote_agent_pending_interactions.execution_scope IS
+  'Nullable occurrence/attempt identity captured at Ask pause; absent on older rows.';

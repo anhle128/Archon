@@ -631,7 +631,7 @@ async function* streamCodexEvents(
             // Multiple agent_message items can arrive in one turn (preamble + answer);
             // keep only the last — it's the authoritative structured-output candidate.
             if (hasOutputFormat) accumulatedText = item.text as string;
-            yield { type: 'assistant', content: item.text as string };
+            yield { type: 'assistant', content: item.text as string, textMode: 'complete' };
           }
           break;
 
@@ -656,6 +656,7 @@ async function* streamCodexEvents(
               toolCallId: itemId,
               toolOutcome,
               ...(exitCode != null ? { exitCode } : {}),
+              outputState: 'full' as const,
             };
           } else {
             getLog().warn({ itemId: item.id }, 'command_execution_missing_command');
@@ -677,6 +678,7 @@ async function* streamCodexEvents(
               toolOutput: '',
               toolCallId: itemId,
               toolOutcome: 'unknown',
+              outputState: 'missing' as const,
             };
           } else {
             getLog().debug({ itemId: item.id }, 'web_search_missing_query');
@@ -765,6 +767,7 @@ async function* streamCodexEvents(
               toolOutput: errMsg,
               toolCallId: itemId,
               toolOutcome: 'error',
+              outputState: 'full' as const,
             };
           } else {
             let toolOutput = '';
@@ -790,6 +793,7 @@ async function* streamCodexEvents(
               toolOutput,
               toolCallId: itemId,
               toolOutcome: 'success',
+              outputState: 'full' as const,
             };
           }
           break;

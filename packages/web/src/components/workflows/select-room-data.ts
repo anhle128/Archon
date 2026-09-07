@@ -20,6 +20,9 @@ export interface GateChrome {
   canDecide: boolean;
   showInactiveNotice: boolean;
   reviewUrl: string | null;
+  gateId: string | null;
+  reviewSessionId: string | null;
+  feedbackReceiptStatus: string | null;
 }
 
 export interface ChildRunRef {
@@ -259,6 +262,16 @@ export function selectGateChrome(input: {
     canDecide,
     showInactiveNotice: runStatus === 'paused' && approvalContext !== null && !ownsActiveSlot,
     reviewUrl,
+    gateId:
+      typeof matching?.gateId === 'string' ? matching.gateId : (approvalContext?.gateId ?? null),
+    reviewSessionId:
+      gateType === 'plannotator_gate' && ownsActiveSlot
+        ? (approvalContext?.reviewSessionId ?? null)
+        : null,
+    feedbackReceiptStatus:
+      gateType === 'plannotator_gate' && approvalContext?.nodeId === row.nodeId
+        ? (approvalContext.feedbackSubmission?.status ?? null)
+        : null,
   };
 }
 

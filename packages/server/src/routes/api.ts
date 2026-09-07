@@ -7,7 +7,7 @@ import { formatSafeZodIssueDetail, workflowEnvValidationErrorHook } from './open
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
-import { boundMetadataToolOutputs } from '../adapters/web/truncate';
+import { boundMetadataToolOutputs, truncateToolOutput } from '../adapters/web/truncate';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
 import { normalize, join, sep, basename, dirname, resolve } from 'path';
@@ -95,6 +95,7 @@ import { parseWorkflow } from '@archon/workflows/loader';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { projectLatestEffectiveNodeStates } from '@archon/workflows/retry-state';
+import { projectWorkflowExecutionHistory } from './workflow-execution-history';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
 import {
   applyEnvOverlay,
@@ -453,7 +454,10 @@ import {
   retryWorkflowNodePreviewResponseSchema,
   retryWorkflowNodeResponseSchema,
   workflowNodeMessagesParamsSchema,
+  workflowNodeMessagesQuerySchema,
   workflowNodeMessagesResponseSchema,
+  workflowNodeMessageResponseSchema,
+  workflowNodeMessageDetailParamsSchema,
   dashboardRunsResponseSchema,
   dashboardRunsQuerySchema,
   workflowRunsQuerySchema,
@@ -465,6 +469,8 @@ import {
   resetWorkflowNodeSessionsQuerySchema,
   resetWorkflowNodeSessionsResponseSchema,
   listArtifactsResponseSchema,
+  reviewFeedbackBodySchema,
+  reviewFeedbackResponseSchema,
 } from './schemas/workflow.schemas';
 import {
   workflowEnvWorkflowParamsSchema,
@@ -1361,11 +1367,31 @@ const getWorkflowNodeMessagesRoute = createRoute({
   path: '/api/workflows/runs/{runId}/nodes/{nodeId}/messages',
   tags: ['Workflows'],
   summary: 'List one workflow node transcript',
-  request: { params: workflowNodeMessagesParamsSchema },
+  request: {
+    params: workflowNodeMessagesParamsSchema,
+    query: workflowNodeMessagesQuerySchema,
+  },
   responses: {
     200: {
       content: { 'application/json': { schema: workflowNodeMessagesResponseSchema } },
       description: 'Workflow node transcript in sequence order',
+    },
+    400: jsonError('Bad request'),
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getWorkflowNodeMessageDetailRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs/{runId}/nodes/{nodeId}/messages/{messageId}',
+  tags: ['Workflows'],
+  summary: 'Read one retained workflow node transcript message',
+  request: { params: workflowNodeMessageDetailParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: workflowNodeMessageResponseSchema } },
+      description: 'Full retained transcript row',
     },
     404: jsonError('Not found'),
     500: jsonError('Server error'),
@@ -1537,6 +1563,27 @@ const deleteWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const reviewFeedbackWorkflowRunRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/review-feedback',
+  tags: ['Workflows'],
+  summary: 'Submit inline Plannotator review feedback',
+  request: {
+    params: z.object({ runId: z.string() }),
+    body: { content: { 'application/json': { schema: reviewFeedbackBodySchema } } },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: reviewFeedbackResponseSchema } },
+      description: 'Feedback accepted or idempotent duplicate',
+    },
+    400: jsonError('Bad request — wrong gate, session, or run state'),
+    404: jsonError('Workflow run not found'),
+    409: jsonError('Conflict — another submission already pending, or changed-body retry'),
     500: jsonError('Server error'),
   },
 });
@@ -3968,6 +4015,11 @@ export function registerApiRoutes(
     app.openapi(route, handler as never);
   }
 
+  /** Access Zod-validated query from a handler registered via registerOpenApiRoute. */
+  function getValidatedQuery<T>(c: Context, _schema: z.ZodType<T>): T {
+    return (c.req as unknown as { valid(k: 'query'): T }).valid('query');
+  }
+
   /** Access Zod-validated body from a handler registered via registerOpenApiRoute. */
   function getValidatedBody<T>(c: Context, _schema: z.ZodType<T>): T {
     return (c.req as unknown as { valid(k: 'json'): T }).valid('json');
@@ -4726,6 +4778,38 @@ export function registerApiRoutes(
     }
   });
 
+  // POST /api/workflows/runs/:runId/review-feedback - Submit inline Plannotator review feedback
+  registerOpenApiRoute(reviewFeedbackWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const body = getValidatedBody(c, reviewFeedbackBodySchema);
+    try {
+      const result = await workflowDb.submitReviewFeedback({
+        runId,
+        nodeId: body.nodeId,
+        gateId: body.gateId,
+        reviewSessionId: body.reviewSessionId,
+        requestId: body.requestId,
+        feedback: body.feedback,
+      });
+      if (result.outcome === 'rejected') {
+        return apiError(c, result.statusCode as 400 | 404, result.reason);
+      }
+      if (result.outcome === 'conflict') {
+        return apiError(c, 409, result.reason);
+      }
+      const { receipt } = result;
+      return c.json({
+        requestId: receipt.requestId,
+        reviewSessionId: receipt.reviewSessionId,
+        status: receipt.status,
+        submittedAt: receipt.submittedAt,
+      });
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'api.workflow_run_review_feedback_failed');
+      return apiError(c, 500, 'Failed to submit review feedback');
+    }
+  });
+
   // POST /api/workflows/runs/:runId/approve - Approve a paused workflow run
   registerOpenApiRoute(approveWorkflowRunRoute, async c => {
     const runId = c.req.param('runId') ?? '';
@@ -5131,18 +5215,59 @@ export function registerApiRoutes(
   registerOpenApiRoute(getWorkflowNodeMessagesRoute, async c => {
     const runId = c.req.param('runId') ?? '';
     const nodeId = c.req.param('nodeId') ?? '';
+    const query = getValidatedQuery(c, workflowNodeMessagesQuerySchema);
+    const cursorMode =
+      query.afterSeq !== undefined ||
+      query.limit !== undefined ||
+      query.occurrenceId !== undefined ||
+      query.attemptId !== undefined;
     try {
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
-      const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId);
+      if (!cursorMode) {
+        const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId);
+        return c.json({
+          messages: rows.map(row => ({
+            id: row.id,
+            seq: row.seq,
+            kind: row.kind,
+            payload: row.payload,
+            created_at: toISOString(row.created_at),
+          })),
+        });
+      }
+      const limit = query.limit ?? 100;
+      const listQuery = {
+        ...(query.afterSeq !== undefined ? { afterSeq: query.afterSeq } : {}),
+        limit: limit + 1,
+        ...(query.occurrenceId !== undefined ? { occurrenceId: query.occurrenceId } : {}),
+        ...(query.attemptId !== undefined ? { attemptId: query.attemptId } : {}),
+      };
+      const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId, listQuery);
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const highWatermark = await workflowNodeMessageDb.getNodeMessageHighWatermark(runId, nodeId, {
+        ...(query.occurrenceId !== undefined ? { occurrenceId: query.occurrenceId } : {}),
+        ...(query.attemptId !== undefined ? { attemptId: query.attemptId } : {}),
+      });
+      const last = page[page.length - 1];
       return c.json({
-        messages: rows.map(row => ({
+        messages: page.map(row => ({
           id: row.id,
           seq: row.seq,
           kind: row.kind,
-          payload: row.payload,
+          payload:
+            row.kind === 'tool' && typeof row.payload.output === 'string'
+              ? { ...row.payload, output: truncateToolOutput(row.payload.output) }
+              : row.payload,
           created_at: toISOString(row.created_at),
+          ...(row.metadata !== undefined && row.metadata !== null
+            ? { metadata: row.metadata }
+            : {}),
         })),
+        ...(last !== undefined ? { nextCursor: String(last.seq) } : {}),
+        hasMore,
+        highWatermark,
       });
     } catch (error) {
       getLog().error(
@@ -5154,6 +5279,37 @@ export function registerApiRoutes(
         'workflow_node_messages_list_failed'
       );
       return apiError(c, 500, 'Failed to list workflow node messages');
+    }
+  });
+
+  registerOpenApiRoute(getWorkflowNodeMessageDetailRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const nodeId = c.req.param('nodeId') ?? '';
+    const messageId = c.req.param('messageId') ?? '';
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) return apiError(c, 404, 'Workflow run not found');
+      const row = await workflowNodeMessageDb.getNodeMessage(runId, nodeId, messageId);
+      if (!row) return apiError(c, 404, 'Workflow node message not found');
+      return c.json({
+        id: row.id,
+        seq: row.seq,
+        kind: row.kind,
+        payload: row.payload,
+        created_at: toISOString(row.created_at),
+        ...(row.metadata !== undefined && row.metadata !== null ? { metadata: row.metadata } : {}),
+      });
+    } catch (error) {
+      getLog().error(
+        {
+          runId,
+          nodeId,
+          messageId,
+          errorType: error instanceof Error ? error.name : typeof error,
+        },
+        'workflow_node_message_detail_failed'
+      );
+      return apiError(c, 500, 'Failed to read workflow node message');
     }
   });
 
@@ -5235,6 +5391,11 @@ export function registerApiRoutes(
         usage,
         viewer_is_starter: viewerIsStarter,
         starter_display_name: starterDisplayName,
+        nodeExecutions: projectWorkflowExecutionHistory({
+          events,
+          pendingInteractions,
+          runStartedAt: toISOString(run.started_at) ?? undefined,
+        }),
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');

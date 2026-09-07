@@ -11,6 +11,7 @@ import type {
   ApprovalContext,
   WorkflowNodeSession,
   EnvOverlaySnapshot,
+  ReviewFeedbackSubmission,
 } from './schemas';
 import type { AppendNodeMessageInput, NodeMessage } from './schemas/node-message';
 import type {
@@ -147,6 +148,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // do not map it to SSE in this story.
   'node_awaiting',
   'interaction_resolved',
+  // Inline review-feedback submission audit receipt. Written inside the submit
+  // transaction so the event is atomic with the metadata update. NOT an approval
+  // event — the receipt must not be misread by old UI as a gate resolution.
+  'review_feedback',
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
@@ -345,6 +350,43 @@ export interface IWorkflowStore
    * re-claim and retry. Best-effort (never throws in the caller's critical path).
    */
   releaseWritebackClaim(id: string): Promise<void>;
+
+  /**
+   * Submit inline review feedback for a plannotator_gate in `waiting_decision`
+   * phase. Runs under the run lock; validates gate, session, and phase before
+   * writing. Idempotent by requestId: an identical retry returns the existing
+   * receipt; a changed-body retry returns conflict (409). Throws on unexpected
+   * DB errors.
+   */
+  submitReviewFeedback(input: {
+    runId: string;
+    nodeId: string;
+    gateId: string;
+    reviewSessionId: string;
+    requestId: string;
+    feedback: string;
+  }): Promise<
+    | { outcome: 'accepted'; receipt: ReviewFeedbackSubmission }
+    | { outcome: 'duplicate'; receipt: ReviewFeedbackSubmission }
+    | { outcome: 'conflict'; reason: string }
+    | { outcome: 'rejected'; reason: string; statusCode: number }
+  >;
+
+  /**
+   * Atomically claim the current gate decision so only one source (inline or
+   * native) can proceed. Uses the run lock; returns `{ claimed: true }` if this
+   * caller won, `{ claimed: false }` if another source already claimed. Must be
+   * called before mutating gate state on either path (native approval/annotation
+   * or inline feedback rework).
+   */
+  claimGateDecision(input: {
+    runId: string;
+    nodeId: string;
+    gateId: string;
+    reviewSessionId: string;
+    source: 'inline' | 'native';
+    requestId?: string;
+  }): Promise<{ claimed: boolean; receipt?: ReviewFeedbackSubmission }>;
   cancelWorkflowRun(id: string): Promise<{ cancelled: boolean }>;
 
   /**

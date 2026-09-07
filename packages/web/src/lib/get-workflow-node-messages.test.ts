@@ -32,4 +32,17 @@ describe('getWorkflowNodeMessages', () => {
     );
     expect(result.messages[0]?.payload).toEqual({ text: 'hello' });
   });
+
+  test('appends optional cursor query parameters', async () => {
+    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({ messages: [], hasMore: false, highWatermark: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+    await getWorkflowNodeMessages('run/one', 'group.review', { afterSeq: 4, limit: 10 });
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+      '/api/workflows/runs/run%2Fone/nodes/group.review/messages?afterSeq=4&limit=10'
+    );
+  });
 });

@@ -225,7 +225,11 @@ describe('QoderCliProvider', () => {
       expect(calls[1]).toContain('qoder-pro');
       expect(calls[1]).toContain('--reasoning-effort');
       expect(calls[1]).toContain('high');
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Hello from Qoder' });
+      expect(chunks[0]).toEqual({
+        type: 'assistant',
+        content: 'Hello from Qoder',
+        textMode: 'complete',
+      });
       expect(chunks.at(-1)).toMatchObject({ type: 'result' });
     });
   });

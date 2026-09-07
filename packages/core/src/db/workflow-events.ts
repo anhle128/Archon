@@ -331,3 +331,38 @@ export async function getRetryPreservedDagNodeOutputs(
   }
   return outputs;
 }
+
+/**
+ * Look up a prior `review_feedback` receipt by run + request ID under an active
+ * transaction. Returns the parsed event data, or null when no matching event
+ * exists. Bounded: never reads transcript bodies; only event data fields.
+ */
+export async function findReviewFeedbackEventByRequestId(
+  query: EventInsertQuery,
+  runId: string,
+  requestId: string
+): Promise<Record<string, unknown> | null> {
+  // Dialect-aware JSON extraction filters by data.requestId in SQL so we only
+  // fetch matching events; a full scan over review_feedback rows is bounded.
+  const extract =
+    getDatabaseType() === 'postgresql' ? "data->>'requestId'" : "json_extract(data, '$.requestId')";
+  const result = await query(
+    `SELECT data FROM remote_agent_workflow_events
+     WHERE workflow_run_id = $1 AND event_type = 'review_feedback' AND ${extract} = $2
+     ORDER BY created_at DESC LIMIT 1`,
+    [runId, requestId]
+  );
+  const row = result.rows[0] as { data: unknown } | undefined;
+  if (!row) return null;
+  const rawData = row.data;
+  if (typeof rawData === 'string') {
+    try {
+      return JSON.parse(rawData) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+  return typeof rawData === 'object' && rawData !== null
+    ? (rawData as Record<string, unknown>)
+    : null;
+}

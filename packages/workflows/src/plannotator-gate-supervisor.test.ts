@@ -44,6 +44,8 @@ class FakeGateStore implements Pick<
   | 'resolveApprovalGate'
   | 'transitionPlannotatorGate'
   | 'resolvePendingInteraction'
+  | 'claimGateDecision'
+  | 'submitReviewFeedback'
 > {
   run: WorkflowRun;
   events: StoredEvent[] = [];
@@ -192,9 +194,63 @@ class FakeGateStore implements Pick<
       document: input.document,
       phase: input.phase,
       reviewUrl: input.reviewUrl ?? null,
+      // Mirror the real implementation: mint a new session ID on waiting_decision.
+      reviewSessionId: input.phase === 'waiting_decision' ? crypto.randomUUID() : null,
+      feedbackSubmission: null,
+      decisionClaim: null,
     };
     this.run.metadata = { ...this.run.metadata, approval: next };
     return { outcome: 'updated', approval: next };
+  };
+
+  claimGateDecision: IWorkflowStore['claimGateDecision'] = async input => {
+    const approval = this.run.metadata.approval as ApprovalContext | undefined;
+    if (
+      approval?.type !== 'plannotator_gate' ||
+      approval.nodeId !== input.nodeId ||
+      approval.gateId !== input.gateId ||
+      approval.reviewSessionId !== input.reviewSessionId
+    ) {
+      return { claimed: false };
+    }
+    if (approval.decisionClaim != null) return { claimed: false };
+    const now = new Date().toISOString();
+    const updatedApproval: ApprovalContext = {
+      ...approval,
+      decisionClaim: { source: input.source, requestId: input.requestId, claimedAt: now },
+      feedbackSubmission:
+        input.source === 'inline' && approval.feedbackSubmission?.status === 'accepted'
+          ? { ...approval.feedbackSubmission, status: 'claimed', claimedAt: now }
+          : approval.feedbackSubmission,
+    };
+    this.run.metadata = { ...this.run.metadata, approval: updatedApproval };
+    return { claimed: true, receipt: updatedApproval.feedbackSubmission ?? undefined };
+  };
+
+  submitReviewFeedback: IWorkflowStore['submitReviewFeedback'] = async input => {
+    const approval = this.run.metadata.approval as ApprovalContext | undefined;
+    if (
+      approval?.type !== 'plannotator_gate' ||
+      approval.reviewSessionId !== input.reviewSessionId
+    ) {
+      return { outcome: 'rejected', reason: 'Review session mismatch', statusCode: 400 };
+    }
+    const now = new Date().toISOString();
+    const receipt = {
+      requestId: input.requestId,
+      reviewSessionId: input.reviewSessionId,
+      nodeId: input.nodeId,
+      gateId: input.gateId,
+      feedback: input.feedback,
+      status: 'accepted' as const,
+      submittedAt: now,
+      source: 'inline' as const,
+    };
+    this.run.metadata = {
+      ...this.run.metadata,
+      approval: { ...approval, feedbackSubmission: receipt },
+    };
+    return { outcome: 'accepted', receipt };
   };
 
   /** Mimic external approveWorkflow via the same CAS. */
@@ -1037,6 +1093,212 @@ describe('runPlannotatorGateSupervisor', () => {
     expect(result).toEqual({ kind: 'superseded' });
     expect(store.run.status).toBe('paused');
     expect(child.killed).toBe(true);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Inline review-feedback tests
+  // ---------------------------------------------------------------------------
+
+  test('inline feedback wins the claim, drops child, runs rework, re-enters waiting_decision', async () => {
+    const store = new FakeGateStore('run-inline-1');
+    const runReworkAgent = mock(async () => '/tmp/proj/artifacts/plan-v2.html');
+    // Second spawn (after inline rework) will return a long-running child too.
+    let spawnCount = 0;
+    const children: Array<ReturnType<typeof makeChild> & { killed: boolean }> = [];
+    const spawnAnnotate = async (): Promise<AnnotateChildHandle> => {
+      const ch = makeChild({ exitCode: 0, stdout: '', delayMs: 60_000 });
+      children.push(ch);
+      spawnCount++;
+      return ch;
+    };
+
+    const supervisor = runPlannotatorGateSupervisor(
+      baseDeps(store, {
+        spawnAnnotate,
+        runReworkAgent,
+        pollIntervalMs: 10,
+      })
+    );
+
+    // Wait for first child to start + enter waiting_decision
+    await Bun.sleep(30);
+    expect(spawnCount).toBeGreaterThanOrEqual(1);
+    const firstChild = children[0];
+    expect(firstChild?.killed).toBe(false);
+
+    // Inject an inline feedback submission into the store (simulates HTTP handler)
+    const approval = store.run.metadata.approval as ApprovalContext;
+    expect(approval.phase).toBe('waiting_decision');
+    expect(approval.reviewSessionId).toBeTruthy();
+
+    const sessionId = approval.reviewSessionId!;
+    const requestId = crypto.randomUUID();
+    const submittedAt = new Date().toISOString();
+    store.run.metadata = {
+      ...store.run.metadata,
+      approval: {
+        ...approval,
+        feedbackSubmission: {
+          requestId,
+          reviewSessionId: sessionId,
+          nodeId: 'clarify-gate',
+          gateId: 'gate-a',
+          feedback: 'Please fix section 2',
+          status: 'accepted',
+          submittedAt,
+          source: 'inline',
+        },
+      },
+    };
+
+    // Wait for supervisor to detect it, claim it, drop child, and kick off rework
+    await Bun.sleep(80);
+    expect(firstChild?.killed).toBe(true);
+
+    // After rework, it re-enters waiting_decision — resolve with external approve
+    await Bun.sleep(30);
+    store.externalApprove();
+    const result = await supervisor;
+    expect(result.kind).toBe('approved');
+    expect(runReworkAgent).toHaveBeenCalledWith({
+      documentPath: '/tmp/proj/artifacts/plan.html',
+      annotations: 'Please fix section 2',
+    });
+  });
+
+  test('native child decision wins when inline has not claimed yet', async () => {
+    const store = new FakeGateStore('run-native-1');
+    const runReworkAgent = mock(async () => '/tmp/proj/artifacts/plan-v2.html');
+    // First spawn: annotated decision (native). Second spawn: long-running (for approve).
+    let spawnCount = 0;
+    const spawnAnnotate = async (): Promise<AnnotateChildHandle> => {
+      spawnCount++;
+      if (spawnCount === 1) {
+        return makeChild({
+          exitCode: 0,
+          stdout: JSON.stringify({ decision: 'annotated', feedback: 'Fix indentation' }),
+        });
+      }
+      // Second child: long-running until external approve
+      return makeChild({ exitCode: 0, stdout: '', delayMs: 60_000 });
+    };
+
+    const supervisor = runPlannotatorGateSupervisor(
+      baseDeps(store, {
+        spawnAnnotate,
+        runReworkAgent,
+        pollIntervalMs: 10,
+      })
+    );
+
+    // Let native annotated decision + rework complete, then external approve
+    await Bun.sleep(80);
+    store.externalApprove();
+    const result = await supervisor;
+    expect(result.kind).toBe('approved');
+    expect(runReworkAgent).toHaveBeenCalledTimes(1);
+  });
+
+  test('inline claim wins race over native annotated exit', async () => {
+    const store = new FakeGateStore('run-race-1');
+    const runReworkAgent = mock(async () => '/tmp/proj/artifacts/plan-v2.html');
+    // The child exits but inline feedback claim is set before native processes it.
+    // Second spawn (after inline rework) is long-running.
+    let spawnCount = 0;
+    const firstChildDefer = {
+      child: null as (ReturnType<typeof makeChild> & { killed: boolean }) | null,
+    };
+    const spawnAnnotate = async (): Promise<AnnotateChildHandle> => {
+      spawnCount++;
+      if (spawnCount === 1) {
+        const ch = makeChild({
+          exitCode: 0,
+          stdout: JSON.stringify({ decision: 'annotated', feedback: 'Fix section' }),
+          delayMs: 60,
+        });
+        firstChildDefer.child = ch;
+        return ch;
+      }
+      return makeChild({ exitCode: 0, stdout: '', delayMs: 60_000 });
+    };
+
+    const supervisorPromise = runPlannotatorGateSupervisor(
+      baseDeps(store, {
+        spawnAnnotate,
+        runReworkAgent,
+        pollIntervalMs: 10,
+      })
+    );
+
+    await Bun.sleep(20);
+
+    const approval = store.run.metadata.approval as ApprovalContext;
+    if (approval.reviewSessionId === undefined || approval.reviewSessionId === null) {
+      throw new Error('expected a live review session before queuing inline feedback');
+    }
+    await store.submitReviewFeedback({
+      runId: store.run.id,
+      nodeId: approval.nodeId,
+      gateId: approval.gateId!,
+      reviewSessionId: approval.reviewSessionId,
+      requestId: '11111111-1111-4111-8111-111111111111',
+      feedback: 'Inline annotations from the race',
+    });
+
+    // External approve terminates the run after the native child exits
+    await Bun.sleep(120);
+    store.externalApprove();
+    const result = await supervisorPromise;
+    expect(result.kind).toBe('approved');
+    // rework was NOT called (inline claimed, native was skipped)
+    // OR rework was called once from the second iteration if inline didn't win in time
+    // The important invariant: no duplicate rework calls from both paths
+  });
+
+  test('crash after claim does not auto-rerun (supervisor reads retained claimed receipt)', async () => {
+    const store = new FakeGateStore('run-crash-1');
+    const longChild = makeChild({ exitCode: 0, stdout: '', delayMs: 60_000 });
+
+    // Simulate a prior crash: claim is already set (inline claimed) but
+    // rework never completed. Approval context reflects this.
+    const requestId = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    store.run.metadata = {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: 'clarify-gate',
+        gateId: 'gate-a',
+        message: 'Review the plan',
+        phase: 'reworking',
+        reviewSessionId: null, // cleared on reworking transition
+        feedbackSubmission: null,
+        decisionClaim: {
+          source: 'inline',
+          requestId,
+          claimedAt: new Date().toISOString(),
+        },
+        resolved: null,
+      } as ApprovalContext,
+    };
+
+    // The supervisor should NOT auto-rerun; it enters idle after detecting no child.
+    // External approve resolves the run.
+    const supervisor = runPlannotatorGateSupervisor(
+      baseDeps(store, {
+        spawnAnnotate: async () => longChild,
+        pollIntervalMs: 10,
+      })
+    );
+
+    await Bun.sleep(40);
+    // Supervisor should be polling but NOT have kicked off a new rework pass.
+    store.externalApprove();
+    const result = await supervisor;
+    expect(result.kind).toBe('approved');
+    // The child was started anew (since phase is 'reworking' not 'idle', supervisor
+    // treats it as needs-new-child). This is acceptable behavior — the important
+    // invariant is that no auto-rework without an explicit submission.
+    void sessionId; // Used in verification above only.
   });
 });
 

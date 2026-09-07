@@ -1,0 +1,28 @@
+name: e2e-hitl-run
+description: "E2E — deterministic tool output, a two-iteration loop, and AskHuman on the env-gated fake provider."
+mutates_checkout: false
+
+nodes:
+  - id: inspect-file
+    provider: e2e-fake
+    model: e2e-fake-model
+    prompt: |
+      <<E2E_SCENARIO>>{"emitTool":true}<</E2E_SCENARIO>>
+      $ARGUMENTS
+  - id: inspect-twice
+    depends_on: [inspect-file]
+    provider: e2e-fake
+    model: e2e-fake-model
+    loop:
+      prompt: |
+        <<E2E_SCENARIO>>{"emitTool":true,"doneWhenPromptIncludes":"[e2e-fake] tool pass"}<</E2E_SCENARIO>>
+        $LOOP_PREV_OUTPUT
+      until: E2E_LOOP_DONE
+      max_iterations: 2
+  - id: ask-starter
+    depends_on: [inspect-twice]
+    provider: e2e-fake
+    model: e2e-fake-model
+    prompt: |
+      <<E2E_SCENARIO>>{"askHuman":true}<</E2E_SCENARIO>>
+      $ARGUMENTS

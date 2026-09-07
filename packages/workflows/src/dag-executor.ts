@@ -152,8 +152,20 @@ import {
   safeSendMessage,
   type SendMessageContext,
 } from './executor-shared';
-import { appendNodeTranscript } from './node-transcript';
+import { appendNodeTranscript, appendToolResultTranscript } from './node-transcript';
 import { createAskHumanTool } from './ask-human';
+import {
+  executionScopeEventFields,
+  latestOccurrenceId,
+  loopIterationFromScope,
+  mintTranscriptExecutionScope,
+  newTranscriptAttempt,
+  recoverScopeFromPending,
+  selectAnsweredAsksForActivation,
+  sharedAskResumeScope,
+  transcriptMetadata,
+} from './transcript-execution-scope';
+import type { LoopAncestryEntry, TranscriptExecutionScope } from './schemas/node-execution';
 import {
   isLiteralSpec,
   isTierName,
@@ -221,6 +233,38 @@ function withRetryEpochData(
 ): Record<string, unknown> {
   const retryEpoch = getRunRetryEpoch(workflowRun, retryContext);
   return retryEpoch > 0 ? { ...data, retry_epoch: retryEpoch } : data;
+}
+
+function routeActivationSeqForNode(workflowRun: WorkflowRun, nodeId: string): number | undefined {
+  const parsed = routeLoopRuntimeMetadataSchema.safeParse(workflowRun.metadata);
+  if (!parsed.success) return undefined;
+  const activation = parsed.data.routeActivations[nodeId];
+  return activation?.execution_seq;
+}
+
+function withLifecycleScopeData(
+  workflowRun: WorkflowRun,
+  retryContext: WorkflowRetryContext | undefined,
+  scope: TranscriptExecutionScope,
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  return withRetryEpochData(workflowRun, retryContext, {
+    ...data,
+    ...executionScopeEventFields(scope),
+  });
+}
+
+function mintLifecycleScope(
+  workflowRun: WorkflowRun,
+  retryContext: WorkflowRetryContext | undefined,
+  nodeId: string,
+  loopAncestry?: readonly LoopAncestryEntry[]
+): TranscriptExecutionScope {
+  return mintTranscriptExecutionScope({
+    retryEpoch: getRunRetryEpoch(workflowRun, retryContext),
+    routeActivationSeq: routeActivationSeqForNode(workflowRun, nodeId),
+    ...(loopAncestry !== undefined && loopAncestry.length > 0 ? { loopAncestry } : {}),
+  });
 }
 
 async function createPreNodeCheckpoint(params: {
@@ -1764,10 +1808,11 @@ function nativeToolsForAskHuman(
   provider: string,
   store: IWorkflowStore,
   workflowRunId: string,
-  nodeId: string
+  nodeId: string,
+  getExecutionScope?: () => TranscriptExecutionScope | undefined
 ): NativeTool[] | undefined {
   return getProviderCapabilities(provider).askHuman
-    ? [createAskHumanTool({ store, workflowRunId, nodeId })]
+    ? [createAskHumanTool({ store, workflowRunId, nodeId, getExecutionScope })]
     : undefined;
 }
 
@@ -1834,18 +1879,38 @@ function comparePendingInteractionOrder(a: PendingInteraction, b: PendingInterac
 interface MappedAskResume {
   interactions: ResumeInteraction[];
   sessionId: string | undefined;
+  executionScope: TranscriptExecutionScope | undefined;
 }
 
 function mapAnsweredAskResume(
   rows: readonly PendingInteraction[],
-  stepName: string
+  stepName: string,
+  retryEpoch: number,
+  reuseAnswers: boolean
 ): MappedAskResume {
-  const matched = rows
-    .filter(row => row.kind === 'ask' && row.status === 'answered' && row.node_id === stepName)
+  const epochScoped = rows.filter(row => {
+    if (row.kind !== 'ask' || row.status !== 'answered' || row.node_id !== stepName) return false;
+    const scope = recoverScopeFromPending(row);
+    return scope !== undefined && (scope.retry_epoch ?? 0) === retryEpoch;
+  });
+  const occurrenceId = latestOccurrenceId(epochScoped);
+  const expectedToolUseIds =
+    occurrenceId === undefined
+      ? undefined
+      : epochScoped
+          .filter(row => recoverScopeFromPending(row)?.occurrence_id === occurrenceId)
+          .map(row => row.tool_use_id);
+  const matched = selectAnsweredAsksForActivation(rows, stepName, retryEpoch, {
+    reuseAnswers,
+    ...(occurrenceId !== undefined ? { occurrenceId } : {}),
+    ...(expectedToolUseIds !== undefined && expectedToolUseIds.length > 0
+      ? { expectedToolUseIds }
+      : {}),
+  })
     .slice()
     .sort(comparePendingInteractionOrder);
   if (matched.length === 0) {
-    return { interactions: [], sessionId: undefined };
+    return { interactions: [], sessionId: undefined, executionScope: undefined };
   }
   const sessionIds = new Set(matched.map(row => row.provider_session_id));
   const sessionId = matched[0]?.provider_session_id;
@@ -1874,7 +1939,7 @@ function mapAnsweredAskResume(
       throw new AskResumeFailedError(matched.map(item => item.tool_use_id));
     }
   }
-  return { interactions, sessionId };
+  return { interactions, sessionId, executionScope: sharedAskResumeScope(matched) };
 }
 
 /**
@@ -1904,7 +1969,9 @@ async function executeNodeInternal(
   nodeObservability?: NodeObservabilityMetadata,
   stepNamePrefix = '',
   iteration?: number,
-  resumeInteractions?: readonly ResumeInteraction[]
+  resumeInteractions?: readonly ResumeInteraction[],
+  recoveredExecutionScope?: TranscriptExecutionScope,
+  parentLoopAncestry: readonly LoopAncestryEntry[] = []
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -1915,6 +1982,21 @@ async function executeNodeInternal(
   // Only present inside a loop_group body — tags lifecycle rows with the iteration so
   // multi-iteration runs are disaggregatable in the event log.
   const iterationData = iteration !== undefined ? { iteration } : {};
+  let executionScope: TranscriptExecutionScope =
+    recoveredExecutionScope ??
+    mintTranscriptExecutionScope({
+      retryEpoch: getRunRetryEpoch(workflowRun, undefined),
+      loopAncestry:
+        parentLoopAncestry.length > 0
+          ? parentLoopAncestry
+          : iteration !== undefined
+            ? [{ node_id: stepName, iteration }]
+            : undefined,
+      routeActivationSeq: routeActivationSeqForNode(workflowRun, node.id),
+    });
+  const scopeMeta = (
+    extra: Omit<ReturnType<typeof transcriptMetadata>, 'execution'> = {}
+  ): ReturnType<typeof transcriptMetadata> => transcriptMetadata(executionScope, extra);
 
   const recordNodeStatus = async (state: string, detail?: string): Promise<void> => {
     await appendNodeTranscript(deps.store, {
@@ -1922,6 +2004,7 @@ async function executeNodeInternal(
       node_id: stepName,
       kind: 'status',
       payload: { state, ...(detail !== undefined ? { detail } : {}) },
+      metadata: scopeMeta(),
     });
   };
   const recordFailedStatus = (error: string): Promise<void> => recordNodeStatus('failed', error);
@@ -1936,7 +2019,7 @@ async function executeNodeInternal(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: stepName,
-      data: withRetryEpochData(workflowRun, undefined, {
+      data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
         command: node.command ?? null,
         provider,
         ...(nodeObservability?.tier ? { tier: nodeObservability.tier } : {}),
@@ -1987,7 +2070,7 @@ async function executeNodeInternal(
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
           step_name: stepName,
-          data: withRetryEpochData(workflowRun, undefined, { error: errMsg }),
+          data: withLifecycleScopeData(workflowRun, undefined, executionScope, { error: errMsg }),
         })
         .catch((err: Error) => {
           getLog().error(
@@ -2049,7 +2132,9 @@ async function executeNodeInternal(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: { error: err.message },
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
+          error: err.message,
+        }),
       })
       .catch((persistErr: Error) => {
         getLog().error(
@@ -2086,7 +2171,10 @@ async function executeNodeInternal(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: withRetryEpochData(workflowRun, undefined, { error: err.message, ...iterationData }),
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
+          error: err.message,
+          ...iterationData,
+        }),
       })
       .catch((persistErr: Error) => {
         getLog().error(
@@ -2123,7 +2211,13 @@ async function executeNodeInternal(
   // AskHuman re-entry must continue the same aborted turn, so never fork.
   const hasAskResume = resumeInteractions !== undefined && resumeInteractions.length > 0;
   const shouldForkSession = resumeSessionId !== undefined && !hasAskResume;
-  const nativeTools = nativeToolsForAskHuman(provider, deps.store, workflowRun.id, stepName);
+  const nativeTools = nativeToolsForAskHuman(
+    provider,
+    deps.store,
+    workflowRun.id,
+    stepName,
+    () => executionScope
+  );
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
     abortSignal: nodeAbortController.signal,
@@ -2189,6 +2283,7 @@ async function executeNodeInternal(
     const passOptions: SendQueryOptions = { ...(nodeOptionsWithAbort ?? {}) };
     if (passReaskAttempt > 0) {
       delete passOptions.resumeInteractions;
+      executionScope = newTranscriptAttempt(executionScope);
     }
     try {
       for await (const msg of withIdleTimeout(
@@ -2257,6 +2352,12 @@ async function executeNodeInternal(
             node_id: stepName,
             kind: 'text',
             payload: { text: msg.content },
+            metadata: scopeMeta({
+              ...(msg.textMode !== undefined ? { text_mode: msg.textMode } : {}),
+              ...(msg.streamId !== undefined ? { stream_id: msg.streamId } : {}),
+              ...(msg.messageId !== undefined ? { message_id: msg.messageId } : {}),
+              ...(msg.blockId !== undefined ? { block_id: msg.blockId } : {}),
+            }),
           });
           nodeOutputText += msg.content; // ALWAYS capture for $node_id.output
           if (streamingMode === 'stream' || msg.flush) {
@@ -2328,6 +2429,7 @@ async function executeNodeInternal(
               id: toolCallId,
               ...(msg.toolInput !== undefined ? { input: msg.toolInput } : {}),
             },
+            metadata: scopeMeta({ tool_phase: 'call' }),
           });
 
           // Emit tool_started for the current tool (fire-and-forget)
@@ -2373,6 +2475,22 @@ async function executeNodeInternal(
         } else if (msg.type === 'tool_result' && msg.toolName) {
           const now = Date.now();
           const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
+          const resultCallId =
+            completedTool?.[0] ?? msg.toolCallId ?? `anonymous-${String(++anonymousToolSequence)}`;
+          await appendToolResultTranscript(deps.store, {
+            workflow_run_id: workflowRun.id,
+            node_id: stepName,
+            name: msg.toolName,
+            id: resultCallId,
+            output: msg.toolOutput,
+            metadata: scopeMeta({
+              tool_phase: 'result',
+              ...(msg.truncated === true ? { truncated: true } : {}),
+              ...(msg.outputState !== undefined ? { output_state: msg.outputState } : {}),
+              ...(msg.toolOutcome !== undefined ? { outcome: msg.toolOutcome } : {}),
+              ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
+            }),
+          });
           if (completedTool) {
             const [completedToolCallId, tool] = completedTool;
             getWorkflowEventEmitter().emit({
@@ -3015,7 +3133,7 @@ async function executeNodeInternal(
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
           step_name: stepName,
-          data: withRetryEpochData(workflowRun, undefined, {
+          data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
             error: 'Cancelled by user',
             duration_ms: duration,
             ...iterationData,
@@ -3066,7 +3184,7 @@ async function executeNodeInternal(
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
           step_name: stepName,
-          data: withRetryEpochData(workflowRun, undefined, {
+          data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
             error: creditError,
             ...iterationData,
           }),
@@ -3108,7 +3226,7 @@ async function executeNodeInternal(
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
           step_name: stepName,
-          data: withRetryEpochData(workflowRun, undefined, {
+          data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
             error: emptyError,
             duration_ms: duration,
             ...iterationData,
@@ -3149,7 +3267,7 @@ async function executeNodeInternal(
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: stepName,
-        data: withRetryEpochData(workflowRun, undefined, {
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
           duration_ms: duration,
           node_output: nodeOutputText,
           ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
@@ -3237,7 +3355,7 @@ async function executeNodeInternal(
           workflow_run_id: workflowRun.id,
           event_type: 'node_failed',
           step_name: stepName,
-          data: withRetryEpochData(workflowRun, undefined, {
+          data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
             error: ASK_RESUME_FAILED_MESSAGE,
             ...iterationData,
           }),
@@ -3291,7 +3409,10 @@ async function executeNodeInternal(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: withRetryEpochData(workflowRun, undefined, { error: err.message, ...iterationData }),
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
+          error: err.message,
+          ...iterationData,
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -3490,6 +3611,11 @@ async function executeBashNode(
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
   const stepName = stepNamePrefix + node.id;
   const iterationData = iteration !== undefined ? { iteration } : {};
+  const executionScope = mintTranscriptExecutionScope({
+    retryEpoch: getRunRetryEpoch(workflowRun, undefined),
+    loopAncestry: iteration !== undefined ? [{ node_id: stepName, iteration }] : undefined,
+    routeActivationSeq: routeActivationSeqForNode(workflowRun, node.id),
+  });
 
   getLog().info({ nodeId: node.id, type: 'bash' }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, '<bash>');
@@ -3499,7 +3625,10 @@ async function executeBashNode(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: stepName,
-      data: withRetryEpochData(workflowRun, undefined, { type: 'bash', ...iterationData }),
+      data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
+        type: 'bash',
+        ...iterationData,
+      }),
     })
     .catch((err: Error) => {
       getLog().error(
@@ -3608,7 +3737,7 @@ async function executeBashNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: stepName,
-        data: withRetryEpochData(workflowRun, undefined, {
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
           duration_ms: duration,
           type: 'bash',
           node_output: persistedOutput.nodeOutput,
@@ -3672,7 +3801,7 @@ async function executeBashNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: withRetryEpochData(workflowRun, undefined, {
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
           error: errorMsg,
           type: 'bash',
           ...iterationData,
@@ -3776,6 +3905,11 @@ async function executeScriptNode(
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
   const stepName = stepNamePrefix + node.id;
   const iterationData = iteration !== undefined ? { iteration } : {};
+  const executionScope = mintTranscriptExecutionScope({
+    retryEpoch: getRunRetryEpoch(workflowRun, undefined),
+    loopAncestry: iteration !== undefined ? [{ node_id: stepName, iteration }] : undefined,
+    routeActivationSeq: routeActivationSeqForNode(workflowRun, node.id),
+  });
 
   getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
   await logNodeStart(logDir, workflowRun.id, node.id, '<script>');
@@ -3785,7 +3919,7 @@ async function executeScriptNode(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: stepName,
-      data: withRetryEpochData(workflowRun, undefined, {
+      data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
         type: 'script',
         runtime: node.runtime,
         ...iterationData,
@@ -3924,7 +4058,7 @@ async function executeScriptNode(
             workflow_run_id: workflowRun.id,
             event_type: 'node_failed',
             step_name: stepName,
-            data: withRetryEpochData(workflowRun, undefined, {
+            data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
               error: errorMsg,
               type: 'script',
               ...iterationData,
@@ -3959,7 +4093,7 @@ async function executeScriptNode(
             workflow_run_id: workflowRun.id,
             event_type: 'node_failed',
             step_name: stepName,
-            data: withRetryEpochData(workflowRun, undefined, {
+            data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
               error: errorMsg,
               type: 'script',
               ...iterationData,
@@ -4014,7 +4148,7 @@ async function executeScriptNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: stepName,
-        data: withRetryEpochData(workflowRun, undefined, {
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
           duration_ms: duration,
           type: 'script',
           node_output: output,
@@ -4067,7 +4201,7 @@ async function executeScriptNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: withRetryEpochData(workflowRun, undefined, {
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
           error: errorMsg,
           type: 'script',
           ...iterationData,
@@ -4184,6 +4318,7 @@ async function finalizeLoopFromSignal(
   stepName: string,
   nodeLabel: string,
   finalizeOutput: string,
+  executionScope?: TranscriptExecutionScope,
   finalizeTokens?: TokenUsage
 ): Promise<void> {
   // Impossible by construction today (the gate writes signaledOutput whenever
@@ -4210,6 +4345,7 @@ async function finalizeLoopFromSignal(
         duration_ms: 0,
         node_output: finalizeOutput,
         ...(finalizeTokens !== undefined ? { tokens: finalizeTokens } : {}),
+        ...(executionScope !== undefined ? executionScopeEventFields(executionScope) : {}),
       },
     })
     .catch((err: Error) => {
@@ -4283,7 +4419,8 @@ async function executeLoopGroupNode(
   mutatesCheckout = false,
   execContext: ExecutionContext = { kind: 'host' },
   runChildWorkflow?: RunChildWorkflowFn,
-  answeredAskRows: readonly PendingInteraction[] = []
+  answeredAskRows: readonly PendingInteraction[] = [],
+  parentLoopAncestry: readonly LoopAncestryEntry[] = []
 ): Promise<NodeExecutionResult> {
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -4315,6 +4452,12 @@ async function executeLoopGroupNode(
   const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
   const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
   const loopUserInput = isLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '';
+  const executionScope = mintLifecycleScope(
+    workflowRun,
+    undefined,
+    node.id,
+    parentLoopAncestry.length > 0 ? parentLoopAncestry : undefined
+  );
 
   // Finalize-on-approve (#2074): mirrors executeLoopNode — a signal-bearing gate
   // resumed WITHOUT feedback completes the group from the persisted output instead
@@ -4399,7 +4542,11 @@ async function executeLoopGroupNode(
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_started',
         step_name: stepName,
-        data: { iteration: i, maxIterations: group.max_iterations, nodeId: node.id },
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
+          iteration: i,
+          maxIterations: group.max_iterations,
+          nodeId: node.id,
+        }),
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
@@ -4493,6 +4640,7 @@ async function executeLoopGroupNode(
       // (never spliced into source — #2115); matches applyLoopPrevToBodyNode's skip.
       bodyLoopUserInput: userInputForIter,
       answeredAskRows,
+      loopAncestry: [...parentLoopAncestry, { node_id: stepName, iteration: i }],
     };
     const bodyOutcome = await runLayers(iterCtx);
     if (bodyOutcome === 'pending') {
@@ -4683,7 +4831,12 @@ async function executeLoopGroupNode(
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_completed',
         step_name: stepName,
-        data: { iteration: i, duration, completionDetected, nodeId: node.id },
+        data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
+          iteration: i,
+          duration,
+          completionDetected,
+          nodeId: node.id,
+        }),
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
@@ -5018,7 +5171,9 @@ async function executeLoopNode(
   /** Prospective request metadata — same object ENV preview/snapshot use. */
   requestMetadata?: NodeExecutionMetadata,
   resumeInteractions?: readonly ResumeInteraction[],
-  askResumeSessionId?: string
+  askResumeSessionId?: string,
+  parentLoopAncestry: readonly LoopAncestryEntry[] = [],
+  recoveredExecutionScope?: TranscriptExecutionScope
 ): Promise<NodeExecutionResult> {
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -5026,11 +5181,20 @@ async function executeLoopNode(
   // ('' → node.id at top level, #2090). The loop's own per-iteration number lives in
   // each event's data (`iteration`), so no separate iteration param is threaded here.
   const stepName = stepNamePrefix + node.id;
+  const loopRetryEpoch = getRunRetryEpoch(workflowRun, undefined);
+  let executionScope: TranscriptExecutionScope =
+    recoveredExecutionScope ??
+    mintTranscriptExecutionScope({
+      retryEpoch: loopRetryEpoch,
+      loopAncestry: parentLoopAncestry,
+      routeActivationSeq: routeActivationSeqForNode(workflowRun, node.id),
+    });
   const nativeTools = nativeToolsForAskHuman(
     workflowProvider,
     deps.store,
     workflowRun.id,
-    stepName
+    stepName,
+    () => executionScope
   );
   const recordLoopStatus = (state: string, detail?: string): Promise<void> =>
     appendNodeTranscript(deps.store, {
@@ -5038,6 +5202,7 @@ async function executeLoopNode(
       node_id: stepName,
       kind: 'status',
       payload: { state, ...(detail !== undefined ? { detail } : {}) },
+      metadata: transcriptMetadata(executionScope),
     });
 
   // Emit node_started up-front so every terminal outcome of this loop node is
@@ -5066,6 +5231,7 @@ async function executeLoopNode(
         // so it belongs on the node's single _started row. Spread the shared
         // metadata object so loop node_started equals ENV resolved rows.
         ...(requestMetadata ?? { provider: workflowProvider }),
+        ...executionScopeEventFields(executionScope),
       },
     })
     .catch((err: Error) => {
@@ -5110,7 +5276,7 @@ async function executeLoopNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: { error, ...(extras.data ?? {}) },
+        data: { error, ...(extras.data ?? {}), ...executionScopeEventFields(executionScope) },
       })
       .catch((err: Error) => {
         getLog().error(
@@ -5140,7 +5306,9 @@ async function executeLoopNode(
   const rawApproval = workflowRun.metadata?.approval;
   const loopGateMeta = isApprovalContext(rawApproval) ? rawApproval : undefined;
   const isLoopResume = loopGateMeta?.type === 'interactive_loop' && loopGateMeta.nodeId === node.id;
-  const startIteration = isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1;
+  const recoveredLoopIteration = loopIterationFromScope(recoveredExecutionScope, stepName);
+  const startIteration =
+    recoveredLoopIteration ?? (isLoopResume ? (loopGateMeta.iteration ?? 0) + 1 : 1);
   let currentSessionId: string | undefined = isLoopResume
     ? (loopGateMeta.sessionId ?? undefined)
     : undefined;
@@ -5165,6 +5333,7 @@ async function executeLoopNode(
       stepName,
       'Loop node',
       finalizeOutput,
+      executionScope,
       readSignaledTokens(loopGateMeta.signaledTokens, {
         workflowRunId: workflowRun.id,
         nodeId: node.id,
@@ -5280,6 +5449,20 @@ async function executeLoopNode(
 
   for (let i = startIteration; i <= loop.max_iterations; i++) {
     const iterationStart = Date.now();
+    const iterationAncestry: LoopAncestryEntry[] = [
+      ...parentLoopAncestry,
+      { node_id: stepName, iteration: i },
+    ];
+    if (!(i === startIteration && recoveredExecutionScope !== undefined)) {
+      executionScope = mintTranscriptExecutionScope({
+        retryEpoch: loopRetryEpoch,
+        loopAncestry: iterationAncestry,
+        routeActivationSeq: routeActivationSeqForNode(workflowRun, node.id),
+      });
+    }
+    const iterationScopeMeta = (
+      extra: Omit<ReturnType<typeof transcriptMetadata>, 'execution'> = {}
+    ): ReturnType<typeof transcriptMetadata> => transcriptMetadata(executionScope, extra);
 
     // Check for non-running status between iterations. `paused` is tolerated
     // here for the same reason as the streaming check: a sibling approval
@@ -5324,6 +5507,7 @@ async function executeLoopNode(
           iteration: i,
           maxIterations: loop.max_iterations,
           nodeId: node.id,
+          ...executionScopeEventFields(executionScope),
         },
       })
       .catch((err: Error) => {
@@ -5349,7 +5533,13 @@ async function executeLoopNode(
           workflow_run_id: workflowRun.id,
           event_type: 'loop_iteration_failed',
           step_name: stepName,
-          data: { iteration: i, error: iterationError, duration, nodeId: node.id },
+          data: {
+            iteration: i,
+            error: iterationError,
+            duration,
+            nodeId: node.id,
+            ...executionScopeEventFields(executionScope),
+          },
         })
         .catch((eventError: Error) => {
           logEventStoreError(eventError, i);
@@ -5585,6 +5775,12 @@ async function executeLoopNode(
                 node_id: stepName,
                 kind: 'text',
                 payload: { text: cleaned },
+                metadata: iterationScopeMeta({
+                  ...(msg.textMode !== undefined ? { text_mode: msg.textMode } : {}),
+                  ...(msg.streamId !== undefined ? { stream_id: msg.streamId } : {}),
+                  ...(msg.messageId !== undefined ? { message_id: msg.messageId } : {}),
+                  ...(msg.blockId !== undefined ? { block_id: msg.blockId } : {}),
+                }),
               });
             }
             if (platform.getStreamingMode() === 'stream' && cleaned) {
@@ -5800,6 +5996,7 @@ async function executeLoopNode(
                 id: toolCallId,
                 ...(msg.toolInput !== undefined ? { input: msg.toolInput } : {}),
               },
+              metadata: iterationScopeMeta({ tool_phase: 'call' }),
             });
 
             // Emit tool_started for the current tool (fire-and-forget)
@@ -5850,6 +6047,22 @@ async function executeLoopNode(
           } else if (msg.type === 'tool_result' && msg.toolName) {
             const now = Date.now();
             const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
+            const resultCallId =
+              completedTool?.[0] ??
+              msg.toolCallId ??
+              `anonymous-${String(++anonymousToolSequence)}`;
+            await appendToolResultTranscript(deps.store, {
+              workflow_run_id: workflowRun.id,
+              node_id: stepName,
+              name: msg.toolName,
+              id: resultCallId,
+              output: msg.toolOutput,
+              metadata: iterationScopeMeta({
+                tool_phase: 'result',
+                ...(msg.truncated === true ? { truncated: true } : {}),
+                ...(msg.outputState !== undefined ? { output_state: msg.outputState } : {}),
+              }),
+            });
             if (completedTool) {
               const [completedToolCallId, tool] = completedTool;
               getWorkflowEventEmitter().emit({
@@ -6106,6 +6319,7 @@ async function executeLoopNode(
         );
         if (canReask) {
           reaskAttempt++;
+          executionScope = newTranscriptAttempt(executionScope);
           reaskErrors = validation.errors;
           await safeSendMessage(
             platform,
@@ -6354,6 +6568,7 @@ async function executeLoopNode(
           duration,
           completionDetected,
           nodeId: node.id,
+          ...executionScopeEventFields(executionScope),
         },
       })
       .catch((err: Error) => {
@@ -6387,7 +6602,7 @@ async function executeLoopNode(
           workflow_run_id: workflowRun.id,
           event_type: 'node_completed',
           step_name: stepName,
-          data: withRetryEpochData(workflowRun, undefined, {
+          data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
             duration_ms: Date.now() - iterationStart,
             node_output: lastIterationOutput,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
@@ -6851,6 +7066,28 @@ async function executeWorkflowNode(
 ): Promise<NodeExecutionResult> {
   const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
+  const workflowStepName = ctx.stepNamePrefix + node.id;
+  const executionScope = mintLifecycleScope(parentRun, undefined, node.id);
+
+  deps.store
+    .createWorkflowEvent({
+      workflow_run_id: parentRun.id,
+      event_type: 'node_started',
+      step_name: workflowStepName,
+      data: withLifecycleScopeData(parentRun, undefined, executionScope, { type: 'workflow' }),
+    })
+    .catch((err: Error) => {
+      getLog().error(
+        { err, workflowRunId: parentRun.id, eventType: 'node_started' },
+        'workflow.event_persist_failed'
+      );
+    });
+  getWorkflowEventEmitter().emit({
+    type: 'node_started',
+    runId: parentRun.id,
+    nodeId: node.id,
+    nodeName: node.id,
+  });
 
   // Build the failed result AND persist a node_failed event with the reason. Unlike
   // command/prompt/bash/script nodes (which write their own node_failed inside their
@@ -6863,8 +7100,11 @@ async function executeWorkflowNode(
       .createWorkflowEvent({
         workflow_run_id: parentRun.id,
         event_type: 'node_failed',
-        step_name: ctx.stepNamePrefix + node.id,
-        data: { error, type: 'workflow' },
+        step_name: workflowStepName,
+        data: withLifecycleScopeData(parentRun, undefined, executionScope, {
+          error,
+          type: 'workflow',
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -6895,7 +7135,7 @@ async function executeWorkflowNode(
   // distinct execution path from the slice-1 single-child node below — branch here so
   // the 1:1 pause/resume machinery stays untouched for non-fan-out nodes.
   if (node.fan_out) {
-    return executeFanOutWorkflowNode(node, ctx, node.fan_out, ctx.runChildWorkflow);
+    return executeFanOutWorkflowNode(node, ctx, node.fan_out, ctx.runChildWorkflow, executionScope);
   }
 
   // This run's named inputs (#2470), resolved once — threaded identically into the
@@ -6981,8 +7221,8 @@ async function executeWorkflowNode(
       .createWorkflowEvent({
         workflow_run_id: parentRun.id,
         event_type: 'node_completed',
-        step_name: ctx.stepNamePrefix + node.id,
-        data: {
+        step_name: workflowStepName,
+        data: withLifecycleScopeData(parentRun, undefined, executionScope, {
           node_output: output,
           type: 'workflow',
           child_run_id: outcome.childRunId,
@@ -6993,7 +7233,7 @@ async function executeWorkflowNode(
           // number. Does not double count WITHIN this run: the child's own per-node
           // rows are filed under `child_run_id`, a different workflow_run_id.
           ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
-        },
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -7384,7 +7624,8 @@ async function executeFanOutWorkflowNode(
   node: WorkflowNode,
   ctx: RunLayersContext,
   fanOut: FanOutConfig,
-  runChild: RunChildWorkflowFn
+  runChild: RunChildWorkflowFn,
+  executionScope: TranscriptExecutionScope
 ): Promise<NodeExecutionResult> {
   const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
@@ -7402,7 +7643,10 @@ async function executeFanOutWorkflowNode(
         workflow_run_id: parentRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: { error, type: 'workflow' },
+        data: withLifecycleScopeData(parentRun, undefined, executionScope, {
+          error,
+          type: 'workflow',
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -7435,7 +7679,7 @@ async function executeFanOutWorkflowNode(
         workflow_run_id: parentRun.id,
         event_type: 'node_completed',
         step_name: stepName,
-        data: {
+        data: withLifecycleScopeData(parentRun, undefined, executionScope, {
           node_output: output,
           type: 'workflow',
           fan_out: true,
@@ -7446,7 +7690,7 @@ async function executeFanOutWorkflowNode(
           // children's tokens — silently, since an absent key is skipped without warning.
           // On Codex the loss is total, because that provider reports no cost either.
           ...(tokens !== undefined ? { tokens } : {}),
-        },
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -8104,6 +8348,8 @@ interface RunLayersContext {
   stepNamePrefix: string;
   /** Answered AskHuman rows for this run, already filtered; empty when none. */
   answeredAskRows: readonly PendingInteraction[];
+  /** Enclosing loop-group ancestry for nested body nodes; empty at the top-level DAG. */
+  loopAncestry?: readonly LoopAncestryEntry[];
   /**
    * The enclosing loop_group iteration (1-based) when these layers are a group body,
    * else undefined for the top-level DAG. Tagged into body node lifecycle event `data`
@@ -8341,11 +8587,16 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped_prior_success',
                   step_name: stepNamePrefix + node.id,
-                  data: withRetryEpochData(workflowRun, retryContext, {
-                    reason: 'prior_success',
-                    node_output: priorCompletedNodes.get(node.id) ?? '',
-                    ...(iteration !== undefined ? { iteration } : {}),
-                  }),
+                  data: withLifecycleScopeData(
+                    workflowRun,
+                    retryContext,
+                    mintLifecycleScope(workflowRun, retryContext, node.id),
+                    {
+                      reason: 'prior_success',
+                      node_output: priorCompletedNodes.get(node.id) ?? '',
+                      ...(iteration !== undefined ? { iteration } : {}),
+                    }
+                  ),
                 })
                 .catch((err: Error) => {
                   getLog().error(
@@ -8394,10 +8645,15 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
                 workflow_run_id: workflowRun.id,
                 event_type: 'node_skipped',
                 step_name: stepNamePrefix + node.id,
-                data: withRetryEpochData(workflowRun, retryContext, {
-                  reason: 'trigger_rule',
-                  ...(iteration !== undefined ? { iteration } : {}),
-                }),
+                data: withLifecycleScopeData(
+                  workflowRun,
+                  retryContext,
+                  mintLifecycleScope(workflowRun, retryContext, node.id),
+                  {
+                    reason: 'trigger_rule',
+                    ...(iteration !== undefined ? { iteration } : {}),
+                  }
+                ),
               })
               .catch((err: Error) => {
                 getLog().error(
@@ -8451,11 +8707,16 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: stepNamePrefix + node.id,
-                  data: withRetryEpochData(workflowRun, retryContext, {
-                    reason: 'when_condition_parse_error',
-                    expr: node.when,
-                    ...(iteration !== undefined ? { iteration } : {}),
-                  }),
+                  data: withLifecycleScopeData(
+                    workflowRun,
+                    retryContext,
+                    mintLifecycleScope(workflowRun, retryContext, node.id),
+                    {
+                      reason: 'when_condition_parse_error',
+                      expr: node.when,
+                      ...(iteration !== undefined ? { iteration } : {}),
+                    }
+                  ),
                 })
                 .catch((err: Error) => {
                   getLog().error(
@@ -8485,11 +8746,16 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
                   workflow_run_id: workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: stepNamePrefix + node.id,
-                  data: withRetryEpochData(workflowRun, retryContext, {
-                    reason: 'when_condition',
-                    expr: node.when,
-                    ...(iteration !== undefined ? { iteration } : {}),
-                  }),
+                  data: withLifecycleScopeData(
+                    workflowRun,
+                    retryContext,
+                    mintLifecycleScope(workflowRun, retryContext, node.id),
+                    {
+                      reason: 'when_condition',
+                      expr: node.when,
+                      ...(iteration !== undefined ? { iteration } : {}),
+                    }
+                  ),
                 })
                 .catch((err: Error) => {
                   getLog().error(
@@ -8581,9 +8847,12 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               execContext
             );
 
+            const loopStepName = stepNamePrefix + node.id;
             const loopAskResume = mapAnsweredAskResume(
               ctx.answeredAskRows,
-              stepNamePrefix + node.id
+              loopStepName,
+              ctx.retryEpoch,
+              ctx.route?.scheduledRouteRerunNodeIds.has(node.id) !== true
             );
             const output = await executeLoopNode(
               deps,
@@ -8608,7 +8877,9 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               execContext,
               loopMetadata,
               loopAskResume.interactions.length > 0 ? loopAskResume.interactions : undefined,
-              loopAskResume.sessionId
+              loopAskResume.sessionId,
+              ctx.loopAncestry ?? [],
+              loopAskResume.executionScope
             );
             // Loop nodes run every iteration on the same resolved provider, so the
             // result session (if any) is attributable to loopProvider — tag it so a
@@ -8694,7 +8965,8 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
               mutatesCheckout,
               execContext,
               ctx.runChildWorkflow,
-              ctx.answeredAskRows
+              ctx.answeredAskRows,
+              ctx.loopAncestry ?? []
             );
             return { nodeId: node.id, output };
           }
@@ -9097,7 +9369,13 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
             }
           }
 
-          const askResume = mapAnsweredAskResume(ctx.answeredAskRows, stepNamePrefix + node.id);
+          const askResume = mapAnsweredAskResume(
+            ctx.answeredAskRows,
+            stepNamePrefix + node.id,
+            ctx.retryEpoch,
+            ctx.route?.scheduledRouteRerunNodeIds.has(node.id) !== true &&
+              !(ctx.priorCompletedNodes?.has(node.id) === true && node.always_run === true)
+          );
           if (askResume.sessionId !== undefined) {
             resumeSessionId = askResume.sessionId;
           }
@@ -9144,7 +9422,9 @@ async function runLayers(ctx: RunLayersContext): Promise<'completed' | 'pending'
                 nodeMetadata,
                 stepNamePrefix,
                 iteration,
-                askResumeInteractions
+                askResumeInteractions,
+                askResume.executionScope,
+                ctx.loopAncestry ?? []
               ),
             { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
           );

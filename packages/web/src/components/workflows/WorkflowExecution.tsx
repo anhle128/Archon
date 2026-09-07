@@ -31,6 +31,7 @@ import {
   getWorkflowNodeMessages,
   rejectWorkflowRun,
   sendMessage,
+  type NodeExecution,
   type PendingInteraction,
   type WorkflowEventResponse,
 } from '@/lib/api';
@@ -84,6 +85,7 @@ export interface WorkflowRunQueryData {
   codebaseId: string | null;
   events: WorkflowEventResponse[];
   nodeStates: WorkflowRunNodeState[];
+  nodeExecutions: NodeExecution[] | undefined;
   approval: unknown;
   pendingInteractions: PendingInteraction[];
   viewerIsStarter: boolean;
@@ -129,6 +131,7 @@ export function mapWorkflowRunDetail(
     codebaseId: data.run.codebase_id ?? null,
     events: data.events,
     nodeStates: data.nodeStates,
+    nodeExecutions: data.nodeExecutions,
     approval: data.run.metadata.approval ?? null,
     pendingInteractions: data.pending_interactions,
     viewerIsStarter: data.viewer_is_starter,
@@ -850,6 +853,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           runId={runId}
           nodeStates={queryData?.nodeStates ?? []}
           events={queryData?.events ?? []}
+          nodeExecutions={queryData?.nodeExecutions}
           loadMessages={getWorkflowNodeMessages}
           parentPlatformId={parentPlatformId}
           loadParentMessages={getMessages}
@@ -895,7 +899,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden">
+    <div className="legacy-run-view flex flex-col h-full min-h-0 overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
         <button

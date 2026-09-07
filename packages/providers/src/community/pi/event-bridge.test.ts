@@ -481,6 +481,7 @@ describe('mapPiEvent', () => {
         toolOutput: 'file contents',
         toolCallId: 'call-123',
         toolOutcome: 'success',
+        outputState: 'full',
       },
     ]);
   });

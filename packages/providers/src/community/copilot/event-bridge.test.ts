@@ -193,7 +193,9 @@ describe('mapCopilotEvent', () => {
       evt('assistant.message_delta', { messageId: 'm1', deltaContent: 'Hello ' }),
       ctx
     );
-    expect(out).toEqual([{ type: 'assistant', content: 'Hello ' }]);
+    expect(out).toEqual([
+      { type: 'assistant', content: 'Hello ', textMode: 'delta', messageId: 'm1' },
+    ]);
   });
 
   test('assistant.message_delta with empty content is dropped', () => {
@@ -345,6 +347,7 @@ describe('mapCopilotEvent', () => {
         toolOutput: 'full diff output',
         toolCallId: 'c1',
         toolOutcome: 'success',
+        outputState: 'full',
       },
     ]);
   });
@@ -382,6 +385,7 @@ describe('mapCopilotEvent', () => {
         toolOutput: '❌ permission denied',
         toolCallId: 'c1',
         toolOutcome: 'error',
+        outputState: 'full',
       },
     ]);
   });

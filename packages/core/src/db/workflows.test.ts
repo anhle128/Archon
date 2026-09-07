@@ -707,6 +707,9 @@ describe('workflows database', () => {
           document: '/tmp/reworked-plan.md',
           phase: 'opening',
           reviewUrl: 'https://mac-mini.example.ts.net:19432',
+          reviewSessionId: null,
+          feedbackSubmission: null,
+          decisionClaim: null,
         },
       });
       expect(mockQuery).toHaveBeenNthCalledWith(
@@ -725,7 +728,11 @@ describe('workflows database', () => {
             document: '/tmp/reworked-plan.md',
             phase: 'opening',
             reviewUrl: 'https://mac-mini.example.ts.net:19432',
+            reviewSessionId: null,
+            feedbackSubmission: null,
+            decisionClaim: null,
           },
+          reviewFeedbackReceipts: {},
         }),
       ]);
     });

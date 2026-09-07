@@ -307,6 +307,11 @@ export type MessageChunk =
        *  user must act on (e.g. plannotator review) surface before the node
        *  blocks for input. */
       flush?: boolean;
+      /** Provider-known text boundary. Omitted when the adapter cannot tell. */
+      textMode?: 'complete' | 'delta' | 'snapshot';
+      streamId?: string;
+      messageId?: string;
+      blockId?: string;
     }
   | { type: 'system'; content: string }
   | { type: 'thinking'; content: string }
@@ -369,6 +374,9 @@ export type MessageChunk =
       toolOutcome?: 'success' | 'error' | 'interrupted' | 'unknown';
       /** Provider-reported process exit code, when the tool exposes one. */
       exitCode?: number;
+      /** Transport/provider completeness. Omitted when the adapter cannot tell. */
+      truncated?: boolean;
+      outputState?: 'full' | 'truncated' | 'missing' | 'unknown';
     }
   // ─── Subagent Task Lifecycle (Claude SDK `system` subtypes) ────────────
   // Forwarded by the Claude provider from SDKTaskStartedMessage /

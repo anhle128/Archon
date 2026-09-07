@@ -6,6 +6,7 @@ import { workflowDefinitionSchema as engineWorkflowDefinitionSchema } from '@arc
 import { effortLevelSchema, thinkingConfigSchema } from '@archon/workflows/schemas/dag-node';
 import {
   nodeStateSchema,
+  reviewFeedbackTextSchema,
   workflowRunSchema as engineWorkflowRunSchema,
 } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -23,6 +24,7 @@ import {
   nodeMessageToolSchema,
   nodeMessageStatusSchema,
 } from '@archon/workflows/schemas/node-message';
+import { nodeExecutionSchema } from '@archon/workflows/schemas/node-execution';
 import { nullableUsageReportResponseSchema } from './usage.schemas';
 
 /** Workflow definition schema — derived from engine schema via direct subpath import. */
@@ -202,10 +204,34 @@ export const workflowNodeMessagesParamsSchema = z.object({
   runId: z.string().min(1),
   nodeId: z.string().min(1),
 });
+export const workflowNodeMessagesQuerySchema = z
+  .object({
+    afterSeq: z.coerce.number().int().nonnegative().optional(),
+    limit: z.coerce.number().int().positive().max(500).optional(),
+    occurrenceId: z.string().uuid().optional(),
+    attemptId: z.string().uuid().optional(),
+  })
+  .strict()
+  .openapi('WorkflowNodeMessagesQuery');
 export const workflowNodeMessagesResponseSchema = z
-  .object({ messages: z.array(workflowNodeMessageResponseSchema) })
+  .object({
+    messages: z.array(workflowNodeMessageResponseSchema),
+    nextCursor: z.string().optional(),
+    hasMore: z.boolean().optional(),
+    highWatermark: z.number().int().nonnegative().optional(),
+  })
   .strict()
   .openapi('WorkflowNodeMessagesResponse');
+
+export const workflowNodeMessageDetailParamsSchema = z
+  .object({
+    runId: z.string().min(1),
+    nodeId: z.string().min(1),
+    messageId: z.string().min(1),
+  })
+  .openapi('WorkflowNodeMessageDetailParams');
+
+export const nodeExecutionResponseSchema = nodeExecutionSchema.openapi('NodeExecution');
 
 /** GET /api/workflows/runs/:runId response. */
 export const workflowRunDetailSchema = z
@@ -230,6 +256,7 @@ export const workflowRunDetailSchema = z
     usage: nullableUsageReportResponseSchema,
     viewer_is_starter: z.boolean(),
     starter_display_name: z.string().nullable(),
+    nodeExecutions: z.array(nodeExecutionResponseSchema).optional(),
   })
   .openapi('WorkflowRunDetail');
 
@@ -458,3 +485,35 @@ export const workflowRunsQuerySchema = z.object({
   // contract explicit (the handler treats only 'true' as on).
   mine: z.enum(['true', 'false']).optional(),
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/workflows/runs/:runId/review-feedback
+// ---------------------------------------------------------------------------
+
+/**
+ * Request body for inline Plannotator review feedback submission.
+ * strict() rejects unknown keys so callers cannot accidentally omit or
+ * add fields while believing they submitted successfully.
+ */
+export const reviewFeedbackBodySchema = z
+  .object({
+    nodeId: z.string().min(1),
+    gateId: z.string().min(1),
+    reviewSessionId: z.string().uuid(),
+    requestId: z.string().uuid(),
+    feedback: reviewFeedbackTextSchema,
+  })
+  .strict()
+  .openapi('ReviewFeedbackBody');
+
+export type ReviewFeedbackBody = z.infer<typeof reviewFeedbackBodySchema>;
+
+/** HTTP 200 response: submission accepted/pending or idempotent duplicate. */
+export const reviewFeedbackResponseSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    reviewSessionId: z.string().uuid(),
+    status: z.enum(['accepted', 'claimed', 'processed', 'superseded', 'failed']),
+    submittedAt: z.string(),
+  })
+  .openapi('ReviewFeedbackResponse');

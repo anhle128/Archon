@@ -13,6 +13,13 @@ export interface WebApprovalContext {
   document?: string;
   reviewUrl?: string | null;
   resolved?: 'approved' | 'rejected' | null;
+  gateId?: string;
+  reviewSessionId?: string | null;
+  feedbackSubmission?: {
+    status: string;
+    submittedAt?: string;
+    requestId?: string;
+  } | null;
 }
 
 function isApprovalContextType(value: unknown): value is WebApprovalContextType {
@@ -49,6 +56,18 @@ export function readApprovalContext(value: unknown): WebApprovalContext | null {
       : {}),
     ...(record.resolved === 'approved' || record.resolved === 'rejected' || record.resolved === null
       ? { resolved: record.resolved }
+      : {}),
+    ...(typeof record.gateId === 'string' ? { gateId: record.gateId } : {}),
+    ...(typeof record.reviewSessionId === 'string' || record.reviewSessionId === null
+      ? { reviewSessionId: record.reviewSessionId }
+      : {}),
+    ...(record.feedbackSubmission !== undefined
+      ? {
+          feedbackSubmission:
+            record.feedbackSubmission === null || typeof record.feedbackSubmission === 'object'
+              ? (record.feedbackSubmission as WebApprovalContext['feedbackSubmission'])
+              : null,
+        }
       : {}),
   };
 }

@@ -764,6 +764,9 @@ interface ToolResultEntry {
   toolOutput: string;
   toolCallId?: string;
   toolOutcome: 'success' | 'error' | 'interrupted';
+  /** Whether the raw SDK output was sliced at the 10,000-char provider limit. */
+  truncated?: boolean;
+  outputState?: 'full' | 'truncated';
 }
 
 /** Bun-runnable JS extensions. `.ts`/`.tsx`/`.jsx` are excluded — the SDK has
@@ -917,11 +920,15 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
                   ? toolResponse
                   : JSON.stringify(toolResponse ?? '');
               const maxLen = 10_000;
+              const wasTruncated = output.length > maxLen;
               toolResultQueue.push({
                 toolName,
-                toolOutput: output.length > maxLen ? output.slice(0, maxLen) + '...' : output,
+                toolOutput: wasTruncated ? output.slice(0, maxLen) + '...' : output,
                 ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
                 toolOutcome: 'success',
+                ...(wasTruncated
+                  ? { truncated: true, outputState: 'truncated' as const }
+                  : { outputState: 'full' as const }),
               });
             } catch (e) {
               getLog().error({ err: e, input }, 'claude.post_tool_use_hook_error');
@@ -950,6 +957,7 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
                 toolOutput: `${prefix}: ${errorText}`,
                 ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
                 toolOutcome: isInterrupt ? 'interrupted' : 'error',
+                outputState: 'full' as const,
               });
             } catch (e) {
               getLog().error({ err: e, input }, 'claude.post_tool_use_failure_hook_error');
@@ -1091,6 +1099,8 @@ async function* streamClaudeMessages(
           toolOutput: tr.toolOutput,
           ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
           toolOutcome: tr.toolOutcome,
+          ...(tr.truncated !== undefined ? { truncated: tr.truncated } : {}),
+          ...(tr.outputState !== undefined ? { outputState: tr.outputState } : {}),
         };
       }
     }
@@ -1128,7 +1138,7 @@ async function* streamClaudeMessages(
 
       for (const block of content) {
         if (block.type === 'text' && block.text) {
-          yield { type: 'assistant', content: block.text };
+          yield { type: 'assistant', content: block.text, textMode: 'complete' };
         } else if (block.type === 'tool_use' && block.name) {
           yield {
             type: 'tool',
@@ -1392,6 +1402,8 @@ async function* streamClaudeMessages(
         toolOutput: tr.toolOutput,
         ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
         toolOutcome: tr.toolOutcome,
+        ...(tr.truncated !== undefined ? { truncated: tr.truncated } : {}),
+        ...(tr.outputState !== undefined ? { outputState: tr.outputState } : {}),
       };
     }
   }

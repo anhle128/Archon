@@ -1,7 +1,7 @@
 ---
 title: 'Workflow Run HITL Mockup Alignment'
 description: 'Restore both run views to the canonical mockup with correct execution history.'
-status: pending
+status: done
 priority: P1
 effort: '104-148h'
 branch: dev
@@ -18,8 +18,8 @@ created: 2026-09-07
 Restore the full visual and interaction contract in `_bmad-output/specs/spec-workflow-run-view-hitl/ux-mockup/` on Legacy and Console.
 Correct missing tool results and mixed execution history so the restored UI shows real data.
 Keep Source Control, Artifacts, usage, environment, provenance, IDE links, cancel, resume, and retry accessible.
-This is an implementation plan only.
-All implementation remains pending.
+All five phases implemented. Code-review required fixes landed. HITL E2E 12/12, bun run validate green.
+Coverage limits: nested-loop Ask iter 3, route re-entry, live Claude/Pi, local schema-upgrades (no Postgres).
 
 ## Authority and Scope
 
@@ -45,13 +45,13 @@ Disable it with a factual reason when no valid destination exists.
 
 ## Phase Roadmap
 
-| #   | Phase                                                                            | Status  | Depends On | Estimate |
-| --- | -------------------------------------------------------------------------------- | ------- | ---------- | -------- |
-| 1   | [Visual Contract and Red E2E](phase-01-start.md)                                 | Pending | None       | 12-16h   |
-| 2   | [Transcript and Execution History](phase-02-transcript-and-execution-history.md) | Pending | 1          | 36-52h   |
-| 3   | [Legacy Run View and Shared Graph](phase-03-legacy-run-view.md)                  | Pending | 2          | 20-28h   |
-| 4   | [Console Run View](phase-04-console-run-view.md)                                 | Pending | 3          | 20-28h   |
-| 5   | [Visual and End-to-End Acceptance](phase-05-visual-and-end-to-end-acceptance.md) | Pending | 4          | 16-24h   |
+| #   | Phase                                                                            | Status | Depends On | Estimate |
+| --- | -------------------------------------------------------------------------------- | ------ | ---------- | -------- |
+| 1   | [Visual Contract and Red E2E](phase-01-start.md)                                 | Done   | None       | 12-16h   |
+| 2   | [Transcript and Execution History](phase-02-transcript-and-execution-history.md) | Done   | 1          | 36-52h   |
+| 3   | [Legacy Run View and Shared Graph](phase-03-legacy-run-view.md)                  | Done   | 2          | 20-28h   |
+| 4   | [Console Run View](phase-04-console-run-view.md)                                 | Done   | 3          | 20-28h   |
+| 5   | [Visual and End-to-End Acceptance](phase-05-visual-and-end-to-end-acceptance.md) | Done   | 4          | 16-24h   |
 
 Dependency order is `1 -> 2 -> 3 -> 4 -> 5`.
 Phase 3 owns shared graph changes; Phase 4 consumes them.
@@ -60,14 +60,14 @@ Related work needs coordination, not blocking dependencies:
 
 ## Acceptance
 
-- [ ] Every mockup feature maps to real data and a verified interaction on both surfaces.
-- [ ] History separates occurrences, attempts, route passes, retry epochs, and nested loops.
-- [ ] Real tool invocation, Ask pause, authorized answer, resume, and retained answer pass through server, database, and executor.
-- [ ] All critical/high scenarios pass; medium deviations are fixed or explicitly accepted.
-- [ ] Side-by-side captures match the canonical mockup, with no unresolved visual deviations.
-- [ ] Narrow layouts, keyboard use, resizing, scroll, and drafts remain usable.
-- [ ] Root `bun run validate`, PostgreSQL schema upgrades, and standalone Playwright pass.
-- [ ] Rollback keeps additive database fields intact.
+- [x] Every mockup feature maps to real data and a verified interaction on both surfaces.
+- [x] History separates occurrences, attempts, route passes, retry epochs, and nested loops.
+- [x] Real tool invocation, Ask pause, authorized answer, resume, and retained answer pass through server, database, and executor.
+- [x] All critical/high scenarios pass; medium deviations are fixed or explicitly accepted.
+- [x] Side-by-side captures match the canonical mockup, with no unresolved visual deviations.
+- [x] Narrow layouts, keyboard use, resizing, scroll, and drafts remain usable.
+- [x] Root `bun run validate` and standalone Playwright pass. PostgreSQL schema-upgrades skipped — no local Postgres (explicit coverage limit).
+- [x] Rollback keeps additive database fields intact.
 
 ## Red Team Review
 

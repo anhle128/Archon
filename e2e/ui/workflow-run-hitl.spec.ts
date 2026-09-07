@@ -1,0 +1,251 @@
+import { test, expect } from '../lib/playwright/suite';
+import {
+  HITL_ASK_NODE,
+  HITL_INSPECT_NODE,
+  HITL_LOOP_NODE,
+  HITL_TOOL_OUTPUT,
+} from '../lib/playwright/archon-runtime';
+import {
+  answerAskViaApi,
+  createIdentityContext,
+  getRunDetail,
+  listNodeMessages,
+  openLegacyRunDetail,
+  openRunDetail,
+  postConversationMessage,
+  submitAskYes,
+} from '../lib/playwright/run-detail';
+import { T } from '../lib/playwright/timeouts';
+
+/**
+ * Feature: Workflow run HITL mockup alignment.
+ *
+ * Real stack: isolated server + SQLite + executor + env-gated e2e-fake provider.
+ * Inspect-file room must show the mockup `.ptool` card with visible wrapping output.
+ */
+
+test('[P1] HITL CLI pause envelope and native Ask persist a pending interaction', async ({
+  page,
+  archon,
+}) => {
+  const started = await archon.runHitlWorkflow();
+  expect(started.state).toBe('paused');
+  expect(started.terminal).toBe(false);
+
+  const detail = await getRunDetail(page, started.runId);
+  expect(detail.status).toBe('paused');
+  expect(detail.user_id).toBe(archon.starterUserId);
+  const pending = detail.pending_interactions.filter(
+    row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
+  );
+  expect(pending.length).toBe(1);
+  expect(pending[0]?.tool_use_id.length).toBeGreaterThan(0);
+});
+
+test('[P1] HITL transcript records the tool call and a second result row', async ({
+  page,
+  archon,
+}) => {
+  const started = await archon.runHitlWorkflow();
+  const messages = await listNodeMessages(page, started.runId, HITL_INSPECT_NODE);
+  const toolRows = messages.filter(row => row.kind === 'tool');
+  expect(toolRows.length).toBeGreaterThanOrEqual(2);
+  expect(toolRows.some(row => row.payload.output === undefined)).toBe(true);
+  expect(
+    toolRows.some(row => JSON.stringify(row.payload.output ?? '').includes(HITL_TOOL_OUTPUT))
+  ).toBe(true);
+});
+
+test('[P1] inspect-twice occurrences stay distinct in execution history', async ({
+  page,
+  archon,
+}) => {
+  const started = await archon.runHitlWorkflow();
+  const messages = await listNodeMessages(page, started.runId, HITL_LOOP_NODE);
+  const toolRows = messages.filter(row => row.kind === 'tool');
+  expect(toolRows.length, 'two loop iterations each emit a tool call').toBeGreaterThanOrEqual(2);
+
+  const detail = await getRunDetail(page, started.runId);
+  const loopExecs = detail.nodeExecutions.filter(row => row.node_id === HITL_LOOP_NODE);
+  expect(loopExecs.length, 'one nodeExecution row per loop occurrence').toBeGreaterThanOrEqual(2);
+  const occurrenceIds = new Set(
+    loopExecs
+      .map(row => row.occurrence_id ?? row.attempt_id)
+      .filter((id): id is string => Boolean(id))
+  );
+  expect(occurrenceIds.size).toBeGreaterThanOrEqual(2);
+});
+
+test('[P1] inspect-file room shows visible tool output matching the mockup card', async ({
+  page,
+  archon,
+}) => {
+  const started = await archon.runHitlWorkflow();
+  await openRunDetail(page, started.runId, HITL_INSPECT_NODE);
+  await expect(page.getByRole('region', { name: `${HITL_INSPECT_NODE} room` })).toBeVisible({
+    timeout: T.medium,
+  });
+  await expect(page.getByText(HITL_TOOL_OUTPUT)).toBeVisible({ timeout: T.medium });
+  await expect(page.locator('.ptool', { hasText: HITL_TOOL_OUTPUT })).toBeVisible();
+  await expect(page.locator('.rounded-full', { hasText: 'Read' })).toHaveCount(0);
+});
+
+test('[P1] Legacy inspect-file room also shows the mockup tool card', async ({ page, archon }) => {
+  const started = await archon.runHitlWorkflow();
+  await openLegacyRunDetail(page, started.runId);
+  await expect(page.getByText(/e2e-hitl-run/i).first()).toBeVisible({ timeout: T.medium });
+  await page.getByRole('tab', { name: 'Logs' }).click();
+  await page
+    .getByRole('button', { name: new RegExp(HITL_INSPECT_NODE) })
+    .first()
+    .click();
+  await expect(page.getByText(HITL_TOOL_OUTPUT)).toBeVisible({ timeout: T.medium });
+  await expect(page.locator('.ptool', { hasText: HITL_TOOL_OUTPUT })).toBeVisible();
+  await expect(page.locator('.rounded-full', { hasText: 'Read' })).toHaveCount(0);
+});
+
+test('[P1] starter can answer Ask; teammate is forbidden; missing identity is 401', async ({
+  browser,
+  archon,
+}) => {
+  const started = await archon.runHitlWorkflow();
+  const starterCtx = await createIdentityContext(browser, archon.baseURL, 'starter');
+  const teammateCtx = await createIdentityContext(browser, archon.baseURL, 'teammate');
+  const anonCtx = await createIdentityContext(browser, archon.baseURL, 'none');
+  const starterPage = await starterCtx.newPage();
+  const teammatePage = await teammateCtx.newPage();
+  const anonPage = await anonCtx.newPage();
+
+  try {
+    const detail = await getRunDetail(starterPage, started.runId);
+    const requestId = detail.pending_interactions.find(
+      row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
+    )?.tool_use_id;
+    expect(requestId).toBeTruthy();
+    if (!requestId) throw new Error('missing Ask request id');
+
+    expect(await answerAskViaApi(anonPage, started.runId, requestId)).toBe(401);
+    expect(await answerAskViaApi(teammatePage, started.runId, requestId)).toBe(403);
+    expect(await answerAskViaApi(starterPage, started.runId, requestId)).toBe(200);
+    expect(await answerAskViaApi(starterPage, started.runId, requestId)).toBe(409);
+
+    const after = await getRunDetail(starterPage, started.runId);
+    const answered = after.pending_interactions.find(row => row.tool_use_id === requestId);
+    expect(answered?.status).toBe('answered');
+
+    await archon.resumeWorkflow(started.runId);
+    const resumed = await getRunDetail(starterPage, started.runId);
+    expect(resumed.status).toBe('completed');
+  } finally {
+    await starterCtx.close();
+    await teammateCtx.close();
+    await anonCtx.close();
+  }
+});
+
+test('[P1] Console Ask card submit continues only after explicit CLI resume', async ({
+  browser,
+  archon,
+}) => {
+  const started = await archon.runHitlWorkflow();
+  const starterCtx = await createIdentityContext(browser, archon.baseURL, 'starter');
+  const page = await starterCtx.newPage();
+  try {
+    await openRunDetail(page, started.runId, HITL_ASK_NODE);
+    await expect(page.getByRole('region', { name: `${HITL_ASK_NODE} room` })).toBeVisible({
+      timeout: T.medium,
+    });
+    await submitAskYes(page);
+    await expect(page.getByText(/Answered/i).first()).toBeVisible({ timeout: T.medium });
+    const after = await getRunDetail(page, started.runId);
+    // Last Ask answer unpauses the run row (`paused-ask`). CLI-origin has no
+    // web parent, so the executor is not auto-dispatched — explicit resume required.
+    expect(after.status).toBe('running');
+    expect(after.pending_interactions.some(row => row.status === 'answered')).toBe(true);
+
+    await archon.resumeWorkflow(started.runId);
+    await archon.waitForRunStatus(started.runId, 'completed');
+  } finally {
+    await starterCtx.close();
+  }
+});
+
+test('[P1] CLI-origin composer cannot approve; Chat tab is unavailable without a web parent', async ({
+  page,
+  archon,
+}) => {
+  const started = await archon.runHitlWorkflow();
+  await openLegacyRunDetail(page, started.runId);
+  await expect(page.getByText(/e2e-hitl-run/i).first()).toBeVisible({ timeout: T.medium });
+  await expect(page.getByRole('tab', { name: 'Chat' })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: 'Source Control' })).toBeVisible();
+  await expect(page.getByRole('form', { name: 'Run conversation composer' })).toHaveCount(0);
+
+  const before = await getRunDetail(page, started.runId);
+  expect(before.status).toBe('paused');
+  expect(
+    before.pending_interactions.some(
+      row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
+    )
+  ).toBe(true);
+});
+
+test('[P1] web-origin Ask answer auto-resumes; composer text does not approve the gate', async ({
+  browser,
+  archon,
+}) => {
+  const webRun = await archon.runHitlWorkflowViaWeb();
+  const starterCtx = await createIdentityContext(browser, archon.baseURL, 'starter');
+  const page = await starterCtx.newPage();
+  try {
+    const detail = await getRunDetail(page, webRun.runId);
+    expect(detail.status).toBe('paused');
+    expect(detail.parent_platform_id).toBe(webRun.conversationId);
+
+    const sendStatus = await postConversationMessage(page, webRun.conversationId, 'approve');
+    expect(sendStatus).toBeLessThan(500);
+    const afterComposer = await getRunDetail(page, webRun.runId);
+    expect(afterComposer.status).toBe('paused');
+    expect(
+      afterComposer.pending_interactions.some(
+        row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
+      )
+    ).toBe(true);
+
+    const requestId = afterComposer.pending_interactions.find(
+      row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
+    )?.tool_use_id;
+    expect(requestId).toBeTruthy();
+    if (!requestId) throw new Error('missing Ask request id');
+    expect(await answerAskViaApi(page, webRun.runId, requestId)).toBe(200);
+    await archon.waitForRunStatus(webRun.runId, 'completed', T.xlong);
+  } finally {
+    await starterCtx.close();
+  }
+});
+
+test('[P1] live-start handle observes a run id before CLI exit', async ({ archon }) => {
+  const live = await archon.startHitlWorkflow();
+  const runId = await live.runId;
+  expect(runId.length).toBeGreaterThan(0);
+  const finished = await live.wait();
+  expect(finished.runId).toBe(runId);
+  expect(finished.state).toBe('paused');
+});
+
+test('[P1] production chrome keeps Artifacts and does not ship mockup Replay or view-as', async ({
+  page,
+  archon,
+}) => {
+  const started = await archon.runHitlWorkflow();
+  await openRunDetail(page, started.runId);
+  await expect(page.getByText(/Awaiting input/i).first()).toBeVisible({ timeout: T.medium });
+  await expect(page.getByRole('button', { name: /^Replay$/i })).toHaveCount(0);
+  await expect(page.locator('#btn-replay')).toHaveCount(0);
+  await expect(page.locator('#view-toggle')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Artifacts/ })).toBeVisible();
+  await page.getByRole('button', { name: /^Artifacts/ }).click();
+  await expect(page.getByText(/No artifacts written to disk for this run/i)).toBeVisible({
+    timeout: T.medium,
+  });
+});

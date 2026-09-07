@@ -22,7 +22,7 @@ mock.module('@archon/paths', () => ({
   }),
 }));
 
-const { appendNodeTranscript } = await import('./node-transcript');
+const { appendNodeTranscript, appendToolResultTranscript } = await import('./node-transcript');
 
 beforeEach(() => {
   errorCalls.length = 0;
@@ -82,4 +82,23 @@ test('fails open and excludes the payload from logs', async () => {
   });
   expect(logged[1]).toBe('workflow.node_message_append_failed');
   expect(JSON.stringify(errorCalls)).not.toContain('DO_NOT_LOG');
+});
+
+test('appends a second tool row with output and the same call id', async () => {
+  const received: AppendNodeMessageInput[] = [];
+  await appendToolResultTranscript(collectingStore(received), {
+    workflow_run_id: 'run-1',
+    node_id: 'review',
+    name: 'Read',
+    id: 'tool-1',
+    output: 'HITL_TOOL_OUTPUT_VISIBLE',
+  });
+  expect(received).toEqual([
+    {
+      workflow_run_id: 'run-1',
+      node_id: 'review',
+      kind: 'tool',
+      payload: { name: 'Read', id: 'tool-1', output: 'HITL_TOOL_OUTPUT_VISIBLE' },
+    },
+  ]);
 });

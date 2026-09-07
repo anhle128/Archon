@@ -1,0 +1,179 @@
+import { describe, expect, test } from 'bun:test';
+
+import { AskHumanAwaitingError, type MessageChunk, type NativeTool } from '../types';
+import { E2E_FAKE_CAPABILITIES } from './capabilities';
+import {
+  E2E_FAKE_LOOP_DONE,
+  E2E_FAKE_TOOL_NAME,
+  E2E_FAKE_TOOL_OUTPUT,
+  E2E_FAKE_TOOL_PASS_TEXT,
+  E2eFakeProvider,
+} from './provider';
+
+const USAGE =
+  '<<E2E_USAGE>>[{"provider":"anthropic","model":"claude-sonnet-4","modelSource":"reported","inputTokens":1,"outputTokens":1,"costUsd":0.01}]<</E2E_USAGE>>';
+
+async function collect(stream: AsyncGenerator<MessageChunk>): Promise<MessageChunk[]> {
+  const chunks: MessageChunk[] = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return chunks;
+}
+
+function askTool(handler: NativeTool['handler']): NativeTool {
+  return {
+    name: 'AskHuman',
+    description: 'test AskHuman',
+    inputSchema: { type: 'object' },
+    handler,
+  };
+}
+
+describe('E2eFakeProvider', () => {
+  const provider = new E2eFakeProvider();
+
+  test('retains no-directive assistant + result with no usage', async () => {
+    const chunks = await collect(provider.sendQuery('plain prompt', '/tmp'));
+    expect(chunks).toEqual([
+      { type: 'assistant', content: '[e2e-fake] deterministic response' },
+      { type: 'result', sessionId: expect.any(String) },
+    ]);
+    const result = chunks[1];
+    if (result.type !== 'result') throw new Error('expected result');
+    expect(result.usageBreakdown).toBeUndefined();
+    expect(result.resumed).toBeUndefined();
+  });
+
+  test('retains usage-directive result entries', async () => {
+    const chunks = await collect(provider.sendQuery(USAGE, '/tmp'));
+    const result = chunks[chunks.length - 1];
+    if (result.type !== 'result') throw new Error('expected result');
+    expect(result.usageBreakdown).toEqual([
+      {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4',
+        modelSource: 'reported',
+        inputTokens: 1,
+        outputTokens: 1,
+        costUsd: 0.01,
+      },
+    ]);
+  });
+
+  test('emits tool call and tool_result for emitTool scenario', async () => {
+    const prompt = '<<E2E_SCENARIO>>{"emitTool":true}<</E2E_SCENARIO>>';
+    const chunks = await collect(provider.sendQuery(prompt, '/tmp'));
+    expect(chunks[0]).toEqual({ type: 'assistant', content: E2E_FAKE_TOOL_PASS_TEXT });
+    expect(chunks[1]).toMatchObject({
+      type: 'tool',
+      toolName: E2E_FAKE_TOOL_NAME,
+      toolInput: { path: 'HITL_TOOL_INPUT.txt' },
+    });
+    expect(chunks[2]).toMatchObject({
+      type: 'tool_result',
+      toolName: E2E_FAKE_TOOL_NAME,
+      toolOutput: E2E_FAKE_TOOL_OUTPUT,
+      toolOutcome: 'success',
+    });
+    if (chunks[1].type !== 'tool' || chunks[2].type !== 'tool_result') {
+      throw new Error('expected tool pair');
+    }
+    expect(chunks[1].toolCallId).toBe(chunks[2].toolCallId);
+  });
+
+  test('throws when askHuman scenario has no native tool', async () => {
+    const prompt = '<<E2E_SCENARIO>>{"askHuman":true}<</E2E_SCENARIO>>';
+    await expect(collect(provider.sendQuery(prompt, '/tmp'))).rejects.toThrow(
+      'requires the registered AskHuman native tool'
+    );
+  });
+
+  test('calls AskHuman handler with tool-use id and session id, then rethrows pause', async () => {
+    const prompt = '<<E2E_SCENARIO>>{"askHuman":true}<</E2E_SCENARIO>>';
+    let seenToolUseId: string | undefined;
+    let seenSessionId: string | undefined;
+    const tool = askTool(async (input, context) => {
+      seenToolUseId = context?.toolUseId;
+      seenSessionId = context?.sessionId;
+      const questions = (input as { questions: unknown }).questions;
+      expect(Array.isArray(questions) && questions.length >= 1).toBe(true);
+      throw new AskHumanAwaitingError(context?.toolUseId ?? 'missing', 'ask-starter', 'run-1');
+    });
+
+    await expect(
+      collect(
+        provider.sendQuery(prompt, '/tmp', undefined, {
+          nativeTools: [tool],
+        })
+      )
+    ).rejects.toBeInstanceOf(AskHumanAwaitingError);
+    expect(seenToolUseId).toMatch(/^e2e-fake-ask-/);
+    expect(seenSessionId).toMatch(/^e2e-fake-/);
+  });
+
+  test('consumes resumeInteractions and does not call AskHuman', async () => {
+    const prompt = '<<E2E_SCENARIO>>{"askHuman":true}<</E2E_SCENARIO>>';
+    let handlerCalls = 0;
+    const tool = askTool(async () => {
+      handlerCalls += 1;
+      return 'should-not-run';
+    });
+    const chunks = await collect(
+      provider.sendQuery(prompt, '/tmp', 'sess-resume', {
+        nativeTools: [tool],
+        resumeInteractions: [
+          {
+            tool_use_id: 'ask-1',
+            payload: { answers: [{ questionId: 'proceed', value: 'yes' }] },
+            declined: false,
+          },
+        ],
+      })
+    );
+    expect(handlerCalls).toBe(0);
+    expect(chunks[0]).toMatchObject({ type: 'assistant' });
+    const result = chunks[chunks.length - 1];
+    expect(result).toMatchObject({ type: 'result', sessionId: 'sess-resume', resumed: true });
+  });
+
+  test('emits loop-done text when the prompt contains the marker', async () => {
+    const prompt = `<<E2E_SCENARIO>>{"doneWhenPromptIncludes":"${E2E_FAKE_TOOL_PASS_TEXT}"}<</E2E_SCENARIO>>\n${E2E_FAKE_TOOL_PASS_TEXT}`;
+    const chunks = await collect(provider.sendQuery(prompt, '/tmp'));
+    expect(
+      chunks.some(chunk => chunk.type === 'assistant' && chunk.content === E2E_FAKE_LOOP_DONE)
+    ).toBe(true);
+  });
+
+  test('does not treat the scenario JSON itself as the loop-done marker', async () => {
+    const prompt = `<<E2E_SCENARIO>>{"doneWhenPromptIncludes":"${E2E_FAKE_TOOL_PASS_TEXT}"}<</E2E_SCENARIO>>`;
+    const chunks = await collect(provider.sendQuery(prompt, '/tmp'));
+    expect(
+      chunks.some(chunk => chunk.type === 'assistant' && chunk.content === E2E_FAKE_LOOP_DONE)
+    ).toBe(false);
+  });
+
+  test('throws Query aborted when the signal is already aborted', async () => {
+    const abort = new AbortController();
+    abort.abort();
+    await expect(
+      collect(provider.sendQuery('x', '/tmp', undefined, { abortSignal: abort.signal }))
+    ).rejects.toThrow('Query aborted');
+  });
+
+  test('throws Query aborted during delayMs', async () => {
+    const abort = new AbortController();
+    const prompt = '<<E2E_SCENARIO>>{"delayMs":5000}<</E2E_SCENARIO>>';
+    const pending = collect(
+      provider.sendQuery(prompt, '/tmp', undefined, { abortSignal: abort.signal })
+    );
+    abort.abort();
+    await expect(pending).rejects.toThrow('Query aborted');
+  });
+
+  test('advertises only implemented nativeTools, askHuman, and sessionResume', () => {
+    expect(provider.getCapabilities()).toEqual(E2E_FAKE_CAPABILITIES);
+    expect(E2E_FAKE_CAPABILITIES.nativeTools).toBe(true);
+    expect(E2E_FAKE_CAPABILITIES.askHuman).toBe(true);
+    expect(E2E_FAKE_CAPABILITIES.sessionResume).toBe(true);
+    expect(E2E_FAKE_CAPABILITIES.mcp).toBe(false);
+  });
+});

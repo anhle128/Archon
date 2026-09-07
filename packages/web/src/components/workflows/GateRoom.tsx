@@ -1,12 +1,14 @@
 import { useState } from 'react';
 
 import { ConfirmRunActionDialog } from '@/components/dashboard/ConfirmRunActionDialog';
+import { submitWorkflowRunReviewFeedback } from '@/lib/api';
 
 import { RoomRegion } from './NodeRoom';
 import type { GateChrome } from './select-room-data';
 
 export interface GateRoomProps {
   nodeId: string;
+  runId: string;
   chrome: GateChrome;
   onApprove: () => Promise<void>;
   onReject: (reason?: string) => Promise<void>;
@@ -14,12 +16,17 @@ export interface GateRoomProps {
 
 export function GateRoom({
   nodeId,
+  runId,
   chrome,
   onApprove,
   onReject,
 }: GateRoomProps): React.ReactElement {
   const [actionPending, setActionPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [annotationDraft, setAnnotationDraft] = useState('');
+  const [annotationPending, setAnnotationPending] = useState(false);
+  const [annotationError, setAnnotationError] = useState<string | null>(null);
+  const [receiptStatus, setReceiptStatus] = useState<string | null>(chrome.feedbackReceiptStatus);
 
   async function runAction(action: () => Promise<void>): Promise<void> {
     setActionError(null);
@@ -65,6 +72,60 @@ export function GateRoom({
             Open Plannotator
           </a>
         )}
+        {chrome.gateType === 'plannotator_gate' &&
+        chrome.canDecide &&
+        chrome.reviewSessionId !== null &&
+        chrome.gateId !== null ? (
+          <div className="space-y-2">
+            <input
+              type="text"
+              value={annotationDraft}
+              onChange={(event): void => {
+                setAnnotationDraft(event.target.value);
+              }}
+              placeholder="Annotations / comment…"
+              className="w-full rounded-md border border-border bg-surface-inset px-2 py-1.5 text-sm text-text-primary"
+              disabled={annotationPending}
+            />
+            <button
+              type="button"
+              disabled={annotationPending || annotationDraft.trim().length === 0}
+              className="rounded-md px-2 py-1 text-xs text-primary hover:bg-primary/10 disabled:opacity-50"
+              onClick={(): void => {
+                const gateId = chrome.gateId;
+                const reviewSessionId = chrome.reviewSessionId;
+                if (gateId === null || reviewSessionId === null) return;
+                void (async (): Promise<void> => {
+                  setAnnotationError(null);
+                  setAnnotationPending(true);
+                  try {
+                    const receipt = await submitWorkflowRunReviewFeedback(runId, {
+                      nodeId,
+                      gateId,
+                      reviewSessionId,
+                      requestId: crypto.randomUUID(),
+                      feedback: annotationDraft.trim(),
+                    });
+                    setReceiptStatus(receipt.status);
+                    setAnnotationDraft('');
+                  } catch (error: unknown) {
+                    setAnnotationError(error instanceof Error ? error.message : String(error));
+                  } finally {
+                    setAnnotationPending(false);
+                  }
+                })();
+              }}
+            >
+              Send annotations
+            </button>
+            {receiptStatus !== null ? (
+              <p className="text-xs text-text-secondary">Annotations {receiptStatus}</p>
+            ) : null}
+            {annotationError !== null ? (
+              <p className="text-xs text-error">{annotationError}</p>
+            ) : null}
+          </div>
+        ) : null}
         {chrome.canDecide && (
           <div className="flex items-center gap-2">
             <button

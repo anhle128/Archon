@@ -9,6 +9,8 @@ export function selectNodeRoomMessages(
   selection: LogRowSelection
 ): WorkflowNodeMessage[] {
   const ordered = [...messages].sort((a, b) => a.seq - b.seq);
+  // occurrence-scoped: server already filtered by occurrence_id/attempt_id
+  if (selection.kind === 'occurrence' || selection.kind === 'node') return ordered;
   if (selection.kind !== 'loop_iteration') return ordered;
   const detail = String(selection.iteration);
   const start = ordered.findIndex(

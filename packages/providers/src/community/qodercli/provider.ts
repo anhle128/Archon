@@ -487,7 +487,7 @@ export class QoderCliProvider implements IAgentProvider {
       }
       for await (const chunk of streamStdout(proc.stdout)) {
         stdout = appendCapturedOutput(stdout, chunk);
-        yield { type: 'assistant', content: chunk };
+        yield { type: 'assistant', content: chunk, textMode: 'complete' };
       }
 
       const exitCode = await proc.exited;

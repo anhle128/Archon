@@ -1,15 +1,20 @@
 /**
  * Chronological console Log rows.
  *
- * Server-projected nodeStates remain the lifecycle source. Workflow events
- * only describe loop, route-loop, and approval-gate executions as list metadata.
+ * When server nodeExecutions are available they are the authoritative source:
+ * each occurrence is keyed by occurrence_id (or attempt_id), which avoids
+ * using node-id + iteration as a composite identity for distinct executions.
+ *
+ * Absent nodeExecutions the function falls back to event-based reconstruction
+ * so runs started before Phase 2 server support remain displayable.
  */
-import type { WorkflowEvent, WorkflowNodeState } from '../../skills/runs';
+import type { NodeExecution, WorkflowEvent, WorkflowNodeState } from '../../skills/runs';
 
 export type LogRowSelection =
   | { kind: 'node' }
   | { kind: 'loop_iteration'; iteration: number }
-  | { kind: 'route_iteration'; executionSeq: number };
+  | { kind: 'route_iteration'; executionSeq: number }
+  | { kind: 'occurrence'; occurrenceId: string; attemptId?: string };
 
 export interface LogRow {
   id: string;
@@ -19,6 +24,10 @@ export interface LogRow {
   order: number;
   sourceIndex: number;
   selection: LogRowSelection;
+  /** ISO string – present when built from server nodeExecutions */
+  startedAt?: string;
+  /** ms duration – present when built from server nodeExecutions */
+  durationMs?: number;
 }
 
 function eventData(event: WorkflowEvent): Record<string, unknown> {
@@ -29,10 +38,80 @@ function readPositiveSafeInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : null;
 }
 
+// ---------------------------------------------------------------------------
+// Server-occurrence path
+// ---------------------------------------------------------------------------
+
+function statusFromNodeExecution(raw: string): WorkflowNodeState['status'] {
+  switch (raw) {
+    case 'completed':
+      return 'completed';
+    case 'failed':
+      return 'failed';
+    case 'running':
+      return 'running';
+    case 'pending':
+      return 'pending';
+    case 'skipped':
+    case 'skipped_prior_success':
+    case 'cancelled':
+      return 'skipped';
+    default:
+      return 'running';
+  }
+}
+
+function labelForExecution(baseName: string, exec: NodeExecution): string {
+  if (exec.loop_ancestry && exec.loop_ancestry.length > 0) {
+    const last = exec.loop_ancestry[exec.loop_ancestry.length - 1];
+    if (last) return `${baseName} ×${String(last.iteration)}`;
+  }
+  if (typeof exec.route_activation_seq === 'number') {
+    return `${baseName} #${String(exec.route_activation_seq)}`;
+  }
+  return baseName;
+}
+
+function buildFromOccurrences(
+  nodeExecutions: readonly NodeExecution[],
+  nameById: Map<string, string>
+): LogRow[] {
+  return nodeExecutions.map((exec, order) => {
+    const nodeId = exec.node_id;
+    const baseName = nameById.get(nodeId) ?? nodeId;
+    const rowId = exec.attempt_id ?? exec.occurrence_id ?? `exec:${nodeId}:${String(order)}`;
+    const selection: LogRowSelection =
+      exec.occurrence_id !== undefined
+        ? { kind: 'occurrence', occurrenceId: exec.occurrence_id, attemptId: exec.attempt_id }
+        : { kind: 'node' };
+    return {
+      id: rowId,
+      nodeId,
+      label: labelForExecution(baseName, exec),
+      status: statusFromNodeExecution(exec.status),
+      order,
+      sourceIndex: order,
+      selection,
+      startedAt: exec.started_at,
+      durationMs: exec.duration_ms,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Event-based fallback (unchanged from original)
+// ---------------------------------------------------------------------------
+
 export function buildLogRows(
   nodeStates: readonly WorkflowNodeState[],
-  events: readonly WorkflowEvent[]
+  events: readonly WorkflowEvent[],
+  nodeExecutions?: readonly NodeExecution[]
 ): LogRow[] {
+  if (nodeExecutions && nodeExecutions.length > 0) {
+    const nameById = new Map<string, string>(nodeStates.map(s => [s.nodeId, s.name]));
+    return buildFromOccurrences(nodeExecutions, nameById);
+  }
+
   const statesById = new Map<string, { state: WorkflowNodeState; index: number }>();
   nodeStates.forEach((state, index) => statesById.set(state.nodeId, { state, index }));
   const loopRowsByNode = new Map<string, Map<number, LogRow>>();

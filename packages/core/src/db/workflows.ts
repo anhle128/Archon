@@ -2,7 +2,8 @@
  * Database operations for workflow runs
  */
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
-import { insertWorkflowEvent } from './workflow-events';
+import { insertWorkflowEvent, findReviewFeedbackEventByRequestId } from './workflow-events';
+import { randomUUID } from 'node:crypto';
 import {
   ORPHAN_RESUME_STALE_DAYS,
   resumeWorkflowRunInTransaction,
@@ -15,12 +16,14 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   ApprovalContext,
+  ReviewFeedbackSubmission,
 } from '@archon/workflows/schemas/workflow-run';
 import {
   isApprovalContext,
   RETRYABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
   routeLoopRuntimeMetadataSchema,
+  reviewFeedbackSubmissionSchema,
 } from '@archon/workflows/schemas/workflow-run';
 import {
   envOverlaySnapshotSchema,
@@ -231,18 +234,87 @@ export async function transitionPlannotatorGate(
         return { outcome: 'resolved', resolved: currentApproval.resolved };
       }
 
+      // When entering waiting_decision, always mint a fresh reviewSessionId so
+      // the new annotate child is uniquely identifiable. Never copy the prior
+      // session's feedbackSubmission or decisionClaim — they were for the old
+      // session and must not bleed into the new one.
+      // When leaving waiting_decision (opening, reworking, idle), clear all
+      // session-specific fields so a replacement session starts clean.
+      // Receipts remain in metadata.reviewFeedbackReceipts and review_feedback events.
+      const previousPhase = currentApproval.phase;
+      const receipts = readReviewFeedbackReceipts(currentRun.metadata);
+      let nextReceipts = receipts;
+      const currentSubmission = currentApproval.feedbackSubmission;
+      const now = new Date().toISOString();
+      if (
+        previousPhase === 'waiting_decision' &&
+        input.phase !== 'waiting_decision' &&
+        currentSubmission?.status === 'accepted'
+      ) {
+        const superseded: ReviewFeedbackSubmission = {
+          ...currentSubmission,
+          status: 'superseded',
+        };
+        await insertWorkflowEvent(query, {
+          workflow_run_id: input.runId,
+          event_type: 'review_feedback',
+          step_name: input.nodeId,
+          data: superseded as unknown as Record<string, unknown>,
+        });
+        nextReceipts = mergeReviewFeedbackReceipt(nextReceipts, superseded);
+      } else if (previousPhase === 'reworking' && input.phase === 'waiting_decision') {
+        for (const receipt of Object.values(receipts)) {
+          if (receipt.status !== 'claimed' || receipt.nodeId !== input.nodeId) continue;
+          const processed: ReviewFeedbackSubmission = {
+            ...receipt,
+            status: 'processed',
+            processedAt: now,
+          };
+          await insertWorkflowEvent(query, {
+            workflow_run_id: input.runId,
+            event_type: 'review_feedback',
+            step_name: input.nodeId,
+            data: processed as unknown as Record<string, unknown>,
+          });
+          nextReceipts = mergeReviewFeedbackReceipt(nextReceipts, processed);
+        }
+      } else if (previousPhase === 'reworking' && input.phase === 'idle') {
+        for (const receipt of Object.values(receipts)) {
+          if (receipt.status !== 'claimed' || receipt.nodeId !== input.nodeId) continue;
+          const failed: ReviewFeedbackSubmission = { ...receipt, status: 'failed' };
+          await insertWorkflowEvent(query, {
+            workflow_run_id: input.runId,
+            event_type: 'review_feedback',
+            step_name: input.nodeId,
+            data: failed as unknown as Record<string, unknown>,
+          });
+          nextReceipts = mergeReviewFeedbackReceipt(nextReceipts, failed);
+        }
+      } else if (currentSubmission != null) {
+        nextReceipts = mergeReviewFeedbackReceipt(nextReceipts, currentSubmission);
+      }
+
       const nextApproval: ApprovalContext = {
         ...currentApproval,
         gateId: input.nextGateId ?? input.expectedGateId,
         document: input.document,
         phase: input.phase,
         reviewUrl: input.reviewUrl ?? null,
+        reviewSessionId: input.phase === 'waiting_decision' ? randomUUID() : null,
+        feedbackSubmission: null,
+        decisionClaim: null,
       };
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
          WHERE id = $1`,
-        [input.runId, JSON.stringify({ approval: nextApproval })]
+        [
+          input.runId,
+          JSON.stringify({
+            approval: nextApproval,
+            reviewFeedbackReceipts: nextReceipts,
+          }),
+        ]
       );
       if (result.rowCount === 0) {
         throw new Error(`Workflow run update returned no rows: ${input.runId}`);
@@ -1500,6 +1572,12 @@ export async function pauseWorkflowRun(
             // leak into a later non-child gate via SQLite json_patch deep-merge.
             childRunId: approvalContext.childRunId ?? null,
             reviewUrl: approvalContext.reviewUrl ?? null,
+            // Plannotator gate inline-review fields. Always reset so a prior gate's
+            // session / submission / claim cannot leak into a later pause via
+            // SQLite json_patch deep-merge.
+            reviewSessionId: approvalContext.reviewSessionId ?? null,
+            feedbackSubmission: approvalContext.feedbackSubmission ?? null,
+            decisionClaim: approvalContext.decisionClaim ?? null,
           },
           // Fold caller-supplied run-level metadata (e.g. `pending_writeback`) into the
           // SAME atomic write so there is no window where the run is paused without it (M3).
@@ -1918,6 +1996,295 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
     const err = error as Error;
     getLog().error({ err, olderThanDays }, 'db.workflow_runs_cleanup_failed');
     throw new Error(`Failed to clean up old workflow runs: ${err.message}`);
+  }
+}
+
+const REVIEW_FEEDBACK_RECEIPTS_KEY = 'reviewFeedbackReceipts';
+
+function readReviewFeedbackReceipts(
+  metadata: Record<string, unknown>
+): Record<string, ReviewFeedbackSubmission> {
+  const raw = metadata[REVIEW_FEEDBACK_RECEIPTS_KEY];
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const receipts: Record<string, ReviewFeedbackSubmission> = {};
+  for (const [requestId, value] of Object.entries(raw as Record<string, unknown>)) {
+    const parsed = reviewFeedbackSubmissionSchema.safeParse(value);
+    if (parsed.success) receipts[requestId] = parsed.data;
+  }
+  return receipts;
+}
+
+function mergeReviewFeedbackReceipt(
+  receipts: Record<string, ReviewFeedbackSubmission>,
+  receipt: ReviewFeedbackSubmission
+): Record<string, ReviewFeedbackSubmission> {
+  return { ...receipts, [receipt.requestId]: receipt };
+}
+
+function receiptFromPriorEvent(
+  priorEventData: Record<string, unknown> | null
+): ReviewFeedbackSubmission | null {
+  if (priorEventData === null) return null;
+  const parsed = reviewFeedbackSubmissionSchema.safeParse(priorEventData);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Submit inline review feedback for a plannotator_gate paused in waiting_decision.
+ *
+ * Runs under the run lock; validates gate, session, and phase. Idempotent by
+ * requestId: an identical retry returns the existing receipt; a changed-body
+ * retry or another pending submission for the same session returns conflict.
+ * Writes a `review_feedback` event as the durable audit receipt.
+ */
+export async function submitReviewFeedback(input: {
+  runId: string;
+  nodeId: string;
+  gateId: string;
+  reviewSessionId: string;
+  requestId: string;
+  feedback: string;
+}): Promise<
+  | { outcome: 'accepted'; receipt: ReviewFeedbackSubmission }
+  | { outcome: 'duplicate'; receipt: ReviewFeedbackSubmission }
+  | { outcome: 'conflict'; reason: string }
+  | { outcome: 'rejected'; reason: string; statusCode: number }
+> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      // Lock the run row for the duration of this check-and-write.
+      const currentResult = await query<WorkflowRun>(
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${workflowRunLockClause()}`,
+        [input.runId]
+      );
+      const currentRow = currentResult.rows[0];
+      if (!currentRow) {
+        return { outcome: 'rejected', reason: 'Workflow run not found', statusCode: 404 };
+      }
+
+      const run = normalizeWorkflowRun(currentRow);
+      const receipts = readReviewFeedbackReceipts(run.metadata);
+
+      const priorEventData = await findReviewFeedbackEventByRequestId(
+        query,
+        input.runId,
+        input.requestId
+      );
+      const prior = receiptFromPriorEvent(priorEventData) ?? receipts[input.requestId];
+      if (prior !== undefined && prior !== null) {
+        if (prior.feedback !== input.feedback) {
+          return {
+            outcome: 'conflict',
+            reason: 'A receipt for this requestId already exists with different feedback',
+          };
+        }
+        return { outcome: 'duplicate', receipt: prior };
+      }
+
+      // Terminal runs cannot accept feedback.
+      if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+        return {
+          outcome: 'rejected',
+          reason: `Run is in terminal status '${run.status}'`,
+          statusCode: 400,
+        };
+      }
+      if (run.status !== 'paused') {
+        return {
+          outcome: 'rejected',
+          reason: `Run is not paused (status: '${run.status}')`,
+          statusCode: 400,
+        };
+      }
+
+      const approval = run.metadata.approval;
+      if (!isApprovalContext(approval)) {
+        return { outcome: 'rejected', reason: 'No approval context', statusCode: 400 };
+      }
+      if (approval.type !== 'plannotator_gate') {
+        return { outcome: 'rejected', reason: 'Gate is not a plannotator_gate', statusCode: 400 };
+      }
+      if (approval.nodeId !== input.nodeId) {
+        return { outcome: 'rejected', reason: 'Node ID mismatch', statusCode: 400 };
+      }
+      if (approval.gateId !== input.gateId) {
+        return { outcome: 'rejected', reason: 'Gate ID mismatch', statusCode: 400 };
+      }
+      if (approval.resolved != null) {
+        return { outcome: 'rejected', reason: 'Gate is already resolved', statusCode: 400 };
+      }
+      if (!approval.reviewSessionId) {
+        return {
+          outcome: 'rejected',
+          reason: 'No active review session (gate is not in waiting_decision phase)',
+          statusCode: 400,
+        };
+      }
+      if (approval.reviewSessionId !== input.reviewSessionId) {
+        return { outcome: 'rejected', reason: 'Review session ID mismatch', statusCode: 400 };
+      }
+      if (approval.phase !== 'waiting_decision') {
+        return {
+          outcome: 'rejected',
+          reason: `Gate phase is '${String(approval.phase)}', expected 'waiting_decision'`,
+          statusCode: 400,
+        };
+      }
+
+      // Conflict check: another pending submission already exists for this session.
+      const existing = approval.feedbackSubmission;
+      if (existing?.status === 'accepted' && existing.requestId !== input.requestId) {
+        return {
+          outcome: 'conflict',
+          reason: 'Another submission is already pending for this review session',
+        };
+      }
+
+      const now = new Date().toISOString();
+      const receipt: ReviewFeedbackSubmission = {
+        requestId: input.requestId,
+        reviewSessionId: input.reviewSessionId,
+        nodeId: input.nodeId,
+        gateId: input.gateId,
+        feedback: input.feedback,
+        status: 'accepted',
+        submittedAt: now,
+        source: 'inline',
+      };
+
+      // Store durable audit receipt as an event (throws on failure).
+      await insertWorkflowEvent(query, {
+        workflow_run_id: input.runId,
+        event_type: 'review_feedback',
+        step_name: input.nodeId,
+        data: receipt as unknown as Record<string, unknown>,
+      });
+
+      // Stamp the pending submission into run metadata so the supervisor can see it.
+      const updatedApproval: ApprovalContext = {
+        ...approval,
+        feedbackSubmission: receipt,
+      };
+      await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
+         WHERE id = $1`,
+        [
+          input.runId,
+          JSON.stringify({
+            approval: updatedApproval,
+            reviewFeedbackReceipts: mergeReviewFeedbackReceipt(receipts, receipt),
+          }),
+        ]
+      );
+
+      return { outcome: 'accepted', receipt };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: input.runId }, 'db.review_feedback_submit_failed');
+    throw new Error(`Failed to submit review feedback: ${err.message}`);
+  }
+}
+
+/**
+ * Atomically claim the current plannotator_gate decision so only one source
+ * (inline or native) proceeds to process it. Guards both native annotation and
+ * inline feedback from racing past each other. Returns `{ claimed: true }` when
+ * this caller wins the CAS; `{ claimed: false }` when another source already
+ * set `decisionClaim`.
+ */
+export async function claimGateDecision(input: {
+  runId: string;
+  nodeId: string;
+  gateId: string;
+  reviewSessionId: string;
+  source: 'inline' | 'native';
+  requestId?: string;
+}): Promise<{ claimed: boolean; receipt?: ReviewFeedbackSubmission }> {
+  const dialect = getDialect();
+  try {
+    return await getDatabase().withTransaction(async query => {
+      const currentResult = await query<WorkflowRun>(
+        `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${workflowRunLockClause()}`,
+        [input.runId]
+      );
+      const currentRow = currentResult.rows[0];
+      if (!currentRow) return { claimed: false };
+
+      const run = normalizeWorkflowRun(currentRow);
+      const approval = run.metadata.approval;
+      if (!isApprovalContext(approval)) return { claimed: false };
+      if (
+        approval.type !== 'plannotator_gate' ||
+        approval.nodeId !== input.nodeId ||
+        approval.gateId !== input.gateId ||
+        approval.reviewSessionId !== input.reviewSessionId
+      ) {
+        return { claimed: false };
+      }
+
+      // If a claim was already set, this caller lost the race.
+      if (approval.decisionClaim != null) return { claimed: false };
+
+      const now = new Date().toISOString();
+      const claim: NonNullable<ApprovalContext['decisionClaim']> = {
+        source: input.source,
+        requestId: input.requestId,
+        claimedAt: now,
+      };
+
+      let updatedSubmission: ReviewFeedbackSubmission | null | undefined =
+        approval.feedbackSubmission;
+      // When inline wins, mark the submission as claimed.
+      if (input.source === 'inline' && updatedSubmission?.status === 'accepted') {
+        updatedSubmission = { ...updatedSubmission, status: 'claimed', claimedAt: now };
+      }
+
+      const updatedApproval: ApprovalContext = {
+        ...approval,
+        decisionClaim: claim,
+        feedbackSubmission: updatedSubmission,
+      };
+      const receipts = readReviewFeedbackReceipts(run.metadata);
+      if (input.source === 'inline' && updatedSubmission?.status === 'claimed') {
+        await insertWorkflowEvent(query, {
+          workflow_run_id: input.runId,
+          event_type: 'review_feedback',
+          step_name: input.nodeId,
+          data: updatedSubmission as unknown as Record<string, unknown>,
+        });
+      }
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET metadata = ${dialect.jsonMerge('metadata', 2)}, last_activity_at = ${dialect.now()}
+         WHERE id = $1`,
+        [
+          input.runId,
+          JSON.stringify({
+            approval: updatedApproval,
+            ...(updatedSubmission != null
+              ? {
+                  reviewFeedbackReceipts: mergeReviewFeedbackReceipt(receipts, updatedSubmission),
+                }
+              : {}),
+          }),
+        ]
+      );
+
+      if ((result.rowCount ?? 0) === 0) return { claimed: false };
+
+      const finalSubmission = updatedApproval.feedbackSubmission ?? undefined;
+      return {
+        claimed: true,
+        receipt: finalSubmission ?? undefined,
+      };
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, workflowRunId: input.runId }, 'db.gate_decision_claim_failed');
+    throw new Error(`Failed to claim gate decision: ${err.message}`);
   }
 }
 

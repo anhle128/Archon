@@ -10,6 +10,7 @@ import {
   type ConversationResponse,
   type DagNode,
   type MessageResponse,
+  type NodeExecution,
   type PendingInteraction,
   type WorkflowEventResponse,
   type WorkflowNodeStateResponse,
@@ -27,6 +28,7 @@ import { ChatTimeline } from './ChatTimeline';
 import { LegacyNodeRoom } from './LegacyNodeRoom';
 import { NodeRunList } from './NodeRunList';
 import { resolveGraphRoomRow } from './resolve-graph-room-row';
+import { useStackedViewport } from './source-control/use-stacked-viewport';
 import { resolveRoomKind } from './resolve-room-kind';
 import { resolveTimelineRoomRow } from './resolve-timeline-room-row';
 import { RunChatComposer } from './RunChatComposer';
@@ -42,6 +44,7 @@ export interface LegacyGraphLogsPaneProps {
   runId: string;
   nodeStates: readonly WorkflowNodeStateResponse[];
   events: readonly WorkflowEventResponse[];
+  nodeExecutions?: readonly NodeExecution[];
   loadMessages: typeof getWorkflowNodeMessages;
   parentPlatformId: string | null;
   loadParentMessages: (conversationId: string) => Promise<MessageResponse[]>;
@@ -152,6 +155,7 @@ export function LegacyGraphLogsPane({
   runId,
   nodeStates,
   events,
+  nodeExecutions,
   loadMessages,
   parentPlatformId,
   loadParentMessages,
@@ -171,11 +175,15 @@ export function LegacyGraphLogsPane({
   actionStates,
   onSubmitAsk,
 }: LegacyGraphLogsPaneProps): React.ReactElement {
+  const stacked = useStackedViewport();
   const visibleNodeStates = useMemo(
     () => synthesizeLegacyLogNodeStates({ nodeStates, events, runStatus, approval }),
     [approval, events, nodeStates, runStatus]
   );
-  const rows = useMemo(() => buildLogRows(visibleNodeStates, events), [events, visibleNodeStates]);
+  const rows = useMemo(
+    () => buildLogRows(visibleNodeStates, events, nodeExecutions),
+    [events, nodeExecutions, visibleNodeStates]
+  );
   const [selectedLogRowId, setSelectedLogRowId] = useState<string | null>(null);
   const [selectedTimelineEntryId, setSelectedTimelineEntryId] = useState<string | null>(null);
   const [chatDraft, setChatDraft] = useState('');
@@ -369,39 +377,50 @@ export function LegacyGraphLogsPane({
       </div>
     );
 
+  const roomPane = (
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+      {roomHeader}
+      <LegacyNodeRoom
+        runId={runId}
+        row={selectedRow}
+        loadMessages={loadMessages}
+        definitionNodes={definitionNodes}
+        definitionPending={definitionPending}
+        events={events}
+        runStatus={runStatus}
+        approval={approval}
+        onApprove={onApprove}
+        onReject={onReject}
+        pendingInteractions={pendingInteractions}
+        viewerIsStarter={viewerIsStarter}
+        starterDisplayName={starterDisplayName}
+        actionStates={actionStates}
+        onSubmitAsk={onSubmitAsk}
+        nodeState={
+          selectedRow === null
+            ? undefined
+            : visibleNodeStates.find(state => state.nodeId === selectedRow.nodeId)
+        }
+      />
+      {roomFooter}
+    </div>
+  );
+
   return (
-    <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
-      <ResizablePanel defaultSize={60} minSize={30}>
+    <ResizablePanelGroup
+      orientation={stacked ? 'vertical' : 'horizontal'}
+      className="min-h-0 flex-1"
+    >
+      <ResizablePanel defaultSize={stacked ? 45 : 67} minSize={stacked ? 28 : 48}>
         {leftPane}
       </ResizablePanel>
-      <ResizableHandle withHandle />
-      <ResizablePanel defaultSize={40} minSize={20}>
-        <div className="flex h-full min-h-0 flex-col overflow-hidden">
-          {roomHeader}
-          <LegacyNodeRoom
-            runId={runId}
-            row={selectedRow}
-            loadMessages={loadMessages}
-            definitionNodes={definitionNodes}
-            definitionPending={definitionPending}
-            events={events}
-            runStatus={runStatus}
-            approval={approval}
-            onApprove={onApprove}
-            onReject={onReject}
-            pendingInteractions={pendingInteractions}
-            viewerIsStarter={viewerIsStarter}
-            starterDisplayName={starterDisplayName}
-            actionStates={actionStates}
-            onSubmitAsk={onSubmitAsk}
-            nodeState={
-              selectedRow === null
-                ? undefined
-                : visibleNodeStates.find(state => state.nodeId === selectedRow.nodeId)
-            }
-          />
-          {roomFooter}
-        </div>
+      <ResizableHandle withHandle aria-label="Resize node room" />
+      <ResizablePanel
+        defaultSize={stacked ? 55 : 33}
+        minSize={stacked ? 32 : 22}
+        maxSize={stacked ? 72 : 52}
+      >
+        {roomPane}
       </ResizablePanel>
     </ResizablePanelGroup>
   );

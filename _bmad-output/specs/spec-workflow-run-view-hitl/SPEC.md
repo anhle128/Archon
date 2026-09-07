@@ -3,13 +3,19 @@ id: SPEC-workflow-run-view-hitl
 companions:
   - hitl-contract.md
   - brownfield.md
+  - ux-design.md
+  - ux-mockup/index.html
+  - ux-mockup/console.html
+  - ux-mockup/app.js
+  - ux-mockup/console-app.js
+  - ux-mockup/styles.css
   - ../../planning-artifacts/architecture/architecture-Archon-2026-09-05/ARCHITECTURE-SPINE.md
   - ../../project-context.md
 sources:
   - ../../planning-artifacts/architecture/architecture-Archon-2026-09-05/.memlog.md
 ---
 
-> **Canonical contract.** This SPEC and the files in `companions:` are the complete, preservation-validated contract for what to build, test, and validate. Source documents listed in frontmatter are for traceability — consult them only if you need narrative rationale this contract intentionally omits. Implementation HOW is the architecture spine (AD-1–AD-9); this kernel is WHAT.
+> **Canonical contract.** This SPEC and the files in `companions:` are the complete, preservation-validated contract for what to build, test, and validate. UX design and the five `ux-mockup/` files are required companions for implementation and review. `ux-prototype/` is not the visual authority. Direct mockup-vs-product reference comparison is a story completion condition, not an optional walkthrough. Source documents listed in frontmatter are for traceability — consult them only if you need narrative rationale this contract intentionally omits. Implementation HOW is the architecture spine (AD-1–AD-9); this kernel is WHAT. Generated OpenAPI types (`packages/web/src/lib/api.generated.d.ts`) are the machine authority for wire fields — do not copy every field into this document.
 
 # Workflow Run View HITL
 
@@ -49,7 +55,7 @@ Operators watching a live Archon workflow cannot ask an in-flight agent node a s
 
 ## Constraints
 
-- Ship **both** legacy `WorkflowExecution` and `/console`. Engine and contract are surface-agnostic; each surface is a thin renderer of the same envelope, states, validity, and copy — not a shared React NodePanel.
+- Ship **both** legacy `WorkflowExecution` and `/console`. Engine and contract are surface-agnostic; each surface is a thin renderer of the same envelope, states, validity, and copy — not a shared React NodePanel. Console isolation forbids importing production React components; only the sanctioned `packages/web/src/lib/run-graph/` constants and generated API types are shared.
 - AskHuman tool invocation is the **only** ask channel. Never classify assistant prose as an ask. A model that asks in prose is an accepted residual. Do not wrap Claude `AskUserQuestion`. Console Reply/composer is not HITL.
 - No workflow YAML authoring-language changes.
 - Wait indefinitely at an Ask — no timeout, no auto-default, no autonomous lifecycle mutation of non-terminal work.

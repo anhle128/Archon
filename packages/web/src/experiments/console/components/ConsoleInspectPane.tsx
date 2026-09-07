@@ -50,7 +50,11 @@ export interface ConsoleInspectPaneProps {
   onSelectNode: (nodeId: string, rowId?: string) => void;
   onCloseRoom: () => void;
   loadDefinition: (workflowName: string, cwd: string) => Promise<DagNode[]>;
-  loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+  loadMessages: (
+    runId: string,
+    nodeId: string,
+    options?: { occurrenceId?: string; attemptId?: string }
+  ) => Promise<WorkflowNodeMessagesResponse>;
   pendingInteractions: readonly PendingInteraction[];
   viewerIsStarter: boolean;
   starterDisplayName: string | null;
@@ -163,7 +167,7 @@ export function ConsoleInspectPane({
       </div>
       <aside
         data-testid="console-inspect-room"
-        className="flex max-h-[40vh] min-h-0 w-full shrink-0 flex-col border-t border-border lg:max-h-none lg:w-[380px] lg:border-l lg:border-t-0"
+        className="flex max-h-[40vh] min-h-0 w-full shrink-0 flex-col border-t border-border lg:max-h-none lg:w-[460px] lg:min-w-[320px] lg:max-w-[720px] lg:border-l lg:border-t-0"
       >
         <ConsoleNodeRoom
           run={run}

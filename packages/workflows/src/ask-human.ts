@@ -13,6 +13,7 @@ import {
   type NativeToolHandlerContext,
 } from '@archon/providers/types';
 import { z } from '@hono/zod-openapi';
+import type { TranscriptExecutionScope } from './schemas/node-execution';
 import { askHumanQuestionSchema } from './schemas/pending-interaction';
 import type { IWorkflowStore } from './store';
 
@@ -62,10 +63,12 @@ export interface CreateAskHumanToolInput {
   store: IWorkflowStore;
   workflowRunId: string;
   nodeId: string;
+  /** Live getter so reask/retry attempts persist the current attempt id. */
+  getExecutionScope?: () => TranscriptExecutionScope | undefined;
 }
 
 export function createAskHumanTool(input: CreateAskHumanToolInput): NativeTool {
-  const { store, workflowRunId, nodeId } = input;
+  const { store, workflowRunId, nodeId, getExecutionScope } = input;
 
   return {
     name: 'AskHuman',
@@ -90,6 +93,7 @@ export function createAskHumanTool(input: CreateAskHumanToolInput): NativeTool {
         throw new Error('AskHuman requires a provider session id');
       }
 
+      const executionScope = getExecutionScope?.();
       await store.insertPendingInteraction({
         workflow_run_id: workflowRunId,
         node_id: nodeId,
@@ -97,6 +101,7 @@ export function createAskHumanTool(input: CreateAskHumanToolInput): NativeTool {
         kind: 'ask',
         envelope: { questions },
         provider_session_id: sessionId,
+        ...(executionScope !== undefined ? { execution_scope: executionScope } : {}),
       });
 
       getLog().info({ workflowRunId, nodeId, toolUseId, kind: 'ask' }, 'workflow.ask_pending');

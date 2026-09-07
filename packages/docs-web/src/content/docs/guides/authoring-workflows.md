@@ -626,6 +626,7 @@ nodes:
 - `undefined` (field absent) and `[]` have different semantics — absent means use default tool set, `[]` means no tools
 - Set tool restrictions only when the [Provider Capability Matrix](/reference/provider-capabilities/) marks the resolved provider as supported.
 - Unsupported providers emit a warning and ignore these fields, so they do not enforce a security boundary.
+- **`AskHuman` is a special case:** listing `AskHuman` (or `mcp__archon__AskHuman`) in `allowed_tools` on a provider that does not support mid-turn questions (Codex, Grok, OpenCode, Copilot) **fails the run at start** — it does not warn and continue. Only `claude` and `pi` support `AskHuman`. See [Provider Capability Matrix](/reference/provider-capabilities/).
 
 ### Inline sub-agents (`agents:`)
 

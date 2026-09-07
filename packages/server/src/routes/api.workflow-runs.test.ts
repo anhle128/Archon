@@ -310,6 +310,20 @@ const mockTransitionPlannotatorGate = mock(async (_input: unknown) => ({
   approval: {},
 }));
 const mockFindChildRuns = mock(async (_parentRunId: string): Promise<unknown[]> => []);
+const mockSubmitReviewFeedback = mock(async (_input: unknown) => ({
+  outcome: 'accepted' as const,
+  receipt: {
+    requestId: 'aaaaaaaa-0000-0000-0000-000000000001',
+    reviewSessionId: 'bbbbbbbb-0000-0000-0000-000000000001',
+    nodeId: 'review',
+    gateId: 'gate-1',
+    feedback: 'looks good',
+    status: 'accepted' as const,
+    submittedAt: new Date().toISOString(),
+    source: 'inline' as const,
+  },
+}));
+const mockClaimGateDecision = mock(async (_input: unknown) => ({ claimed: true }));
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mockListWorkflowRuns,
@@ -323,6 +337,8 @@ mock.module('@archon/core/db/workflows', () => ({
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
   transitionPlannotatorGate: mockTransitionPlannotatorGate,
   getWorkflowRunByWorkerPlatformId: mockGetWorkflowRunByWorkerPlatformId,
+  submitReviewFeedback: mockSubmitReviewFeedback,
+  claimGateDecision: mockClaimGateDecision,
 }));
 
 const mockCreateWorkflowEvent = mock(async (_event: unknown) => {});
@@ -534,10 +550,6 @@ class WorkflowEnvCorruptRowError extends Error {
   }
 }
 
-const mockListNodeMessages = mock(
-  async (_runId: string, _nodeId: string) => [] as MockNodeMessageRow[]
-);
-
 type MockNodeMessageRow = {
   id: string;
   workflow_run_id: string;
@@ -546,10 +558,24 @@ type MockNodeMessageRow = {
   kind: 'text' | 'tool' | 'status';
   payload: Record<string, unknown>;
   created_at: Date | string;
+  metadata?: Record<string, unknown> | null;
 };
+
+const mockListNodeMessages = mock(
+  async (_runId: string, _nodeId: string, _query?: Record<string, unknown>) =>
+    [] as MockNodeMessageRow[]
+);
+const mockGetNodeMessage = mock(
+  async (_runId: string, _nodeId: string, _messageId: string) => null as MockNodeMessageRow | null
+);
+const mockGetNodeMessageHighWatermark = mock(
+  async (_runId: string, _nodeId: string, _query?: Record<string, unknown>) => 0
+);
 
 mock.module('@archon/core/db/workflow-node-messages', () => ({
   listNodeMessages: mockListNodeMessages,
+  getNodeMessage: mockGetNodeMessage,
+  getNodeMessageHighWatermark: mockGetNodeMessageHighWatermark,
 }));
 
 type MockPendingInteractionRow = {
@@ -2889,8 +2915,12 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockListNodeMessages.mockReset();
+    mockGetNodeMessage.mockReset();
+    mockGetNodeMessageHighWatermark.mockReset();
     mockApiLogError.mockReset();
     mockListNodeMessages.mockImplementation(async () => []);
+    mockGetNodeMessage.mockImplementation(async () => null);
+    mockGetNodeMessageHighWatermark.mockImplementation(async () => 0);
     mockListPendingInteractions.mockReset();
     mockListPendingInteractions.mockImplementation(async () => []);
   });
@@ -3099,6 +3129,139 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     expect(serialized).not.toContain('envelope');
     expect(body.messages[0]?.payload.envelope).toBeUndefined();
     expect(body.messages[0]?.payload.questions).toBeUndefined();
+  });
+
+  test('no-query response is exactly { messages } with no metadata or paging keys', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockListNodeMessages.mockImplementationOnce(async () => [
+      {
+        id: 'msg-meta',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'plan',
+        seq: 1,
+        kind: 'text',
+        payload: { text: 'hello' },
+        created_at: '2026-01-01T00:00:00.000Z',
+        metadata: {
+          execution: {
+            occurrence_id: '11111111-1111-4111-8111-111111111111',
+            attempt_id: '22222222-2222-4222-8222-222222222222',
+            retry_epoch: 0,
+          },
+        },
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/nodes/plan/messages');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(['messages']);
+    const messages = body.messages as Array<Record<string, unknown>>;
+    expect(Object.keys(messages[0] ?? {}).sort()).toEqual([
+      'created_at',
+      'id',
+      'kind',
+      'payload',
+      'seq',
+    ]);
+    expect(messages[0]).not.toHaveProperty('metadata');
+    expect(body).not.toHaveProperty('nextCursor');
+    expect(body).not.toHaveProperty('hasMore');
+    expect(body).not.toHaveProperty('highWatermark');
+    expect(mockListNodeMessages.mock.calls[0]).toEqual(['run-uuid-1', 'plan']);
+  });
+
+  test('cursor mode returns metadata, nextCursor, hasMore, and highWatermark', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+    mockGetNodeMessageHighWatermark.mockImplementationOnce(async () => 3);
+    mockListNodeMessages.mockImplementationOnce(async () => [
+      {
+        id: 'msg-1',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'plan',
+        seq: 1,
+        kind: 'tool',
+        payload: {
+          name: 'Read',
+          id: 'tool-1',
+          input: { path: 'a.ts' },
+          output: 'HITL_TOOL_OUTPUT',
+        },
+        created_at: '2026-01-01T00:00:00.000Z',
+        metadata: {
+          execution: {
+            occurrence_id: '11111111-1111-4111-8111-111111111111',
+            attempt_id: '22222222-2222-4222-8222-222222222222',
+            retry_epoch: 0,
+          },
+          tool_phase: 'result',
+        },
+      },
+      {
+        id: 'msg-2',
+        workflow_run_id: 'run-uuid-1',
+        node_id: 'plan',
+        seq: 2,
+        kind: 'text',
+        payload: { text: 'next' },
+        created_at: '2026-01-01T00:00:01.000Z',
+      },
+    ]);
+
+    const { app } = makeApp();
+    const response = await app.request(
+      '/api/workflows/runs/run-uuid-1/nodes/plan/messages?limit=1&afterSeq=0'
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      messages: Array<Record<string, unknown>>;
+      nextCursor?: string;
+      hasMore?: boolean;
+      highWatermark?: number;
+    };
+    expect(body.hasMore).toBe(true);
+    expect(body.nextCursor).toBe('1');
+    expect(body.highWatermark).toBe(3);
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0]?.metadata).toEqual({
+      execution: {
+        occurrence_id: '11111111-1111-4111-8111-111111111111',
+        attempt_id: '22222222-2222-4222-8222-222222222222',
+        retry_epoch: 0,
+      },
+      tool_phase: 'result',
+    });
+    expect(mockListNodeMessages.mock.calls[0]?.[2]).toEqual({
+      afterSeq: 0,
+      limit: 2,
+    });
+  });
+
+  test('rejects invalid cursor limit and afterSeq with 400 and does not list rows', async () => {
+    mockGetWorkflowRun.mockImplementation(async () => MOCK_RUNNING_RUN);
+    const { app } = makeApp();
+
+    const overLimit = await app.request(
+      '/api/workflows/runs/run-uuid-1/nodes/plan/messages?limit=501'
+    );
+    expect(overLimit.status).toBe(400);
+    const overBody = (await overLimit.json()) as { error: string };
+    expect(overBody.error.toLowerCase()).toContain('limit');
+
+    const negative = await app.request(
+      '/api/workflows/runs/run-uuid-1/nodes/plan/messages?afterSeq=-1'
+    );
+    expect(negative.status).toBe(400);
+    const negativeBody = (await negative.json()) as { error: string };
+    expect(negativeBody.error.toLowerCase()).toContain('afterseq');
+
+    const badUuid = await app.request(
+      '/api/workflows/runs/run-uuid-1/nodes/plan/messages?occurrenceId=not-a-uuid'
+    );
+    expect(badUuid.status).toBe(400);
+
+    expect(mockListNodeMessages).not.toHaveBeenCalled();
   });
 
   test('OpenAPI documents the nested messages path and required pending_interactions', async () => {
@@ -5597,4 +5760,302 @@ describe('POST /api/workflows/runs/:runId/nodes/:nodeId/retry', () => {
   );
   test.todo('rejects CLI-created runs with actionable workflow retry-node guidance', () => {});
   test.todo('rejects non-web parent conversations with CLI retry guidance', () => {});
+});
+
+// ---------------------------------------------------------------------------
+// Tests: POST /api/workflows/runs/:runId/review-feedback
+// ---------------------------------------------------------------------------
+
+const REVIEW_RUN_ID = 'run-review-1';
+const REVIEW_NODE_ID = 'plannotator-node';
+const REVIEW_GATE_ID = 'gate-abc123';
+const REVIEW_SESSION_ID = 'cccccccc-cccc-4ccc-accc-cccccccccccc';
+const REVIEW_REQUEST_ID = 'dddddddd-dddd-4ddd-addd-dddddddddddd';
+const REVIEW_FEEDBACK = 'Please fix the indentation in section 3.';
+
+function makePausedPlannotatorRun(overrides?: Partial<MockWorkflowRun>): MockWorkflowRun {
+  return {
+    id: REVIEW_RUN_ID,
+    workflow_name: 'plan',
+    conversation_id: 'conv-1',
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'paused',
+    user_message: 'review docs',
+    started_at: NOW,
+    completed_at: null,
+    last_activity_at: NOW,
+    working_path: null,
+    metadata: {
+      approval: {
+        type: 'plannotator_gate',
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        message: 'Please review',
+        phase: 'waiting_decision',
+        reviewSessionId: REVIEW_SESSION_ID,
+        resolved: null,
+      },
+    },
+    ...overrides,
+  };
+}
+
+describe('POST /api/workflows/runs/:runId/review-feedback', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockSubmitReviewFeedback.mockReset();
+  });
+
+  test('returns 404 when run does not exist', async () => {
+    mockSubmitReviewFeedback.mockImplementationOnce(async () => ({
+      outcome: 'rejected' as const,
+      reason: 'Workflow run not found',
+      statusCode: 404,
+    }));
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        requestId: REVIEW_REQUEST_ID,
+        feedback: REVIEW_FEEDBACK,
+      }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  test('returns 200 with receipt when feedback is accepted', async () => {
+    const submittedAt = new Date().toISOString();
+    mockSubmitReviewFeedback.mockImplementationOnce(async () => ({
+      outcome: 'accepted' as const,
+      receipt: {
+        requestId: REVIEW_REQUEST_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        feedback: REVIEW_FEEDBACK,
+        status: 'accepted' as const,
+        submittedAt,
+        source: 'inline' as const,
+      },
+    }));
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        requestId: REVIEW_REQUEST_ID,
+        feedback: REVIEW_FEEDBACK,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      requestId: string;
+      reviewSessionId: string;
+      status: string;
+      submittedAt: string;
+    };
+    expect(body.requestId).toBe(REVIEW_REQUEST_ID);
+    expect(body.reviewSessionId).toBe(REVIEW_SESSION_ID);
+    expect(body.status).toBe('accepted');
+    expect(body.submittedAt).toBe(submittedAt);
+  });
+
+  test('returns 200 for idempotent duplicate requestId', async () => {
+    const submittedAt = new Date().toISOString();
+    mockSubmitReviewFeedback.mockImplementationOnce(async () => ({
+      outcome: 'duplicate' as const,
+      receipt: {
+        requestId: REVIEW_REQUEST_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        feedback: REVIEW_FEEDBACK,
+        status: 'accepted' as const,
+        submittedAt,
+        source: 'inline' as const,
+      },
+    }));
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        requestId: REVIEW_REQUEST_ID,
+        feedback: REVIEW_FEEDBACK,
+      }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  test('returns 409 for changed-body retry with same requestId', async () => {
+    mockSubmitReviewFeedback.mockImplementationOnce(async () => ({
+      outcome: 'conflict' as const,
+      reason: 'A receipt for this requestId already exists with different feedback',
+    }));
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        requestId: REVIEW_REQUEST_ID,
+        feedback: 'changed feedback text',
+      }),
+    });
+    expect(res.status).toBe(409);
+  });
+
+  test('returns 409 when another submission is already pending for the session', async () => {
+    mockSubmitReviewFeedback.mockImplementationOnce(async () => ({
+      outcome: 'conflict' as const,
+      reason: 'Another submission is already pending for this review session',
+    }));
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        requestId: 'eeeeeeee-eeee-4eee-aeee-eeeeeeeeeeee',
+        feedback: REVIEW_FEEDBACK,
+      }),
+    });
+    expect(res.status).toBe(409);
+  });
+
+  test('returns 400 for wrong gate ID', async () => {
+    mockSubmitReviewFeedback.mockImplementationOnce(async () => ({
+      outcome: 'rejected' as const,
+      reason: 'Gate ID mismatch',
+      statusCode: 400,
+    }));
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: 'wrong-gate',
+        reviewSessionId: REVIEW_SESSION_ID,
+        requestId: REVIEW_REQUEST_ID,
+        feedback: REVIEW_FEEDBACK,
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 400 for wrong review session ID', async () => {
+    mockSubmitReviewFeedback.mockImplementationOnce(async () => ({
+      outcome: 'rejected' as const,
+      reason: 'Review session ID mismatch',
+      statusCode: 400,
+    }));
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        reviewSessionId: 'ffffffff-0000-0000-0000-000000000001',
+        requestId: REVIEW_REQUEST_ID,
+        feedback: REVIEW_FEEDBACK,
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 400 for terminal run', async () => {
+    mockSubmitReviewFeedback.mockImplementationOnce(async () => ({
+      outcome: 'rejected' as const,
+      reason: "Run is in terminal status 'completed'",
+      statusCode: 400,
+    }));
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        requestId: REVIEW_REQUEST_ID,
+        feedback: REVIEW_FEEDBACK,
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects missing required fields (strict schema)', async () => {
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodeId: REVIEW_NODE_ID }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects extra unknown keys (strict schema)', async () => {
+    const { app } = makeApp();
+    const res = await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        requestId: REVIEW_REQUEST_ID,
+        feedback: REVIEW_FEEDBACK,
+        extraField: 'should be rejected',
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test('does not auto-resume the run on feedback accepted', async () => {
+    const submittedAt = new Date().toISOString();
+    mockSubmitReviewFeedback.mockImplementationOnce(async () => ({
+      outcome: 'accepted' as const,
+      receipt: {
+        requestId: REVIEW_REQUEST_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        feedback: REVIEW_FEEDBACK,
+        status: 'accepted' as const,
+        submittedAt,
+        source: 'inline' as const,
+      },
+    }));
+    const { app } = makeApp();
+    await app.request(`/api/workflows/runs/${REVIEW_RUN_ID}/review-feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodeId: REVIEW_NODE_ID,
+        gateId: REVIEW_GATE_ID,
+        reviewSessionId: REVIEW_SESSION_ID,
+        requestId: REVIEW_REQUEST_ID,
+        feedback: REVIEW_FEEDBACK,
+      }),
+    });
+    // resolveApprovalGate must NOT be called — HTTP 200 means accepted/pending, not approved.
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
 });

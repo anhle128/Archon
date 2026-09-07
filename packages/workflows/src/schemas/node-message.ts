@@ -5,10 +5,12 @@
  * Types are derived with `z.infer`. Import `z` from `@hono/zod-openapi`.
  */
 import { z } from '@hono/zod-openapi';
+import { nodeTranscriptMetadataSchema } from './node-execution';
 
 const identityShape = {
   workflow_run_id: z.string().min(1),
   node_id: z.string().min(1),
+  metadata: nodeTranscriptMetadataSchema.nullable().optional(),
 };
 
 export const nodeMessageTextPayloadSchema = z.object({ text: z.string().min(1) }).strict();

@@ -1,6 +1,6 @@
 ---
 title: 'Phase 3: Legacy Run View and Shared Graph'
-status: todo
+status: done
 ---
 
 # Phase 3: Legacy Run View and Shared Graph
@@ -139,18 +139,18 @@ No new graph dependency is needed.
 
 ## Protection Checklist and Consumers
 
-- [ ] `mapWorkflowRunDetail` retains all existing run fields and `parentPlatformId`.
-- [ ] `buildLogRows` is consumed by `LegacyGraphLogsPane`; its tests change with the server-adapter contract.
-- [ ] `selectNodeRoomMessages` is used by `NodeRoom` and `NodeTranscriptPane`; both require exact scope.
-- [ ] `buildChatTimeline` remains the timeline adapter used by `LegacyGraphLogsPane`.
-- [ ] `createAskAnswerController` remains owned by `WorkflowExecution`, not each rendered AskCard.
-- [ ] `RunChatComposer` stays a controlled presentational component; send authorization stays at the existing boundary.
-- [ ] Shared graph exports are consumed by Legacy `WorkflowDagViewer`, `ExecutionDagNode`, `RunGraphRouteEdge`, and Console `RunGraphPanel`/graph adapter.
-- [ ] No production component, hook, context or store is imported into Console.
-- [ ] Existing Source Control tab actions, gate states and usage summaries remain accessible.
-- [ ] Focus and drafts survive polling and panel/tab changes.
-- [ ] Long output wraps or scrolls within its own content region, never over adjacent controls.
-- [ ] Raw tool output remains escaped text; keep current safe Markdown/link handling and do not copy mockup innerHTML renderers.
+- [x] `mapWorkflowRunDetail` retains all existing run fields and `parentPlatformId`.
+- [x] `buildLogRows` is consumed by `LegacyGraphLogsPane`; its tests change with the server-adapter contract.
+- [x] `selectNodeRoomMessages` is used by `NodeRoom` and `NodeTranscriptPane`; both require exact scope.
+- [x] `buildChatTimeline` remains the timeline adapter used by `LegacyGraphLogsPane`.
+- [x] `createAskAnswerController` remains owned by `WorkflowExecution`, not each rendered AskCard.
+- [x] `RunChatComposer` stays a controlled presentational component; send authorization stays at the existing boundary.
+- [x] Shared graph exports are consumed by Legacy `WorkflowDagViewer`, `ExecutionDagNode`, `RunGraphRouteEdge`, and Console `RunGraphPanel`/graph adapter.
+- [x] No production component, hook, context or store is imported into Console.
+- [x] Existing Source Control tab actions, gate states and usage summaries remain accessible.
+- [x] Focus and drafts survive polling and panel/tab changes.
+- [x] Long output wraps or scrolls within its own content region, never over adjacent controls.
+- [x] Raw tool output remains escaped text; keep current safe Markdown/link handling and do not copy mockup innerHTML renderers.
 
 ## Test Inventory and Commands
 
@@ -206,11 +206,11 @@ Do not run an unscoped `bun test` from the root.
 
 ## Acceptance and Rollback
 
-- [ ] Every Legacy item in Phase 1's inventory has a completed evidence row.
-- [ ] The red tool-card and history reproduction passes.
-- [ ] Side-by-side reference comparison covers all room kinds and Graph/Logs/Chat.
-- [ ] Shared graph tests pass before Phase 4 consumes the changes.
-- [ ] No new visual token lacks a documented owner.
+- [x] Every Legacy item in Phase 1's inventory has a completed evidence row.
+- [x] The red tool-card and history reproduction passes.
+- [x] Side-by-side reference comparison covers all room kinds and Graph/Logs/Chat.
+- [x] Shared graph tests pass before Phase 4 consumes the changes.
+- [x] No new visual token lacks a documented owner.
 
 Main risk: shared graph changes can affect Console before Phase 4.
 Keep optional additions backward-compatible and run Console graph tests with the shared patch.

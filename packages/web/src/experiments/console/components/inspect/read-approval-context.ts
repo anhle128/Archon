@@ -13,6 +13,13 @@ export interface ApprovalContext {
   document?: string;
   reviewUrl?: string | null;
   resolved?: 'approved' | 'rejected' | null;
+  gateId?: string;
+  reviewSessionId?: string | null;
+  feedbackSubmission?: {
+    status: string;
+    submittedAt?: string;
+    requestId?: string;
+  } | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -52,6 +59,18 @@ export function readApprovalContext(value: unknown): ApprovalContext | null {
       : {}),
     ...(value.resolved === 'approved' || value.resolved === 'rejected' || value.resolved === null
       ? { resolved: value.resolved }
+      : {}),
+    ...(typeof value.gateId === 'string' ? { gateId: value.gateId } : {}),
+    ...(typeof value.reviewSessionId === 'string' || value.reviewSessionId === null
+      ? { reviewSessionId: value.reviewSessionId }
+      : {}),
+    ...(value.feedbackSubmission !== undefined
+      ? {
+          feedbackSubmission:
+            value.feedbackSubmission === null || typeof value.feedbackSubmission === 'object'
+              ? (value.feedbackSubmission as ApprovalContext['feedbackSubmission'])
+              : null,
+        }
       : {}),
   };
 }

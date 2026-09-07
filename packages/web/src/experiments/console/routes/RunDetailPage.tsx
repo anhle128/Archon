@@ -242,7 +242,7 @@ export function RunDetailPage(): ReactElement {
   }, [detail]);
 
   const logRows = useMemo(
-    () => buildLogRows(inspectNodeStates, detail?.rawEvents ?? []),
+    () => buildLogRows(inspectNodeStates, detail?.rawEvents ?? [], detail?.nodeExecutions),
     [inspectNodeStates, detail]
   );
 
@@ -592,7 +592,7 @@ export function RunDetailPage(): ReactElement {
 
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
-      <section className="flex h-full flex-col">
+      <section className="console-run-view flex h-full flex-col">
         <RunDetailHeader
           run={run}
           projectId={projectId}

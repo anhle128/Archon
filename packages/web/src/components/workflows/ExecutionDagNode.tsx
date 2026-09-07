@@ -4,6 +4,7 @@ import type { NodeProps, Node } from '@xyflow/react';
 import type { DagNodeData } from './DagNodeComponent';
 import type { RouteLoopDecisionData, RuntimeNodeMetadata, WorkflowStepStatus } from '@/lib/types';
 import { formatDurationMs } from '@/lib/format';
+import { NODE_HEIGHT, NODE_WIDTH } from '@/lib/run-graph/constants';
 import { nodeStatusLabel } from './awaiting-chrome';
 import { StatusIcon } from './StatusIcon';
 
@@ -89,7 +90,8 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
 
   return (
     <div
-      className={`rounded-lg border border-border px-3 py-2 min-w-[180px] max-w-[220px] transition-all duration-300 ${style}${data.selected ? ' ring-2 ring-accent-bright' : ''}`}
+      className={`rounded-lg border border-border px-3 py-2 transition-all duration-300 ${style}${data.selected ? ' ring-2 ring-accent-bright' : ''}`}
+      style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
     >
       <Handle type="target" position={Position.Top} className="!bg-border !w-2 !h-2" />
       <div className="flex items-center gap-2">

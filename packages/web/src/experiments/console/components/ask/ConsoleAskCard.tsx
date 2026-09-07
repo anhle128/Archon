@@ -20,6 +20,8 @@ export interface ConsoleAskCardProps {
   nodeId: string;
   autoFocus: boolean;
   nowMs: number;
+  /** Unique per mount context so stream and room copies never share a DOM id. */
+  mountContext?: string;
   onSubmit: (body: Extract<AskAnswerBody, { answers: unknown }>) => void;
   onDecline: () => void;
 }
@@ -110,6 +112,7 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
     nodeId,
     autoFocus,
     nowMs,
+    mountContext = 'default',
     onSubmit,
     onDecline,
   } = props;
@@ -229,7 +232,7 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                     {question.prompt}
                   </legend>
                   {question.options.map((option, optionIndex) => {
-                    const controlId = `${interaction.id}:${question.id}:${option}`;
+                    const controlId = `${mountContext}:${interaction.id}:${question.id}:${option}`;
                     const focusFirst = autoFocus && questionIndex === 0 && optionIndex === 0;
                     if (question.selection === 'single') {
                       return (
@@ -240,7 +243,7 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                           <input
                             id={controlId}
                             type="radio"
-                            name={`${interaction.id}:${question.id}`}
+                            name={`${mountContext}:${interaction.id}:${question.id}`}
                             value={option}
                             checked={!isOtherOn && listedSingle[question.id] === option}
                             autoFocus={focusFirst}
@@ -260,7 +263,7 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                         <input
                           id={controlId}
                           type="checkbox"
-                          name={`${interaction.id}:${question.id}`}
+                          name={`${mountContext}:${interaction.id}:${question.id}`}
                           value={option}
                           checked={(listedMulti[question.id] ?? []).includes(option)}
                           autoFocus={focusFirst}
@@ -277,7 +280,7 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                       <label className="flex items-center gap-2 text-sm text-text-primary">
                         <input
                           type={question.selection === 'single' ? 'radio' : 'checkbox'}
-                          name={`${interaction.id}:${question.id}`}
+                          name={`${mountContext}:${interaction.id}:${question.id}`}
                           value="__other__"
                           checked={isOtherOn}
                           autoFocus={

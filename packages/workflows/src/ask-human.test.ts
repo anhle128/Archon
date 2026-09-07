@@ -93,6 +93,33 @@ describe('AskHuman tool', () => {
     expect(JSON.stringify(infoLogs)).not.toContain('Ship it?');
   });
 
+  test('persists execution_scope independently of transcript writes', async () => {
+    const s = store();
+    const scope = {
+      occurrence_id: '11111111-1111-4111-8111-111111111111',
+      attempt_id: '22222222-2222-4222-8222-222222222222',
+      retry_epoch: 0,
+    };
+    const tool = createAskHumanTool({
+      store: s,
+      workflowRunId: 'run-1',
+      nodeId: 'review',
+      getExecutionScope: () => scope,
+    });
+    await expect(
+      tool.handler({ questions }, { toolUseId: 'toolu_1', sessionId: 'sess-1' })
+    ).rejects.toBeInstanceOf(AskHumanAwaitingError);
+    expect(s.insertPendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-1',
+      node_id: 'review',
+      tool_use_id: 'toolu_1',
+      kind: 'ask',
+      envelope: { questions },
+      provider_session_id: 'sess-1',
+      execution_scope: scope,
+    });
+  });
+
   test('does not stringify invalid questions as awaiting', async () => {
     const s = store();
     const tool = createAskHumanTool({ store: s, workflowRunId: 'run-1', nodeId: 'review' });

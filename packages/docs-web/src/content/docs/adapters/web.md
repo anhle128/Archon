@@ -133,12 +133,14 @@ Workflows with `interactive: true` in their YAML definition run in the foregroun
 
 While a workflow runs, a progress card appears in the conversation showing:
 
-- Current status (running, completed, failed, paused)
+- Current status (running, completed, failed, paused, awaiting input)
 - Which DAG node is currently executing
 - Per-node status indicators
 - Elapsed time
 
 For paused workflows (approval gates), the progress card shows **Approve** and **Reject** buttons so you can control the workflow directly from the chat.
+
+A run that reaches **awaiting input** means a Claude or Pi agent node posed a structured mid-turn question via the `AskHuman` tool. This is distinct from an approval gate: the question is asked by the agent, not declared in the workflow YAML. Open the node's transcript in the execution detail page to see and answer the Ask card.
 
 ### Workflow Result Card
 
@@ -154,10 +156,11 @@ Click the arrow button in the result card header to open the full execution deta
 
 ### Execution Detail Page
 
-Click on a workflow run (from the dashboard or progress card) to open the execution detail page at `/legacy/workflows/runs/:runId`. This shows:
+Click on a workflow run (from the dashboard or progress card) to open the execution detail page. The legacy run view is at `/legacy/workflows/runs/:runId`; the console run view is at `/console/p/:projectId/r/:runId`. Both show:
 
 - The full DAG graph with per-node status
-- Step-by-step logs for each node
+- A **node transcript pane** -- click any graph node or Logs row to open that node's room. A running agent node streams its transcript live; a completed node replays the same pane as a static transcript.
+- **Ask cards** -- when a Claude or Pi agent node poses a mid-turn structured question (via `AskHuman`), the card appears inline in that node's room. The run shows an amber "awaiting input" badge until the run starter answers or declines. A teammate watching the same run can see the card but cannot submit.
 - Artifacts produced by the workflow
 - Route-loop decisions, including selected target and redacted condition metadata
 - Actions to resume, retry eligible DAG nodes, cancel, or abandon the run

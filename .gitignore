@@ -21,6 +21,10 @@ yarn-error.log*
 
 # This project uses Bun (bun.lock); npm/yarn lockfiles must not be committed.
 package-lock.json
+# Standalone Playwright package is not a bun workspace. CI installs it with
+# `npm ci --prefix e2e`, so that lock is tracked on purpose.
+!e2e/package-lock.json
+e2e/bun.lock
 yarn.lock
 pnpm-lock.yaml
 

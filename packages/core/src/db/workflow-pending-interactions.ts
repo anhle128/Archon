@@ -38,7 +38,7 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 const COLUMNS =
-  'id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, answer, provider_session_id, created_at, resolved_at, resolved_by';
+  'id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, answer, provider_session_id, created_at, resolved_at, resolved_by, execution_scope';
 
 /** Stored envelope/answer/row failed JSON or schema normalization. Logs id only. */
 export class PendingInteractionCorruptRowError extends Error {
@@ -101,7 +101,7 @@ export class PendingInteractionValidationError extends Error {
 
 function throwCorrupt(
   rowId: string,
-  reason: 'envelope_json_parse' | 'answer_json_parse' | 'row_schema'
+  reason: 'envelope_json_parse' | 'answer_json_parse' | 'scope_json_parse' | 'row_schema'
 ): never {
   getLog().error({ rowId, reason }, 'db.pending_interaction_corrupt_row');
   throw new PendingInteractionCorruptRowError(rowId);
@@ -110,7 +110,7 @@ function throwCorrupt(
 function parseJsonColumn(
   value: unknown,
   rowId: string,
-  reason: 'envelope_json_parse' | 'answer_json_parse'
+  reason: 'envelope_json_parse' | 'answer_json_parse' | 'scope_json_parse'
 ): unknown {
   if (typeof value !== 'string') return value;
   try {
@@ -125,7 +125,13 @@ function parsePendingInteractionRow(raw: unknown): PendingInteraction {
   const rowId = typeof row.id === 'string' ? row.id : 'unknown';
   const envelope = parseJsonColumn(row.envelope, rowId, 'envelope_json_parse');
   const answer = parseJsonColumn(row.answer, rowId, 'answer_json_parse');
-  const parsed = pendingInteractionSchema.safeParse({ ...row, envelope, answer });
+  const executionScope = parseJsonColumn(row.execution_scope, rowId, 'scope_json_parse');
+  const parsed = pendingInteractionSchema.safeParse({
+    ...row,
+    envelope,
+    answer,
+    execution_scope: executionScope,
+  });
   if (!parsed.success) throwCorrupt(rowId, 'row_schema');
   return parsed.data;
 }
@@ -159,8 +165,8 @@ export async function insertPendingInteraction(
     const id = dialect.generateUuid();
     await query(
       `INSERT INTO remote_agent_pending_interactions
-         (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, answer, provider_session_id, resolved_at, resolved_by)
-       VALUES ($1, $2, $3, $4, $5, 'pending', $6, NULL, $7, NULL, NULL)`,
+         (id, workflow_run_id, node_id, tool_use_id, kind, status, envelope, answer, provider_session_id, resolved_at, resolved_by, execution_scope)
+       VALUES ($1, $2, $3, $4, $5, 'pending', $6, NULL, $7, NULL, NULL, $8)`,
       [
         id,
         parsed.workflow_run_id,
@@ -169,6 +175,9 @@ export async function insertPendingInteraction(
         parsed.kind,
         JSON.stringify(parsed.envelope),
         parsed.provider_session_id,
+        parsed.execution_scope === undefined || parsed.execution_scope === null
+          ? null
+          : JSON.stringify(parsed.execution_scope),
       ]
     );
 
