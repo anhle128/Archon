@@ -98,8 +98,11 @@ function parseMetadata(raw: string): ParsedMetadata {
     // Corrupt metadata degrades to "no metadata" (the message still renders as
     // plain prose) — but never silently: a malformed blob here is the kind of
     // thing that would otherwise hide a real workflow_result with no trace.
+    // Log the message string only: dumping the Error object prints a
+    // `error: SyntaxError` stack that CI reporters treat as an uncaught throw.
+    const message = e instanceof Error ? e.message : String(e);
     console.warn('[console] failed to parse message metadata; treating as empty', {
-      error: e,
+      error: message,
       raw: raw.slice(0, 200),
     });
     return {};
