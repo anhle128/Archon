@@ -13,6 +13,7 @@ The source checkout starts at `981c7b39f`.
 The branch was then fast-forwarded to `e5b074331` to retain the current `develop` Terminal feature and automatic PR gate.
 The original HITL plan and mockup bytes are unchanged, and the initial bug evidence remains tied to `981c7b39f`.
 The complete task is tracked in [issue #144](https://github.com/anhle128/Archon/issues/144).
+The bootstrap changes are in [draft PR #145](https://github.com/anhle128/Archon/pull/145), targeting `develop`.
 The local copy of its source context is [issue-context.md](issue-context.md).
 
 # Authority
@@ -35,13 +36,13 @@ The current `pr-e2e-verify` repairs only missing external-service test coverage;
 
 # Delivery phases
 
-| Phase                                     | State       | Required evidence                                                                                           |
-| ----------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------- |
-| 1. Build and review the workflow contract | Done        | Source-backed criteria; immutable plan, mockup, and critical tests; validated loop routing                  |
-| 2. Create the bootstrap PR                | In progress | Focused checks and `bun run validate`; new branch and draft PR targeting `develop`                          |
-| 3. Run local Archon repair                | Pending     | Real run ID; failing browser checks; Sonnet 5 repair nodes; repeated independent review                     |
-| 4. Prove complete UI alignment            | Pending     | Every criterion checked on both surfaces; matched-state desktop comparisons; usable 390px and 768px layouts |
-| 5. Finish delivery and prevention         | Pending     | Automatic PR UI regression check; complete validation; final PR evidence; no owned orphan processes         |
+| Phase                                     | State   | Required evidence                                                                                           |
+| ----------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
+| 1. Build and review the workflow contract | Done    | Source-backed criteria; immutable plan, mockup, and critical tests; validated loop routing                  |
+| 2. Create the bootstrap PR                | Done    | Focused checks and `bun run validate`; new branch and draft PR targeting `develop`                          |
+| 3. Run local Archon repair                | Ready   | Real run ID; failing browser checks; Sonnet 5 repair nodes; repeated independent review                     |
+| 4. Prove complete UI alignment            | Pending | Every criterion checked on both surfaces; matched-state desktop comparisons; usable 390px and 768px layouts |
+| 5. Finish delivery and prevention         | Pending | Automatic PR UI regression check; complete validation; final PR evidence; no owned orphan processes         |
 
 # Workflow design
 
@@ -100,7 +101,7 @@ Keep user-owned `WATCHDOG.yml` outside all commits.
 - Integrated `bun run validate` passed with 10,580 passing tests and zero failures after two stale Ralph test contracts were aligned with the incoming provider change.
 - The existing automatic CI caller now uses the named issue/PR contract and exact-run publication evidence.
 - Root reviewed owned process cleanup, complete test titles, and guarded publication of the verified direct child.
-- Delivery agent prepares the bootstrap draft PR; actual workflow execution and UI acceptance remain pending.
+- Bootstrap draft PR #145 is open; actual workflow execution and UI acceptance remain pending.
 - Provider selection is configured in workflow nodes; no separate Sonnet CLI probe is required.
 - Root owns issue context, coordination, source traceability, and final acceptance.
 - All product UI repairs must run through the Archon workflow with Sonnet 5.
