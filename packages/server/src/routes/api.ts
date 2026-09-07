@@ -5206,6 +5206,15 @@ export function registerApiRoutes(
         usage = null;
       }
 
+      const requester = await resolveAuthContext(c);
+      const viewerIsStarter =
+        requester !== undefined &&
+        requester.userId.length > 0 &&
+        run.user_id !== null &&
+        requester.userId === run.user_id;
+      const starter = run.user_id === null ? null : await userDb.getUserById(run.user_id);
+      const starterDisplayName = starter?.display_name?.trim() || run.user_id;
+
       return c.json({
         run: {
           ...toApiWorkflowRun(run),
@@ -5224,6 +5233,8 @@ export function registerApiRoutes(
           resolved_at: row.resolved_at ? toISOString(row.resolved_at) : null,
         })),
         usage,
+        viewer_is_starter: viewerIsStarter,
+        starter_display_name: starterDisplayName,
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');

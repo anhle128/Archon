@@ -1,8 +1,16 @@
-import type { DagNode, WorkflowEventResponse } from '@/lib/api';
+import type {
+  AskAnswerBody,
+  DagNode,
+  PendingInteraction,
+  WorkflowEventResponse,
+  WorkflowNodeStateResponse,
+} from '@/lib/api';
 import { getWorkflowNodeMessages } from '@/lib/api';
 import type { WorkflowRunStatus } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
+import type { AskActionStateByRequest } from './ask-answer-controller';
+import { nodeStatusLabel } from './awaiting-chrome';
 import type { LogRow } from './build-log-rows';
 import { ChildWorkflowRoom } from './ChildWorkflowRoom';
 import { GateRoom } from './GateRoom';
@@ -24,7 +32,6 @@ import {
 export interface LegacyNodeRoomProps {
   runId: string;
   row: LogRow | null;
-  isLive: boolean;
   loadMessages: typeof getWorkflowNodeMessages;
   definitionNodes: readonly DagNode[];
   definitionPending: boolean;
@@ -33,6 +40,12 @@ export interface LegacyNodeRoomProps {
   approval: unknown;
   onApprove: () => Promise<void>;
   onReject: (reason?: string) => Promise<void>;
+  pendingInteractions: readonly PendingInteraction[];
+  viewerIsStarter: boolean;
+  starterDisplayName: string | null;
+  actionStates: AskActionStateByRequest;
+  onSubmitAsk: (requestId: string, body: AskAnswerBody) => Promise<void>;
+  nodeState: WorkflowNodeStateResponse | undefined;
 }
 
 const TYPE_LABELS: Record<NodeBodyKind, string> = {
@@ -52,7 +65,7 @@ const TYPE_LABELS: Record<NodeBodyKind, string> = {
 const STATUS_COLORS: Record<LogRow['status'], string> = {
   pending: 'bg-accent/20 text-accent',
   running: 'bg-accent/20 text-accent',
-  awaiting: 'bg-accent/20 text-accent',
+  awaiting: 'bg-warning/20 text-warning',
   completed: 'bg-success/20 text-success',
   failed: 'bg-error/20 text-error',
   skipped: 'bg-surface text-text-secondary',
@@ -65,7 +78,6 @@ function assertNever(value: never): never {
 export function LegacyNodeRoom({
   runId,
   row,
-  isLive,
   loadMessages,
   definitionNodes,
   definitionPending,
@@ -74,6 +86,12 @@ export function LegacyNodeRoom({
   approval,
   onApprove,
   onReject,
+  pendingInteractions,
+  viewerIsStarter,
+  starterDisplayName,
+  actionStates,
+  onSubmitAsk,
+  nodeState,
 }: LegacyNodeRoomProps): React.ReactElement {
   if (row === null) return <RoomPlaceholder>Select a node</RoomPlaceholder>;
 
@@ -91,7 +109,7 @@ export function LegacyNodeRoom({
         {waitingForDefinition ? 'Loading' : TYPE_LABELS[resolution.nodeType]}
       </span>
       <span className={cn('rounded-full px-2 py-0.5 text-xs', STATUS_COLORS[row.status])}>
-        {row.status}
+        {nodeStatusLabel(row.status)}
       </span>
     </div>
   );
@@ -108,7 +126,18 @@ export function LegacyNodeRoom({
     switch (resolution.kind) {
       case 'agent':
         body = (
-          <NodeTranscriptPane runId={runId} row={row} isLive={isLive} loadMessages={loadMessages} />
+          <NodeTranscriptPane
+            runId={runId}
+            row={row}
+            runStatus={runStatus}
+            loadMessages={loadMessages}
+            pendingInteractions={pendingInteractions}
+            viewerIsStarter={viewerIsStarter}
+            starterDisplayName={starterDisplayName}
+            actionStates={actionStates}
+            nodeState={nodeState}
+            onSubmitAsk={onSubmitAsk}
+          />
         );
         break;
       case 'stdout':

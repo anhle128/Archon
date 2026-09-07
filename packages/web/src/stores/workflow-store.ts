@@ -225,7 +225,11 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
           'workflow/status'
         );
 
-        if (event.status === 'running' || isTerminalStatus(event.status)) {
+        if (
+          event.status === 'running' ||
+          event.status === 'paused' ||
+          isTerminalStatus(event.status)
+        ) {
           invalidateWorkflowQueries();
         }
       },

@@ -228,6 +228,8 @@ export const workflowRunDetailSchema = z
      * non-null `UsageReport` component used by GET /api/usage.
      */
     usage: nullableUsageReportResponseSchema,
+    viewer_is_starter: z.boolean(),
+    starter_display_name: z.string().nullable(),
   })
   .openapi('WorkflowRunDetail');
 

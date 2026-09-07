@@ -84,6 +84,8 @@ describe('getRun inspect boundary', () => {
         nodeStates,
         pending_interactions: [],
         usage,
+        viewer_is_starter: false,
+        starter_display_name: null,
       } satisfies RunDetailResponse);
     });
 

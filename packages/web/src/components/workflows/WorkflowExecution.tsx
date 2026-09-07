@@ -5,6 +5,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { DagNodeProgress } from './DagNodeProgress';
 import { LegacyGraphLogsPane } from './LegacyGraphLogsPane';
+import { WorkflowAskChrome } from './WorkflowAskChrome';
+import {
+  createAskAnswerController,
+  type AskActionState,
+  type AskActionStateByRequest,
+} from './ask-answer-controller';
 import { StepLogs } from './StepLogs';
 import { WorkflowLogs } from './WorkflowLogs';
 import { WorkflowDagViewer } from './WorkflowDagViewer';
@@ -14,6 +20,7 @@ import { DagRunTabs, type WorkflowRunView } from './source-control/dag-run-tabs'
 import { SourceControlTab } from './source-control/source-control-tab';
 import { useWorkflowStore } from '@/stores/workflow-store';
 import {
+  answerAskHuman,
   approveWorkflowRun,
   getConversation,
   getMessages,
@@ -24,6 +31,8 @@ import {
   getWorkflowNodeMessages,
   rejectWorkflowRun,
   sendMessage,
+  type PendingInteraction,
+  type WorkflowEventResponse,
 } from '@/lib/api';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { selectInitialNode } from '@/lib/select-initial-node';
@@ -39,8 +48,6 @@ import type {
   RuntimeModelReasoningEffort,
   RuntimeNodeMetadata,
 } from '@/lib/types';
-
-import type { WorkflowEventResponse } from '@/lib/api';
 
 /** Tool call event extracted from workflow_events for display in WorkflowLogs. */
 export interface ToolEvent {
@@ -69,7 +76,7 @@ type WorkflowRunNodeState = NonNullable<
   Awaited<ReturnType<typeof getWorkflowRun>>['nodeStates']
 >[number];
 
-interface WorkflowRunQueryData {
+export interface WorkflowRunQueryData {
   workflowState: WorkflowState;
   workerPlatformId: string | null;
   parentPlatformId: string | null;
@@ -78,6 +85,60 @@ interface WorkflowRunQueryData {
   events: WorkflowEventResponse[];
   nodeStates: WorkflowRunNodeState[];
   approval: unknown;
+  pendingInteractions: PendingInteraction[];
+  viewerIsStarter: boolean;
+  starterDisplayName: string | null;
+  runError: string | null;
+}
+
+export function mapWorkflowRunDetail(
+  data: Awaited<ReturnType<typeof getWorkflowRun>>
+): WorkflowRunQueryData {
+  const status = data.run.status;
+  const dagNodes = settleRunningDagNodesForTerminalStatus(
+    status,
+    buildWorkflowDagNodeStates(data.nodeStates, data.events)
+  );
+  const metadataError = data.run.metadata.error;
+  return {
+    workflowState: {
+      runId: data.run.id,
+      workflowName: data.run.workflow_name,
+      status,
+      dagNodes,
+      artifacts: data.events
+        .filter(e => e.event_type === 'workflow_artifact')
+        .map(e => {
+          const d = e.data;
+          return {
+            type: (d.artifactType as ArtifactType) ?? 'commit',
+            label: (d.label as string) ?? '',
+            url: d.url as string | undefined,
+            path: d.path as string | undefined,
+          };
+        })
+        .filter(a => a.label || a.url || a.path),
+      startedAt: new Date(ensureUtc(data.run.started_at)).getTime(),
+      completedAt: data.run.completed_at
+        ? new Date(ensureUtc(data.run.completed_at)).getTime()
+        : undefined,
+    },
+    workerPlatformId: data.run.worker_platform_id ?? null,
+    parentPlatformId: data.run.parent_platform_id ?? null,
+    conversationPlatformId: data.run.conversation_platform_id ?? null,
+    codebaseId: data.run.codebase_id ?? null,
+    events: data.events,
+    nodeStates: data.nodeStates,
+    approval: data.run.metadata.approval ?? null,
+    pendingInteractions: data.pending_interactions,
+    viewerIsStarter: data.viewer_is_starter,
+    starterDisplayName: data.starter_display_name,
+    runError: typeof metadataError === 'string' ? metadataError : null,
+  };
+}
+
+export function emptyAskActionStates(): AskActionStateByRequest {
+  return {};
 }
 
 function isRuntimeModelReasoningEffort(value: unknown): value is RuntimeModelReasoningEffort {
@@ -278,6 +339,8 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const [nodeScrollTrigger, setNodeScrollTrigger] = useState(0);
   // Track which codebaseId we've already fetched to avoid stale re-fetches during runId transitions
   const fetchedCodebaseIdRef = useRef<string | null>(null);
+  const [askActionStates, setAskActionStates] =
+    useState<AskActionStateByRequest>(emptyAskActionStates);
 
   // Reset local state when navigating to a different workflow run
   useEffect(() => {
@@ -288,49 +351,38 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     setActiveView('graph');
     setNodeScrollTrigger(0);
     fetchedCodebaseIdRef.current = null;
+    setAskActionStates(emptyAskActionStates());
   }, [runId]);
+
+  const setAskActionState = useCallback((requestId: string, state: AskActionState): void => {
+    setAskActionStates(previous => ({ ...previous, [requestId]: state }));
+  }, []);
+
+  const invalidateAskQueries = useCallback(async (): Promise<void> => {
+    await Promise.allSettled([
+      queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] }),
+      queryClient.invalidateQueries({ queryKey: ['workflowNodeMessages', runId] }),
+    ]);
+  }, [queryClient, runId]);
+
+  const askController = useMemo(
+    () =>
+      createAskAnswerController({
+        runId,
+        postAnswer: answerAskHuman,
+        setActionState: setAskActionState,
+        invalidate: invalidateAskQueries,
+        now: (): Date => new Date(),
+      }),
+    [invalidateAskQueries, runId, setAskActionState]
+  );
 
   // Fetch workflow run data with polling while running
   const { data: queryData, error: queryError } = useQuery({
     queryKey: ['workflowRun', runId],
     queryFn: async (): Promise<WorkflowRunQueryData> => {
       const data = await getWorkflowRun(runId);
-      const status = data.run.status;
-      const dagNodes = settleRunningDagNodesForTerminalStatus(
-        status,
-        buildWorkflowDagNodeStates(data.nodeStates, data.events)
-      );
-      return {
-        workflowState: {
-          runId: data.run.id,
-          workflowName: data.run.workflow_name,
-          status,
-          dagNodes,
-          artifacts: data.events
-            .filter(e => e.event_type === 'workflow_artifact')
-            .map(e => {
-              const d = e.data;
-              return {
-                type: (d.artifactType as ArtifactType) ?? 'commit',
-                label: (d.label as string) ?? '',
-                url: d.url as string | undefined,
-                path: d.path as string | undefined,
-              };
-            })
-            .filter(a => a.label || a.url || a.path),
-          startedAt: new Date(ensureUtc(data.run.started_at)).getTime(),
-          completedAt: data.run.completed_at
-            ? new Date(ensureUtc(data.run.completed_at)).getTime()
-            : undefined,
-        },
-        workerPlatformId: data.run.worker_platform_id ?? null,
-        parentPlatformId: data.run.parent_platform_id ?? null,
-        conversationPlatformId: data.run.conversation_platform_id ?? null,
-        codebaseId: data.run.codebase_id ?? null,
-        events: data.events,
-        nodeStates: data.nodeStates,
-        approval: data.run.metadata.approval ?? null,
-      };
+      return mapWorkflowRunDetail(data);
     },
     refetchInterval: (query): number | false => {
       const status = query.state.data?.workflowState.status;
@@ -798,7 +850,6 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           runId={runId}
           nodeStates={queryData?.nodeStates ?? []}
           events={queryData?.events ?? []}
-          isLive={isRunning}
           loadMessages={getWorkflowNodeMessages}
           parentPlatformId={parentPlatformId}
           loadParentMessages={getMessages}
@@ -806,10 +857,15 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           sendParentMessage={sendMessage}
           definitionNodes={dagDefinitionNodes ?? []}
           definitionPending={workflowDefPending}
-          runStatus={queryData?.workflowState.status ?? workflow.status}
+          runStatus={workflow.status}
           approval={queryData?.approval ?? null}
           onApprove={handleGateApprove}
           onReject={handleGateReject}
+          pendingInteractions={queryData?.pendingInteractions ?? []}
+          viewerIsStarter={queryData?.viewerIsStarter ?? false}
+          starterDisplayName={queryData?.starterDisplayName ?? null}
+          actionStates={askActionStates}
+          onSubmitAsk={askController.submit}
           roomHeader={retryActionPanel}
           roomFooter={
             isRunning || workflow.artifacts.length === 0 ? undefined : (
@@ -858,6 +914,16 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
         <div className="flex items-center gap-2 min-w-0">
           <h2 className="font-semibold text-text-primary truncate">{workflow.workflowName}</h2>
           <StatusBadge status={workflow.status} />
+          <WorkflowAskChrome
+            status={workflow.status}
+            pendingInteractions={queryData?.pendingInteractions ?? []}
+            nodeStates={queryData?.nodeStates ?? []}
+            runError={queryData?.runError ?? null}
+            onSelectAwaitingNode={setSelectedDagNode}
+            onRequestGraphView={(): void => {
+              setActiveView('graph');
+            }}
+          />
         </div>
         <div className="flex items-center gap-2 ml-auto shrink-0">
           {codebaseName && <span className="text-xs text-text-secondary">{codebaseName}</span>}
