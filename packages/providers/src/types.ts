@@ -218,6 +218,21 @@ export interface OpencodeProviderDefaults {
   agent?: string;
 }
 
+/**
+ * Community provider defaults for DeepSeek Harness over ACP.
+ * Pinned DSH ACP exposes only `model` and `reasoning_effort`; omit `maxTokens`.
+ */
+export interface DeepseekProviderDefaults {
+  [key: string]: unknown;
+  model?: string;
+  baseUrl?: string;
+  providerRoute?: string;
+  profile?: 'acp';
+  permissionMode?: 'workspace-write' | 'danger-full-access';
+  effort?: string;
+  nodeBin?: string;
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
