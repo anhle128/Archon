@@ -1,0 +1,170 @@
+## Codebase Patterns
+
+### Injected Bun.spawn for PTY tests
+- **Where**: `packages/server/src/routes/terminal/pty.ts` (`spawnTerminalPty`)
+- **Pattern**: Inject `spawn?: typeof Bun.spawn`. Unit tests pass a fake subprocess; only the POSIX Ctrl-C case uses production `Bun.spawn`. Use inline `terminal: { cols, rows, name: 'xterm-256color', data }` — never `new Bun.Terminal()`. Fail fast if `subprocess.terminal` is absent. `kill()` is idempotent: `SIGTERM` then `terminal.close()`. Container specs omit `cwd` because `docker exec -w` already sets it.
+- **Example**: `const spawn = input.spawn ?? Bun.spawn;`
+
+### Fresh protocol result objects
+- **Where**: `packages/server/src/routes/terminal/protocol.ts` (`parseClientControlMessage`)
+- **Pattern**: Parse JSON in try/catch, switch only on `type`, validate locked fields, and return a new object so extra keys (`cwd`, `containerId`) never survive. Measure input with `Buffer.byteLength(..., 'utf8')`, not JS string length. Resize requires `Number.isInteger` plus the locked min/max.
+- **Example**: `return { type: 'input', data: record.data };`
+
+### Injected DockerRunner
+- **Where**: `packages/server/src/routes/terminal/docker.ts`
+- **Pattern**: Default `runDocker` wraps `execFileAsync` with a 5s timeout. Tests pass a `DockerRunner` so inspect/exec never hits a real daemon. Classify only case-insensitive `no such object|container` as missing; unexpected inspect stdout and daemon errors throw.
+- **Example**: `if (/no such (object|container)/i.test(dockerErrorText(error))) return 'missing';`
+
+### Isolation env before host filesystem
+- **Where**: `packages/server/src/routes/terminal/target.ts` (`resolveTerminalTarget`)
+- **Pattern**: Require `working_path` first, then load `metadata.isolation_env_id`. Provider `container` prefers `containerName` over `containerId`. `worktree` falls through to host `canonicalDirectory`. `vm`/`remote`/unknown return `unsupported_provider`. `metadata.isolation === 'container'` without a usable env never probes the host.
+- **Example**: `nonEmptyString(environment.metadata.containerName) ?? nonEmptyString(environment.metadata.containerId)`
+
+### Explicit env allowlist copy
+- **Where**: `packages/server/src/routes/terminal/env.ts`
+- **Pattern**: `copyAllowed` copies only non-empty strings from a const key list, then overwrites `TERM`/`COLORTERM`. Host vs Docker differ only by extra Docker connectivity keys. Never inherit `process.env` wholesale; `SSH_AUTH_SOCK` is excluded on purpose.
+- **Example**: `if (typeof value === 'string' && value.length > 0) result[key] = value;`
+
+### TerminalOriginError as HTTP boundary
+- **Where**: `packages/server/src/routes/terminal/origin.ts`
+- **Pattern**: Domain errors are `Error` subclasses with a numeric `status` and a locked `message`. Origin checks throw `TerminalOriginError` (`403`, `'Forbidden origin'`) instead of returning a boolean.
+- **Example**: `throw new TerminalOriginError()`
+
+### WEB_UI_ORIGIN same-host fallback
+- **Where**: `packages/server/src/routes/terminal/origin.ts` (`assertTerminalOrigin`)
+- **Pattern**: Concrete `WEB_UI_ORIGIN` (not `*`) compares normalized `URL.origin`. Unset or `*` compares origin hostname to `Host` hostname so Vite (`:5173`) can talk to the server (`:3090`).
+- **Example**: `hostName(request.headers.get('Host') ?? '') !== origin.hostname`
+
+### ESLint optional-chain vs null guard
+- **Where**: `packages/server/src/routes/terminal/origin.ts`
+- **Pattern**: `@typescript-eslint/prefer-optional-chain` rejects `!allowed || allowed.origin !== origin.origin`. Use `allowed?.origin !== origin.origin`.
+- **Example**: `if (allowed?.origin !== origin.origin) throw new TerminalOriginError();`
+
+---
+
+## 2026-09-07 — US-001: Validate workflow terminal WebSocket origins
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/terminal/origin.ts` — `TerminalOriginError` + `assertTerminalOrigin`
+- `packages/server/src/routes/terminal/origin.test.ts` — origin allow/deny cases from plan Task 1
+
+**Acceptance criteria verified**:
+- [x] Create packages/server/src/routes/terminal/origin.ts and test file packages/server/src/routes/terminal/origin.test.ts.
+- [x] Define TerminalOriginError with status 403 and error message 'Forbidden origin'.
+- [x] assertTerminalOrigin(request, env) rejects missing, malformed, opaque ('null'), file:, and non-http/https Origin headers by throwing TerminalOriginError.
+- [x] When env.WEB_UI_ORIGIN is set to a concrete URL (not '*'), assertTerminalOrigin requires the request Origin to match its normalized .origin value exactly.
+- [x] When env.WEB_UI_ORIGIN is unset or '*', assertTerminalOrigin compares the request Origin hostname against the request Host header hostname, permitting different ports to support the Vite dev proxy.
+- [x] All unit tests pass via bun test src/routes/terminal/origin.test.ts in packages/server.
+
+**Learnings**:
+- Plan Task 1 tests fail RED because `./origin` is missing; implement after watching that error.
+- Prettier wraps the rejection-origin array in the test file; keep that formatting.
+- `packages/server` test files are ESLint-ignored; lint `origin.ts` only.
+- This worktree needed `bun install` before `tsc`/`eslint` could run.
+
+---
+
+## 2026-09-07 — US-002: Isolate workflow terminal subprocess environments
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/terminal/env.ts` — `buildHostTerminalEnv` + `buildDockerClientEnv` allowlists
+- `packages/server/src/routes/terminal/env.test.ts` — host basics, Docker connectivity, secret stripping from plan Task 2
+
+**Acceptance criteria verified**:
+- [x] Create packages/server/src/routes/terminal/env.ts and test file packages/server/src/routes/terminal/env.test.ts.
+- [x] buildHostTerminalEnv(source) copies only non-empty string values from HOST_ENV_KEYS: HOME, USER, LOGNAME, SHELL, PATH, LANG, LC_ALL, LC_CTYPE, LC_MESSAGES, TZ, TMPDIR, USERPROFILE, HOMEDRIVE, HOMEPATH, PATHEXT, SYSTEMROOT, COMSPEC.
+- [x] buildDockerClientEnv(source) copies HOST_ENV_KEYS plus DOCKER_HOST, DOCKER_CONTEXT, DOCKER_CONFIG, DOCKER_TLS_VERIFY, and DOCKER_CERT_PATH.
+- [x] Both environment builders unconditionally overwrite TERM with 'xterm-256color' and COLORTERM with 'truecolor'.
+- [x] Neither builder forwards SSH_AUTH_SOCK, DATABASE_URL, BETTER_AUTH_SECRET, API tokens, or any unrecognized environment variables.
+- [x] All unit tests pass via bun test src/routes/terminal/env.test.ts in packages/server.
+
+**Learnings**:
+- Plan Task 2 tests fail RED because `./env` does not exist; implement after watching that error.
+- Empty-string and non-string values are skipped; TERM/COLORTERM are assigned after the copy so source TERM cannot leak.
+- Follow the plan's exact key lists; do not add SSH_AUTH_SOCK even though it looks like a shell setting.
+
+---
+
+## 2026-09-07 — US-003: Resolve workflow terminal host and container targets
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/terminal/docker.ts` — `buildDockerExecArgs`, `inspectContainer`, `resolveContainerShell`
+- `packages/server/src/routes/terminal/docker.test.ts` — argv, inspect states, missing classification, daemon rethrow, bash/sh fallback
+- `packages/server/src/routes/terminal/target.ts` — `canonicalDirectory` + `resolveTerminalTarget`
+- `packages/server/src/routes/terminal/target.test.ts` — host/folder, container name preference, no-fallback unavailable reasons
+
+**Acceptance criteria verified**:
+- [x] Create packages/server/src/routes/terminal/docker.ts and test file packages/server/src/routes/terminal/docker.test.ts.
+- [x] buildDockerExecArgs(cwd, handle, shell) generates literal argv array: ['exec', '-i', '-t', '-e', 'TERM=xterm-256color', '-e', 'COLORTERM=truecolor', '-w', cwd, handle, shell].
+- [x] inspectContainer(handle, runner) runs docker inspect -f '{{.State.Running}}' with 5000ms timeout, returns 'running', 'stopped', or 'missing' (matching case-insensitive 'no such object' or 'no such container'), rethrowing any daemon error.
+- [x] resolveContainerShell(handle, runner) tests /bin/bash executable via docker exec; if it fails non-zero and container is running, falls back to /bin/sh.
+- [x] Create packages/server/src/routes/terminal/target.ts and test file packages/server/src/routes/terminal/target.test.ts defining TerminalTarget, TerminalUnavailableReason, TerminalRunRow, TerminalIsolationRow, ResolveTerminalTargetDeps, and resolveTerminalTarget.
+- [x] resolveTerminalTarget requires non-empty run.working_path; if absent, returns unavailable reason 'no_checkout'.
+- [x] When run.metadata.isolation_env_id is present, inspects isolation row; provider 'container' requires active status, prefers containerName over containerId, checks container running state, and returns container target or unavailable reason 'container_missing' or 'container_stopped'.
+- [x] Provider 'worktree' continues through host directory resolution; providers 'vm', 'remote', or unknown return unavailable reason 'unsupported_provider'.
+- [x] Any container-marked run with missing/destroyed isolation row or stopped container never falls back to host directory.
+- [x] Host resolution calls canonicalDirectory(cwd) using realpath and stat.isDirectory(), returning host target with resolveHostShell() or unavailable reason 'no_checkout'.
+- [x] All unit tests pass via bun test src/routes/terminal/docker.test.ts src/routes/terminal/target.test.ts in packages/server.
+
+**Learnings**:
+- Plan Task 3 tests fail RED because `./docker` / `./target` do not exist; implement after watching that error.
+- Inject `DockerRunner` instead of `mock.module()`; default runner wraps `@archon/git` `execFileAsync`.
+- Container-marked runs (`metadata.isolation === 'container'`) must not call `canonicalDirectory` even when the isolation row is missing.
+- Prettier wraps long `toEqual` host-target objects in `target.test.ts`.
+
+---
+
+## 2026-09-07 — US-004: Validate workflow terminal WebSocket frames
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/terminal/protocol.ts` — constants, parse/serialize, resume token, unavailable copy
+- `packages/server/src/routes/terminal/protocol.test.ts` — parser, UTF-8 byte cap, resize bounds, MAX_CLIENT_FRAME_BYTES
+
+**Acceptance criteria verified**:
+- [x] Create packages/server/src/routes/terminal/protocol.ts and test file packages/server/src/routes/terminal/protocol.test.ts.
+- [x] Export protocol constants: TERMINAL_PATH_RE, RECONNECT_MS (120000), REPLAY_MAX_BYTES (262144), INPUT_MAX_BYTES (65536), PENDING_MAX_BYTES (1048576), MAX_CLIENT_FRAME_BYTES (394240), MIN_COLS (1), MAX_COLS (500), MIN_ROWS (1), MAX_ROWS (200), DEFAULT_COLS (80), DEFAULT_ROWS (24), SOLO_TERMINAL_USER_ID ('solo'), REPLACED_SOCKET_CLOSE_CODE (4001).
+- [x] Export types: ClientControlMessage (input, resize, close), ServerControlMessage (ready, exit, unavailable, error), ClientMessageParseResult.
+- [x] isResumeToken(value) validates 64-character lowercase hex string (/^[0-9a-f]{64}$/).
+- [x] parseClientControlMessage(raw) parses JSON text frame, strips unknown fields, enforces byte length <= INPUT_MAX_BYTES for input, enforces integer range bounds for resize, and returns { error } on malformed frames.
+- [x] serializeServerControlMessage(message) serializes typed server control message to JSON string.
+- [x] unavailableMessage(reason) maps TerminalUnavailableReason to locked copy.
+- [x] All unit tests pass via bun test src/routes/terminal/protocol.test.ts in packages/server.
+
+**Learnings**:
+- Plan Task 4 tests fail RED because `./protocol` does not exist; implement after watching that error.
+- UTF-8 copyright repeats prove `Buffer.byteLength` (not `.length`) is the input cap.
+- `MAX_CLIENT_FRAME_BYTES = INPUT_MAX_BYTES * 6 + 1024` fits JSON-escaped 64 KiB of nulls.
+
+---
+
+## 2026-09-07 — US-005: Spawn interactive Bun terminals for workflow runs
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/terminal/pty.ts` — `buildTerminalSpawnSpec` + `spawnTerminalPty` with inline Bun terminal options
+- `packages/server/src/routes/terminal/pty.test.ts` — spawn-spec, fake process, fail-fast, POSIX Ctrl-C
+- `package.json` — `engines.bun` `^1.3.0` → `^1.3.5`
+
+**Acceptance criteria verified**:
+- [x] Create packages/server/src/routes/terminal/pty.ts and test file packages/server/src/routes/terminal/pty.test.ts.
+- [x] Export SpawnedTerminal interface (write, resize, kill, exited promise) and TerminalSpawnSpec.
+- [x] buildTerminalSpawnSpec(target, sourceEnv) builds command, cwd, and env using buildHostTerminalEnv for host and buildDockerExecArgs + buildDockerClientEnv for container.
+- [x] spawnTerminalPty(input) spawns process using Bun.spawn with inline terminal options: { cols, rows, name: 'xterm-256color', data(_terminal, bytes) { input.onData(bytes); } }.
+- [x] spawnTerminalPty never creates a detached Bun.Terminal(); fails fast if subprocess.terminal is absent.
+- [x] kill() is idempotent: terminates process with SIGTERM, closes terminal, and does not throw on repeated calls.
+- [x] exited promise resolves to { code, signal } with signalCode normalized.
+- [x] Include one POSIX integration test demonstrating real controlling terminal behavior where SIGINT (Ctrl-C, '\\x03') interrupts a sleeping child command.
+- [x] Modify root package.json engines.bun from '^1.3.0' to '^1.3.5'.
+- [x] All tests pass via bun test src/routes/terminal/pty.test.ts in packages/server.
+
+**Learnings**:
+- Plan Task 5 tests fail RED because `./pty` does not exist; implement after watching that error.
+- Fake spawn must be cast `as typeof Bun.spawn`; tests are ESLint-ignored and excluded from tsc.
+- The POSIX Ctrl-C case completed in ~192ms, well under the two-second INTERRUPTED guard.
+
+---
+

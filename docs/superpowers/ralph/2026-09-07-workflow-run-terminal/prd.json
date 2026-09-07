@@ -16,8 +16,8 @@
       "technicalNotes": "Follow plan Task 1 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:262-381 and locked origin rules at lines 146-149. Create packages/server/src/routes/terminal/origin.ts and packages/server/src/routes/terminal/origin.test.ts.",
       "dependsOn": [],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/server/src/routes/terminal/origin.ts, packages/server/src/routes/terminal/origin.test.ts."
     },
     {
       "id": "US-002",
@@ -34,8 +34,8 @@
       "technicalNotes": "Follow plan Task 2 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:383-515 and locked environment rules at lines 35-37, 58-59, 204-206. Create packages/server/src/routes/terminal/env.ts and packages/server/src/routes/terminal/env.test.ts.",
       "dependsOn": [],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/server/src/routes/terminal/env.ts, packages/server/src/routes/terminal/env.test.ts."
     },
     {
       "id": "US-003",
@@ -59,8 +59,8 @@
         "US-002"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/server/src/routes/terminal/docker.ts, docker.test.ts, target.ts, target.test.ts."
     },
     {
       "id": "US-004",
@@ -79,8 +79,8 @@
       "technicalNotes": "Follow plan Task 4 at docs/superpowers/plans/2026-09-07-workflow-run-terminal.md:770-896 and locked protocol contracts at lines 101-145, 230-235. Create packages/server/src/routes/terminal/protocol.ts and packages/server/src/routes/terminal/protocol.test.ts.",
       "dependsOn": [],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/server/src/routes/terminal/protocol.ts, protocol.test.ts."
     },
     {
       "id": "US-005",
@@ -104,8 +104,8 @@
         "US-003"
       ],
       "priority": 5,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/server/src/routes/terminal/pty.ts, pty.test.ts, package.json."
     },
     {
       "id": "US-006",
