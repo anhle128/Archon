@@ -889,4 +889,52 @@ describe('runDeepseekAcpTurn', () => {
     expect(message).not.toContain('Bearer');
     expect(message).not.toContain(envSecret);
   });
+
+  test('stripping one tail fragment cannot expose a further secret prefix', async () => {
+    // A single trim pass is not enough. With these two secrets a truncated tail of
+    // `BBBBBBBBAAAA` ends with the first secret's 4-character prefix; removing
+    // exactly that exposes `BBBBBBBB`, a genuine 8-character prefix of the second.
+    // Stripping must repeat to a fixed point.
+    const shortSecret = 'AAAAZZZZ';
+    const longSecret = 'BBBBBBBBXXXXX';
+    // Mirror the runner's buffer cap: output cap plus the longest secret.
+    const bufferCap = 4096 + longSecret.length;
+    const stackedTail = 'BBBBBBBBAAAA';
+    // Whole copies of `longSecret` so redaction shrinks the text below the output
+    // cap; otherwise the cap itself would slice the tail away and hide the leak.
+    const copies = 200;
+    const fillerCount = bufferCap - stackedTail.length - longSecret.length * copies;
+    expect(fillerCount).toBeGreaterThan(0);
+    const stderrText =
+      'f'.repeat(fillerCount) +
+      longSecret.repeat(copies) +
+      stackedTail +
+      'OVERFLOW-SENTINEL-0123456789';
+    expect(stderrText.length).toBeGreaterThan(bufferCap);
+    expect(stderrText.slice(0, bufferCap).endsWith(stackedTail)).toBeTrue();
+
+    const child = new FakeChild();
+    const spawnImpl = ((_command: string): ChildProcess => {
+      queueMicrotask(() => child.crash(1, stderrText));
+      return child as unknown as ChildProcess;
+    }) as typeof spawn;
+
+    const error = await collect(
+      runDeepseekAcpTurn(
+        // No sensitive env names, so the redaction set is exactly the two secrets.
+        processInput({ env: { PATH: '/usr/bin' }, secretValues: [shortSecret, longSecret] }),
+        { spawn: spawnImpl, terminateGraceMs: 0 }
+      )
+    ).catch((caught: unknown) => caught);
+
+    const message = (error as DeepseekProviderError).message;
+    expect(error).toBeInstanceOf(DeepseekProviderError);
+    expect(message).toContain('[REDACTED]');
+    // Every prefix of 4+ characters of either secret would be a real leak.
+    for (const secret of [shortSecret, longSecret]) {
+      for (let length = 4; length <= secret.length; length++) {
+        expect(message).not.toContain(secret.slice(0, length));
+      }
+    }
+  });
 });

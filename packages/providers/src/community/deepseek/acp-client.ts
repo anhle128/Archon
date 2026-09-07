@@ -24,6 +24,7 @@ import { createDeepseekEventState, mapDeepseekSessionUpdate } from './event-brid
 import {
   collectDeepseekSecretValues,
   DeepseekProviderError,
+  isRedactableSecretValue,
   redactDeepseekSecrets,
 } from './errors';
 import { answerDeepseekPermissionRequest } from './permission';
@@ -141,15 +142,13 @@ interface StderrEvidence {
 }
 
 /**
- * Length of the longest secret prefix a redacted tail still ends with.
+ * Length of the longest secret prefix a tail still ends with.
  *
- * Truncation can cut a secret in half. The surviving head is not a whole
- * secret, so redaction cannot match it and it would be emitted verbatim. This
- * runs AFTER full-match redaction on purpose: measuring against the raw text
- * lets one secret's prefix match across the boundary of another, and trimming
- * that many characters would cut into an already-complete secret and expose its
- * own head. Complete matches are removed first, then the leftover fragment is
- * measured and dropped, so only the artifact disappears.
+ * Truncation can cut a secret in half. The surviving head is not a whole secret,
+ * so redaction cannot match it and it would be emitted verbatim. Measuring
+ * against the RAW text is unsafe: one secret's prefix can match across another's
+ * boundary, and trimming that many characters would cut into an already-complete
+ * secret and expose its own head. Callers pass already-redacted text.
  */
 function trailingSecretFragmentLength(redacted: string, secrets: readonly string[]): number {
   let longest = 0;
@@ -163,6 +162,27 @@ function trailingSecretFragmentLength(redacted: string, secrets: readonly string
     }
   }
   return longest;
+}
+
+/**
+ * Drop every trailing secret-prefix fragment, repeating until none remains.
+ *
+ * One pass is not enough: removing a suffix can expose a further secret prefix of
+ * arbitrary length (up to `secret.length - 1`). With secrets `AAAAZZZZ` and
+ * `BBBBBBBBXXXXX`, a truncated tail of `BBBBBBBBAAAA` trims to `BBBBBBBB` — a
+ * genuine 8-character leak — which a second pass removes. Each pass strictly
+ * shortens the text, so the loop is bounded by the input length. Trimming can
+ * over-reach into a `[REDACTED]` marker; losing diagnostics is preferable to
+ * disclosing credentials.
+ */
+function stripTrailingSecretFragments(redacted: string, secrets: readonly string[]): string {
+  let safe = redacted;
+  while (safe.length > 0) {
+    const fragment = trailingSecretFragmentLength(safe, secrets);
+    if (fragment === 0) break;
+    safe = safe.slice(0, safe.length - fragment);
+  }
+  return safe;
 }
 
 function toSpawnFailed(error: unknown, stderr: StderrEvidence): DeepseekProviderError {
@@ -185,11 +205,10 @@ function toAcpFailed(error: unknown, stderr: StderrEvidence): DeepseekProviderEr
 
 function redactedStderrExcerpt(stderr: StderrEvidence): string {
   const { text, secrets } = stderr;
-  // Order is load-bearing: redact complete matches first, then drop the trailing
-  // fragment truncation left behind, then cap. See `trailingSecretFragmentLength`.
+  // Order is load-bearing: redact complete matches first, then strip the trailing
+  // fragments truncation left behind, then cap. See `stripTrailingSecretFragments`.
   const redacted = redactDeepseekSecrets(text, secrets);
-  const fragment = stderr.truncated ? trailingSecretFragmentLength(redacted, secrets) : 0;
-  const safe = fragment > 0 ? redacted.slice(0, redacted.length - fragment) : redacted;
+  const safe = stderr.truncated ? stripTrailingSecretFragments(redacted, secrets) : redacted;
   return safe.slice(0, STDERR_CAP);
 }
 
@@ -391,8 +410,13 @@ export async function* runDeepseekAcpTurn(
 ): AsyncGenerator<MessageChunk> {
   const spawnFn = dependencies?.spawn ?? spawn;
   const terminateGraceMs = dependencies?.terminateGraceMs ?? DEFAULT_TERMINATE_GRACE_MS;
+  // The floor is applied here as well as at each call site: a value shorter than
+  // it matches ordinary output and would shred every message it appeared in.
   const secrets = [
-    ...new Set([...collectDeepseekSecretValues(input.env), ...(input.secretValues ?? [])]),
+    ...new Set([
+      ...collectDeepseekSecretValues(input.env),
+      ...(input.secretValues ?? []).filter(isRedactableSecretValue),
+    ]),
   ];
   // Headroom beyond the output cap: redaction replaces each secret with
   // `[REDACTED]`, so keeping extra raw bytes lets the redacted excerpt still
