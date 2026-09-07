@@ -4,6 +4,7 @@ import type { NodeProps, Node } from '@xyflow/react';
 import type { DagNodeData } from './DagNodeComponent';
 import type { RouteLoopDecisionData, RuntimeNodeMetadata, WorkflowStepStatus } from '@/lib/types';
 import { formatDurationMs } from '@/lib/format';
+import { nodeStatusLabel } from './awaiting-chrome';
 import { StatusIcon } from './StatusIcon';
 
 export interface ExecutionNodeData extends DagNodeData, RuntimeNodeMetadata {
@@ -22,6 +23,7 @@ export type ExecutionFlowNode = Node<ExecutionNodeData>;
 const STATUS_STYLES: Partial<Record<WorkflowStepStatus, string>> = {
   completed: 'border-l-2 border-success bg-success/5',
   running: 'border-l-2 border-accent-bright bg-accent/5 shadow-[0_0_8px_var(--accent)]',
+  awaiting: 'border-l-2 border-warning bg-warning/5 animate-pulse motion-reduce:animate-none',
   failed: 'border-l-2 border-error bg-error/5',
   skipped: 'opacity-50 border-l-2 border-border',
 };
@@ -106,6 +108,9 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
           </span>
         )}
       </div>
+      {data.status === 'awaiting' && (
+        <div className="mt-0.5 text-[10px] text-warning">{nodeStatusLabel('awaiting')}</div>
+      )}
       {data.currentIteration !== undefined && data.maxIterations !== undefined && (
         <div className="text-[10px] text-text-tertiary mt-0.5">
           {data.expectedIterations !== undefined

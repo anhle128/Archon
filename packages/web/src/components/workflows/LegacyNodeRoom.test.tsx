@@ -9,7 +9,6 @@ import type { DagNode, WorkflowEventResponse, WorkflowNodeMessagesResponse } fro
 import type { WorkflowRunStatus } from '@/lib/types';
 
 import type { LogRow } from './build-log-rows';
-import { LegacyNodeRoom } from './LegacyNodeRoom';
 
 const react = await import('react');
 const reactQuery = await import('@tanstack/react-query');
@@ -163,10 +162,9 @@ function renderStatic(args: {
   approval?: unknown;
 }): string {
   return renderToStaticMarkup(
-    <LegacyNodeRoom
+    <legacyNodeRoom.LegacyNodeRoom
       runId="run-1"
       row={args.row}
-      isLive={false}
       loadMessages={args.loadMessages}
       definitionNodes={args.definitionNodes ?? []}
       definitionPending={args.definitionPending ?? false}
@@ -175,6 +173,12 @@ function renderStatic(args: {
       approval={args.approval ?? null}
       onApprove={async (): Promise<void> => undefined}
       onReject={async (): Promise<void> => undefined}
+      pendingInteractions={[]}
+      viewerIsStarter={false}
+      starterDisplayName={null}
+      actionStates={{}}
+      onSubmitAsk={async (): Promise<void> => undefined}
+      nodeState={undefined}
     />
   );
 }
@@ -275,6 +279,12 @@ function installHappyDom(): Window {
   return win;
 }
 
+const legacyNodeRoomImportWindow = installHappyDom();
+const legacyNodeRoom = await import('./LegacyNodeRoom');
+// Radix keeps import-time DOM references; restore globals but keep the window alive.
+restoreGlobals();
+void legacyNodeRoomImportWindow;
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -308,10 +318,9 @@ describe('LegacyNodeRoom static rooms', () => {
       }),
     ];
     const markup = renderToStaticMarkup(
-      <LegacyNodeRoom
+      <legacyNodeRoom.LegacyNodeRoom
         runId="run-1"
         row={SETUP_ROW}
-        isLive={false}
         loadMessages={loadMessages}
         definitionNodes={[{ id: 'setup', bash: 'echo ready' }]}
         definitionPending={false}
@@ -320,6 +329,12 @@ describe('LegacyNodeRoom static rooms', () => {
         approval={null}
         onApprove={async (): Promise<void> => undefined}
         onReject={async (): Promise<void> => undefined}
+        pendingInteractions={[]}
+        viewerIsStarter={false}
+        starterDisplayName={null}
+        actionStates={{}}
+        onSubmitAsk={async (): Promise<void> => undefined}
+        nodeState={undefined}
       />
     );
     expect(markup).toContain('ready');
@@ -552,6 +567,60 @@ describe('LegacyNodeRoom static rooms', () => {
     expect(markup).toContain('aria-label="group room"');
     expect(requests).toHaveLength(0);
   });
+
+  test('renders awaiting header with warning tokens and waiting on you', () => {
+    const { requests, loadMessages } = createLoadMessages();
+    const bashDef: readonly DagNode[] = [{ id: 'setup', bash: 'echo ready' }];
+    const bashEvents = [
+      workflowEvent({ id: 'start-setup', step_name: 'setup', event_type: 'node_started' }),
+    ];
+
+    const awaitingMarkup = renderStatic({
+      row: row({
+        id: 'start-setup',
+        nodeId: 'setup',
+        label: 'Setup',
+        status: 'awaiting',
+      }),
+      loadMessages,
+      definitionNodes: bashDef,
+      events: bashEvents,
+    });
+    expect(awaitingMarkup).toContain('waiting on you');
+    expect(awaitingMarkup).toContain('text-warning');
+    expect(awaitingMarkup).not.toContain('>awaiting<');
+
+    const runningMarkup = renderStatic({
+      row: row({
+        id: 'start-setup',
+        nodeId: 'setup',
+        label: 'Setup',
+        status: 'running',
+      }),
+      loadMessages,
+      definitionNodes: bashDef,
+      events: bashEvents,
+    });
+    expect(runningMarkup).toContain('running');
+    expect(runningMarkup).toContain('text-accent');
+    expect(runningMarkup).not.toContain('waiting on you');
+
+    const failedMarkup = renderStatic({
+      row: row({
+        id: 'start-setup',
+        nodeId: 'setup',
+        label: 'Setup',
+        status: 'failed',
+      }),
+      loadMessages,
+      definitionNodes: bashDef,
+      events: bashEvents,
+    });
+    expect(failedMarkup).toContain('failed');
+    expect(failedMarkup).toContain('text-error');
+    expect(failedMarkup).not.toContain('waiting on you');
+    expect(requests).toHaveLength(0);
+  });
 });
 
 describe('LegacyNodeRoom dispatcher', () => {
@@ -606,10 +675,9 @@ describe('LegacyNodeRoom dispatcher', () => {
       createElement(
         reactQuery.QueryClientProvider,
         { client: queryClient },
-        createElement(LegacyNodeRoom, {
+        createElement(legacyNodeRoom.LegacyNodeRoom, {
           runId: 'run-1',
           row: args.row,
-          isLive: false,
           loadMessages: args.loadMessages,
           definitionNodes: args.definitionNodes ?? [],
           definitionPending: args.definitionPending ?? false,
@@ -618,6 +686,12 @@ describe('LegacyNodeRoom dispatcher', () => {
           approval: null,
           onApprove: async (): Promise<void> => undefined,
           onReject: async (): Promise<void> => undefined,
+          pendingInteractions: [],
+          viewerIsStarter: false,
+          starterDisplayName: null,
+          actionStates: {},
+          onSubmitAsk: async (): Promise<void> => undefined,
+          nodeState: undefined,
         })
       )
     );

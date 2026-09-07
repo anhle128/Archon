@@ -10,6 +10,12 @@ export function StatusIcon({ status }: { status: string }): React.ReactElement {
       );
     case 'paused':
       return <Pause className="h-3 w-3 text-warning" />;
+    case 'awaiting':
+      return (
+        <span className="text-warning text-sm" aria-label="waiting on you" role="img">
+          ?
+        </span>
+      );
     case 'failed':
       return <span className="text-error text-sm">&#x2717;</span>;
     case 'cancelled':

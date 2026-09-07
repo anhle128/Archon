@@ -4983,6 +4983,8 @@ export interface components {
             nodeStates: components["schemas"]["WorkflowNodeState"][];
             pending_interactions: components["schemas"]["PendingInteraction"][];
             usage: components["schemas"]["NullableUsageReport"];
+            viewer_is_starter: boolean;
+            starter_display_name: string | null;
         };
         WorkflowEvent: {
             id: string;

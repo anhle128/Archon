@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 
 import type {
+  AskAnswerBody,
   ConversationResponse,
   DagNode,
   MessageResponse,
+  PendingInteraction,
   WorkflowEventResponse,
   WorkflowNodeMessagesResponse,
   WorkflowNodeStateResponse,
@@ -17,7 +19,6 @@ import type { Root } from 'react-dom/client';
 const react = await import('react');
 const reactQuery = await import('@tanstack/react-query');
 const reactDomClient = await import('react-dom/client');
-const legacyGraphLogsPane = await import('./LegacyGraphLogsPane');
 
 const act = react.act;
 const createElement = react.createElement;
@@ -200,6 +201,25 @@ function installHappyDom(): Window {
   return win;
 }
 
+let legacyGraphLogsPaneModulePromise: Promise<typeof import('./LegacyGraphLogsPane')> | null = null;
+
+async function loadLegacyGraphLogsPaneModule(): Promise<typeof import('./LegacyGraphLogsPane')> {
+  if (legacyGraphLogsPaneModulePromise === null) {
+    let tempWin: Window | null = null;
+    if (typeof globalThis.document === 'undefined') {
+      tempWin = installHappyDom();
+    }
+    legacyGraphLogsPaneModulePromise = import('./LegacyGraphLogsPane');
+    const module = await legacyGraphLogsPaneModulePromise;
+    if (tempWin !== null) {
+      // Radix keeps import-time DOM references; restore globals but keep the window alive.
+      restoreGlobals();
+    }
+    return module;
+  }
+  return legacyGraphLogsPaneModulePromise;
+}
+
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -252,8 +272,9 @@ describe('LegacyGraphLogsPane', () => {
   let host: Element;
   let root: Root;
   let queryClient: InstanceType<typeof reactQuery.QueryClient>;
+  let legacyGraphLogsPane: typeof import('./LegacyGraphLogsPane');
 
-  beforeEach(() => {
+  beforeEach(async () => {
     notifyManager.setScheduler((cb: () => void): void => {
       cb();
     });
@@ -272,6 +293,7 @@ describe('LegacyGraphLogsPane', () => {
         queries: { retry: false },
       },
     });
+    legacyGraphLogsPane = await loadLegacyGraphLogsPaneModule();
   });
 
   afterEach(async () => {
@@ -346,6 +368,10 @@ describe('LegacyGraphLogsPane', () => {
       onSelectNode: (nodeId: string | null) => void;
       onApprove?: () => Promise<void>;
       onReject?: (reason?: string) => Promise<void>;
+      pendingInteractions?: readonly PendingInteraction[];
+      viewerIsStarter?: boolean;
+      starterDisplayName?: string | null;
+      onSubmitAsk?: (requestId: string, body: AskAnswerBody) => Promise<void>;
     } & ParentConversationOverrides
   ): React.ReactElement {
     const [selectedNodeId, setSelectedNodeId] = react.useState<string | null>(null);
@@ -356,7 +382,6 @@ describe('LegacyGraphLogsPane', () => {
       runId: props.runId,
       nodeStates: props.nodeStates,
       events: props.events,
-      isLive: false,
       loadMessages: props.loadMessages,
       parentPlatformId: props.parentPlatformId === undefined ? 'parent-1' : props.parentPlatformId,
       loadParentMessages: props.loadParentMessages ?? (async (): Promise<MessageResponse[]> => []),
@@ -379,6 +404,12 @@ describe('LegacyGraphLogsPane', () => {
       approval: props.approval,
       onApprove: props.onApprove ?? (async (): Promise<void> => undefined),
       onReject: props.onReject ?? (async (): Promise<void> => undefined),
+      pendingInteractions: props.pendingInteractions ?? [],
+      viewerIsStarter: props.viewerIsStarter ?? true,
+      starterDisplayName:
+        props.starterDisplayName === undefined ? 'Avery' : props.starterDisplayName,
+      actionStates: {},
+      onSubmitAsk: props.onSubmitAsk ?? (async (): Promise<void> => undefined),
     });
   }
 
@@ -396,6 +427,10 @@ describe('LegacyGraphLogsPane', () => {
       onSelectNode: (nodeId: string | null) => void;
       onApprove?: () => Promise<void>;
       onReject?: (reason?: string) => Promise<void>;
+      pendingInteractions?: readonly PendingInteraction[];
+      viewerIsStarter?: boolean;
+      starterDisplayName?: string | null;
+      onSubmitAsk?: (requestId: string, body: AskAnswerBody) => Promise<void>;
     } & ParentConversationOverrides
   ): void {
     root.render(
@@ -2052,5 +2087,190 @@ describe('LegacyGraphLogsPane', () => {
     await flush();
     expect(host.querySelector('[aria-label="ghost room"]')).not.toBeNull();
     expect(host.querySelector('[aria-current="true"]')?.textContent).toContain('started');
+  });
+
+  function pendingReviewAsk(): PendingInteraction {
+    return {
+      id: 'ask-1',
+      workflow_run_id: 'run-1',
+      node_id: 'review',
+      tool_use_id: 'tool-ask',
+      kind: 'ask',
+      status: 'pending',
+      envelope: {
+        questions: [
+          {
+            id: 'q1',
+            prompt: 'Ship it?',
+            selection: 'single',
+            options: ['Ship', 'Hold'],
+            allowOther: false,
+          },
+        ],
+      },
+      answer: null,
+      provider_session_id: 'sess-1',
+      created_at: CREATED_AT,
+      resolved_at: null,
+      resolved_by: null,
+    };
+  }
+
+  const ASK_MESSAGES: WorkflowNodeMessagesResponse = {
+    messages: [
+      {
+        id: 'm-ask-tool',
+        seq: 1,
+        kind: 'tool',
+        payload: { name: 'AskHuman', id: 'tool-ask', input: {} },
+        created_at: CREATED_AT,
+      },
+    ],
+  };
+
+  test('Logs, Graph, and Chat open the same agent room with the same anchored Ask card', async () => {
+    const paneArgs = {
+      runId: 'run-1',
+      nodeStates: SHARED_BASH_COMMAND.nodeStates,
+      events: SHARED_BASH_COMMAND.events,
+      definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+      definitionPending: false,
+      runStatus: 'paused' as const,
+      approval: null,
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ASK_MESSAGES,
+      pendingInteractions: [pendingReviewAsk()],
+      onSelectNode: (): void => undefined,
+    };
+
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'logs' });
+    });
+    await clickRow('Review');
+    await flushUntil(host, 'logs ask', () => (host.textContent ?? '').includes('Ship it?'));
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expect(
+      host.querySelector('form[aria-label="question from agent, 1 questions"]')
+    ).not.toBeNull();
+
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'graph' });
+    });
+    await clickRow('graph:review');
+    await flushUntil(host, 'graph ask', () => (host.textContent ?? '').includes('Ship it?'));
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expect(
+      host.querySelector('form[aria-label="question from agent, 1 questions"]')
+    ).not.toBeNull();
+
+    await act(async () => {
+      renderLogs({ ...paneArgs, activeView: 'chat' });
+    });
+    await flushUntil(host, 'chat review started', () =>
+      Array.from(host.querySelectorAll('button')).some(
+        button =>
+          (button.textContent ?? '').includes('Review') &&
+          (button.textContent ?? '').includes('started')
+      )
+    );
+    const started = Array.from(host.querySelectorAll('button')).find(
+      button =>
+        (button.textContent ?? '').includes('Review') &&
+        (button.textContent ?? '').includes('started')
+    );
+    if (started === undefined) {
+      throw new Error('missing Review started timeline entry');
+    }
+    await act(async () => {
+      started.click();
+    });
+    await flushUntil(host, 'chat ask', () => (host.textContent ?? '').includes('Ship it?'));
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expect(
+      host.querySelector('form[aria-label="question from agent, 1 questions"]')
+    ).not.toBeNull();
+  });
+
+  test('a non-agent room with a pending Ask row keeps its typed room and omits the Ask form', async () => {
+    await act(async () => {
+      renderLogs({
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'paused',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ASK_MESSAGES,
+        pendingInteractions: [
+          pendingReviewAsk(),
+          { ...pendingReviewAsk(), id: 'ask-setup', node_id: 'setup' },
+        ],
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await clickRow('Setup');
+    await flushUntil(host, 'bash room', () => (host.textContent ?? '').includes('ready'));
+    expect(host.querySelector('[aria-label="setup room"]')).not.toBeNull();
+    expect(host.textContent).toContain('Bash');
+    expect(host.querySelector('form[aria-label="question from agent, 1 questions"]')).toBeNull();
+    expect(host.textContent).not.toContain('Ship it?');
+  });
+
+  test('the Chat composer stays a parent-conversation path and never answers an Ask', async () => {
+    const sendCalls: [string, string][] = [];
+    const askCalls: [string, AskAnswerBody][] = [];
+    await act(async () => {
+      renderLogs({
+        activeView: 'chat',
+        runId: 'run-1',
+        nodeStates: SHARED_BASH_COMMAND.nodeStates,
+        events: SHARED_BASH_COMMAND.events,
+        definitionNodes: SHARED_BASH_COMMAND.definitionNodes,
+        definitionPending: false,
+        runStatus: 'paused',
+        approval: null,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ASK_MESSAGES,
+        pendingInteractions: [pendingReviewAsk()],
+        sendParentMessage: async (
+          conversationId: string,
+          message: string
+        ): Promise<{ accepted: boolean; status: string }> => {
+          sendCalls.push([conversationId, message]);
+          return { accepted: true, status: 'accepted' };
+        },
+        onSubmitAsk: async (requestId, body): Promise<void> => {
+          askCalls.push([requestId, body]);
+        },
+        onSelectNode: (): void => undefined,
+      });
+    });
+    await flushUntil(host, 'composer isolation', () => {
+      const candidate = host.querySelector('[aria-label="Message the run conversation"]');
+      return candidate !== null && !candidate.hasAttribute('disabled');
+    });
+    expect(host.querySelector('[aria-label="Run conversation composer"]')).not.toBeNull();
+    const textarea = requireComposerTextarea(
+      host.querySelector('[aria-label="Message the run conversation"]')
+    );
+    await act(async () => {
+      const propsKey = Object.keys(textarea).find(key => key.startsWith('__reactProps$'));
+      if (propsKey !== undefined) {
+        const props = (textarea as unknown as Record<string, unknown>)[propsKey];
+        if (props !== null && typeof props === 'object' && 'onChange' in props) {
+          const onChange = (props as { onChange?: (event: { target: { value: string } }) => void })
+            .onChange;
+          onChange?.({ target: { value: 'not an ask' } });
+        }
+      }
+    });
+    const form = requireComposerForm(
+      host.querySelector('[aria-label="Run conversation composer"]')
+    );
+    await act(async () =>
+      form.dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }))
+    );
+    await flushUntil(host, 'composer sent', () => sendCalls.length === 1);
+    expect(sendCalls).toEqual([['parent-1', 'not an ask']]);
+    expect(askCalls).toEqual([]);
   });
 });

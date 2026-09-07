@@ -33,25 +33,65 @@ const INSTALLED_GLOBAL_KEYS = [
   'IS_REACT_ACT_ENVIRONMENT',
 ] as const;
 
-const previousGlobals = new Map<string, PropertyDescriptor | undefined>();
+const previousGlobalsStack: Map<string, PropertyDescriptor | undefined>[] = [];
 
 function snapshotGlobals(): void {
-  previousGlobals.clear();
+  const snapshot = new Map<string, PropertyDescriptor | undefined>();
   for (const key of INSTALLED_GLOBAL_KEYS) {
-    previousGlobals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    snapshot.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+  }
+  previousGlobalsStack.push(snapshot);
+}
+
+/**
+ * Install one happy-dom binding onto `globalThis`.
+ *
+ * Bun (and some happy-dom installs) expose DOM keys as readonly or accessor
+ * properties. `Object.assign` uses [[Set]] and throws
+ * `TypeError: Attempted to assign to readonly property.` for those keys.
+ * `defineProperty` uses [[DefineOwnProperty]] and can replace configurable
+ * bindings; non-configurable readonly keys are skipped rather than aborting
+ * the rest of the install.
+ */
+function installGlobalValue(key: string, value: unknown): void {
+  const existing = Object.getOwnPropertyDescriptor(globalThis, key);
+  if (existing?.configurable === false) {
+    if (existing.writable === true) {
+      (globalThis as Record<string, unknown>)[key] = value;
+      return;
+    }
+    if (typeof existing.set === 'function') {
+      Reflect.set(globalThis, key, value);
+    }
+    return;
+  }
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    value,
+  });
+}
+
+function installGlobalBag(bag: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(bag)) {
+    installGlobalValue(key, value);
   }
 }
 
 export function restoreHappyDom(): void {
+  const snapshot = previousGlobalsStack.pop();
+  if (snapshot === undefined) {
+    return;
+  }
   for (const key of INSTALLED_GLOBAL_KEYS) {
-    const descriptor = previousGlobals.get(key);
+    const descriptor = snapshot.get(key);
     if (descriptor === undefined) {
       Reflect.deleteProperty(globalThis, key);
     } else {
       Object.defineProperty(globalThis, key, descriptor);
     }
   }
-  previousGlobals.clear();
 }
 
 export function installHappyDom(): Window {
@@ -92,6 +132,6 @@ export function installHappyDom(): Window {
     InputEvent: win.InputEvent,
     IS_REACT_ACT_ENVIRONMENT: true,
   };
-  Object.assign(globalThis as object, bag);
+  installGlobalBag(bag);
   return win;
 }

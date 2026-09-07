@@ -2,6 +2,7 @@
  * Inspect-only node transcript room: slice a node's messages for the selected
  * run row and render text, tool calls, and lifecycle notes.
  */
+import { Fragment } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
@@ -19,6 +20,8 @@ export interface NodeRoomProps {
   isPending: boolean;
   error: unknown;
   onRetry: () => void;
+  renderAfterMessage?: (message: WorkflowNodeMessageResponse) => React.ReactNode;
+  renderAtEnd?: React.ReactNode;
 }
 
 type ToolMessage = Extract<WorkflowNodeMessageResponse, { kind: 'tool' }>;
@@ -208,6 +211,8 @@ export function NodeRoom({
   isPending,
   error,
   onRetry,
+  renderAfterMessage,
+  renderAtEnd,
 }: NodeRoomProps): React.ReactElement {
   if (nodeId === null || selection === null) {
     return <RoomPlaceholder>Select a node</RoomPlaceholder>;
@@ -229,20 +234,25 @@ export function NodeRoom({
         >
           Retry
         </button>
+        {renderAtEnd}
       </div>
     );
   } else {
     const ordered = selectNodeRoomMessages(messages ?? [], selection);
     if (ordered.length === 0) {
-      body = <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>;
+      body = renderAtEnd ?? <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>;
     } else {
       body = (
         <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
           {ordered.map(
             (message): React.ReactElement => (
-              <div key={message.id}>{renderTranscriptItem(message)}</div>
+              <Fragment key={message.id}>
+                <div>{renderTranscriptItem(message)}</div>
+                {renderAfterMessage?.(message)}
+              </Fragment>
             )
           )}
+          {renderAtEnd}
         </div>
       );
     }

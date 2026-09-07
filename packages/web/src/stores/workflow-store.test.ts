@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { queryClient } from '@/lib/query-client';
 import { useWorkflowStore, selectActiveWorkflow, cleanupWorkflowStore } from './workflow-store';
 import type {
   WorkflowStatusEvent,
@@ -275,6 +276,39 @@ describe('handleWorkflowStatus — approval field', () => {
       .handleWorkflowStatus(statusEvent({ runId: 'run-ap3', status: 'running' }));
     const wf = useWorkflowStore.getState().workflows.get('run-ap3');
     expect(wf!.approval).toBeUndefined();
+  });
+});
+
+describe('handleWorkflowStatus — query invalidation', () => {
+  let invalidateSpy: ReturnType<typeof spyOn> | undefined;
+
+  afterEach(() => {
+    invalidateSpy?.mockRestore();
+    invalidateSpy = undefined;
+  });
+
+  test('invalidates run detail on paused workflow status', () => {
+    invalidateSpy = spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
+    useWorkflowStore
+      .getState()
+      .handleWorkflowStatus(statusEvent({ runId: 'run-pause-inv', status: 'paused' }));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workflowRun'] });
+  });
+
+  test('invalidates run detail on running workflow status', () => {
+    invalidateSpy = spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
+    useWorkflowStore
+      .getState()
+      .handleWorkflowStatus(statusEvent({ runId: 'run-running-inv', status: 'running' }));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workflowRun'] });
+  });
+
+  test('invalidates run detail on terminal workflow status', () => {
+    invalidateSpy = spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
+    useWorkflowStore
+      .getState()
+      .handleWorkflowStatus(statusEvent({ runId: 'run-terminal-inv', status: 'completed' }));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workflowRun'] });
   });
 });
 

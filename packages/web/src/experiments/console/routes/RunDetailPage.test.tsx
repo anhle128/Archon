@@ -394,6 +394,8 @@ describe('RunDetailPage inspect selection', () => {
             nodeStates: options.nodeStates ?? NODE_STATES,
             pending_interactions: [],
             usage: null,
+            viewer_is_starter: false,
+            starter_display_name: null,
           } satisfies RunDetailResponse)
         );
       }

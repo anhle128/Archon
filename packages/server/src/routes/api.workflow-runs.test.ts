@@ -641,6 +641,17 @@ mock.module('@archon/core/db/workflow-pending-interactions', () => ({
   PendingInteractionValidationError,
 }));
 
+type MockUserRow = {
+  id: string;
+  display_name: string | null;
+  email: string | null;
+  role: 'admin' | 'member';
+  created_at: Date;
+  updated_at: Date;
+};
+
+const mockGetUserById = mock(async (_id: string) => null as null | MockUserRow);
+
 const mockFindOrCreateUserByPlatformIdentity = mock(
   async (_platform: string, platformUserId: string, _displayName?: string) => ({
     id: platformUserId,
@@ -654,6 +665,7 @@ const mockFindOrCreateUserByPlatformIdentity = mock(
 
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
+  getUserById: mockGetUserById,
 }));
 
 mock.module('@archon/core/db/workflow-envs', () => ({
@@ -1782,6 +1794,8 @@ describe('GET /api/workflows/runs/:runId', () => {
     );
     mockListPendingInteractions.mockReset();
     mockListPendingInteractions.mockImplementation(async () => []);
+    mockGetUserById.mockReset();
+    mockGetUserById.mockImplementation(async () => null);
   });
 
   test('returns run with events for a known runId', async () => {
@@ -1808,6 +1822,113 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(body.events[0]?.event_type).toBe('step_started');
     expect(body.events[2]?.event_type).toBe('tool_called');
     expect(body.nodeStates).toEqual([]);
+  });
+
+  test('returns viewer and starter presentation', async () => {
+    const starterId = 'user-starter-1';
+    const cases: Array<{
+      name: string;
+      userId: string | null;
+      header?: string;
+      displayName: string | null;
+      viewerIsStarter: boolean;
+      starterDisplayName: string | null;
+      expectLookup: boolean;
+    }> = [
+      {
+        name: 'signed-in starter',
+        userId: starterId,
+        header: starterId,
+        displayName: 'Avery',
+        viewerIsStarter: true,
+        starterDisplayName: 'Avery',
+        expectLookup: true,
+      },
+      {
+        name: 'signed-in teammate',
+        userId: starterId,
+        header: 'user-teammate-1',
+        displayName: 'Avery',
+        viewerIsStarter: false,
+        starterDisplayName: 'Avery',
+        expectLookup: true,
+      },
+      {
+        name: 'unsigned viewer',
+        userId: starterId,
+        displayName: 'Avery',
+        viewerIsStarter: false,
+        starterDisplayName: 'Avery',
+        expectLookup: true,
+      },
+      {
+        name: 'starter with no display name',
+        userId: starterId,
+        header: starterId,
+        displayName: null,
+        viewerIsStarter: true,
+        starterDisplayName: starterId,
+        expectLookup: true,
+      },
+      {
+        name: 'starter-less run',
+        userId: null,
+        header: 'user-anyone',
+        displayName: 'Avery',
+        viewerIsStarter: false,
+        starterDisplayName: null,
+        expectLookup: false,
+      },
+    ];
+
+    for (const row of cases) {
+      mockGetWorkflowRun.mockReset();
+      mockListWorkflowEvents.mockReset();
+      mockGetConversationById.mockReset();
+      mockGetUserById.mockReset();
+      mockGetUserById.mockImplementation(async () => null);
+
+      mockGetWorkflowRun.mockImplementation(async () => ({
+        ...MOCK_RUNNING_RUN,
+        user_id: row.userId,
+      }));
+      mockListWorkflowEvents.mockImplementation(async () => []);
+      mockGetConversationById.mockImplementation(async () => null);
+      if (row.userId !== null) {
+        mockGetUserById.mockImplementation(async (id: string) =>
+          id === row.userId
+            ? {
+                id,
+                display_name: row.displayName,
+                email: null,
+                role: 'admin' as const,
+                created_at: new Date(),
+                updated_at: new Date(),
+              }
+            : null
+        );
+      }
+
+      const { app } = makeApp();
+      const response = await app.request('/api/workflows/runs/run-uuid-1', {
+        headers: row.header ? { 'X-Archon-User': row.header } : undefined,
+      });
+      expect(response.status, row.name).toBe(200);
+      const body = (await response.json()) as {
+        viewer_is_starter: boolean;
+        starter_display_name: string | null;
+      };
+      expect(body.viewer_is_starter, row.name).toBe(row.viewerIsStarter);
+      expect(body.starter_display_name, row.name).toBe(row.starterDisplayName);
+      if (row.expectLookup) {
+        expect(
+          mockGetUserById.mock.calls.map(call => call[0]),
+          row.name
+        ).toEqual([row.userId]);
+      } else {
+        expect(mockGetUserById.mock.calls, row.name).toEqual([]);
+      }
+    }
   });
 
   test('projects later retry epoch completion as authoritative in nodeStates while preserving raw events', async () => {
@@ -2972,13 +3093,20 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
           required?: string[];
           properties?: {
             pending_interactions?: { items?: { $ref?: string }; type?: string };
+            viewer_is_starter?: { type?: string };
+            starter_display_name?: { type?: string; nullable?: boolean };
           };
         }
       | undefined;
     expect(detail?.required).toContain('pending_interactions');
+    expect(detail?.required).toContain('viewer_is_starter');
+    expect(detail?.required).toContain('starter_display_name');
     expect(detail?.properties?.pending_interactions?.items?.$ref).toBe(
       '#/components/schemas/PendingInteraction'
     );
+    expect(detail?.properties?.viewer_is_starter).toEqual({ type: 'boolean' });
+    expect(detail?.properties?.starter_display_name?.type).toBe('string');
+    expect(detail?.properties?.starter_display_name?.nullable).toBe(true);
 
     const nodeState = document.components?.schemas?.WorkflowNodeState as
       | { properties?: { status?: { enum?: string[] } } }
