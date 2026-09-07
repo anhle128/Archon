@@ -23,6 +23,8 @@ yarn-error.log*
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+# e2e/ is a standalone npm package (not a bun workspace member). CI uses `npm ci`.
+!e2e/package-lock.json
 
 # ESLint cache
 .eslintcache
