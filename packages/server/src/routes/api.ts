@@ -422,6 +422,10 @@ import {
   AskHumanAuthenticationRequiredError,
   AskHumanForbiddenError,
   AskHumanRunNotFoundError,
+  confirmPermission,
+  PermissionAuthenticationRequiredError,
+  PermissionForbiddenError,
+  PermissionRunNotFoundError,
   reviewOpenWorkflow,
   rejectWorkflow,
   resumeWorkflow,
@@ -455,6 +459,7 @@ import {
   workflowRunsQuerySchema,
   approveWorkflowRunBodySchema,
   askAnswerRequestSchema,
+  permissionConfirmRequestSchema,
   rejectWorkflowRunBodySchema,
   resetWorkflowNodeSessionsParamsSchema,
   resetWorkflowNodeSessionsQuerySchema,
@@ -1478,6 +1483,39 @@ const answerAskHumanRoute = createRoute({
       description: 'AskHuman answer accepted',
     },
     400: jsonError('Invalid AskHuman answer'),
+    401: jsonError('Authentication required'),
+    403: jsonError('Forbidden'),
+    404: jsonError('Not found'),
+    409: jsonError('Conflict'),
+    500: jsonError('Server error'),
+  },
+});
+
+const confirmPermissionRoute = createRoute({
+  method: 'post',
+  path: '/api/workflows/runs/{runId}/permissions/{callId}/confirm',
+  tags: ['Workflows'],
+  summary: 'Confirm a pending permission interaction',
+  request: {
+    params: z.object({
+      runId: z.string().min(1),
+      callId: z.string().min(1),
+    }),
+    body: {
+      content: {
+        'application/json': { schema: permissionConfirmRequestSchema },
+      },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: {
+        'application/json': { schema: workflowRunActionResponseSchema },
+      },
+      description: 'Permission confirmation accepted',
+    },
+    400: jsonError('Invalid permission confirmation'),
     401: jsonError('Authentication required'),
     403: jsonError('Forbidden'),
     404: jsonError('Not found'),
@@ -4923,6 +4961,65 @@ export function registerApiRoutes(
     }
   });
 
+  // Enforce Permission confirm auth before OpenAPI body validation so
+  // unauthenticated callers receive 401 even when the install-wide API gate
+  // is disabled.
+  app.use('/api/workflows/runs/:runId/permissions/:callId/confirm', async (c, next) => {
+    if (c.req.method !== 'POST') return next();
+    const requester = await resolveAuthContext(c);
+    if (!requester) return apiError(c, 401, 'Authentication required');
+    return next();
+  });
+
+  // POST /api/workflows/runs/:runId/permissions/:callId/confirm
+  registerOpenApiRoute(confirmPermissionRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const callId = c.req.param('callId') ?? '';
+    try {
+      const requester = await resolveAuthContext(c);
+      if (!requester) return apiError(c, 401, 'Authentication required');
+      const body = getValidatedBody(c, permissionConfirmRequestSchema);
+      const result = await confirmPermission({
+        runId,
+        callId,
+        body,
+        actorUserId: requester.userId,
+      });
+      return c.json({
+        success: true,
+        message:
+          result.remainingPending > 0
+            ? `Permission confirmation accepted: ${result.run.workflow_name}. Other interactions remain.`
+            : `Permission confirmation accepted: ${result.run.workflow_name}.`,
+      });
+    } catch (error) {
+      if (error instanceof PermissionAuthenticationRequiredError) {
+        return apiError(c, 401, error.message);
+      }
+      if (error instanceof PermissionForbiddenError) {
+        return apiError(c, 403, error.message);
+      }
+      if (
+        error instanceof PermissionRunNotFoundError ||
+        error instanceof workflowPendingInteractionDb.PendingInteractionNotFoundError
+      ) {
+        return apiError(c, 404, error.message);
+      }
+      if (
+        error instanceof workflowPendingInteractionDb.PendingInteractionAlreadyResolvedError ||
+        error instanceof workflowPendingInteractionDb.PendingInteractionRunNotPausedError
+      ) {
+        return apiError(c, 409, error.message);
+      }
+      if (error instanceof workflowPendingInteractionDb.PendingInteractionValidationError) {
+        return apiError(c, 400, error.message);
+      }
+      const errorName = error instanceof Error ? error.name : 'UnknownError';
+      getLog().error({ errorName, runId, callId }, 'api.workflow_permission_confirm_failed');
+      return apiError(c, 500, 'Failed to confirm permission');
+    }
+  });
+
   // DELETE /api/workflows/runs/:runId - Delete a workflow run
   registerOpenApiRoute(deleteWorkflowRunRoute, async c => {
     const runId = c.req.param('runId') ?? '';
@@ -5109,6 +5206,15 @@ export function registerApiRoutes(
         usage = null;
       }
 
+      const requester = await resolveAuthContext(c);
+      const viewerIsStarter =
+        requester !== undefined &&
+        requester.userId.length > 0 &&
+        run.user_id !== null &&
+        requester.userId === run.user_id;
+      const starter = run.user_id === null ? null : await userDb.getUserById(run.user_id);
+      const starterDisplayName = starter?.display_name?.trim() || run.user_id;
+
       return c.json({
         run: {
           ...toApiWorkflowRun(run),
@@ -5127,6 +5233,8 @@ export function registerApiRoutes(
           resolved_at: row.resolved_at ? toISOString(row.resolved_at) : null,
         })),
         usage,
+        viewer_is_starter: viewerIsStarter,
+        starter_display_name: starterDisplayName,
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');

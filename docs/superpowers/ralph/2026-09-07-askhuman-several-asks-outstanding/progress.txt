@@ -1,0 +1,173 @@
+## Codebase Patterns
+
+### sprint-status conflict overlay can be committed file content
+- **Where**: `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml`
+- **Pattern**: The Read-tool conflict diagnostic (`⚠ 2 unresolved conflicts`, `conflict://N`) can live as trailing bytes in HEAD, not only as a live overlay. On-disk YAML already matched `@theirs` (`2026-09-07 01:23:49 +0700` from `c25ea00c`). Rewrite the file without the diagnostic, then mark the story `done` with a fresh timestamp.
+- **Gotcha**: `conflict://*` writes fail across turns (ids expire). `conflict://*` via Cursor Write becomes `conflict://*:raw` and is rejected. Verify markers with Python on file bytes, not workspace `rg` (it can see the overlay).
+
+### Run-detail route tests are ESLint-ignored
+- **Where**: `packages/server/src/routes/api.workflow-runs.test.ts` `describe('GET /api/workflows/runs/:runId')`
+- **Pattern**: Append multi-row Ask characterizations after the last single-pending projection test (`projects awaiting from a pending row...`). The route test proves the server supplies all rows to the projector and returns them unchanged (timestamp serialization aside); do not recompute `isAwaitingInput` in the test.
+- **Gotcha**: ESLint ignores this file; local gate is `prettier --check` plus `cd packages/server && bun test src/routes/api.workflow-runs.test.ts`. `NOW` and `MOCK_RUNNING_RUN` already exist in the file.
+
+### InMemoryStore Ask-only pause omits approval metadata
+- **Where**: `packages/workflows/src/subrun.test.ts` `InMemoryStore.pauseWorkflowRun`
+- **Pattern**: Write `metadata.approval` only when `approvalContext !== undefined`. Spreading `undefined` as `{ ...approvalContext, resolved: null }` yields `{ resolved: null }`, which is not `undefined` and diverges from production SQLite.
+- **Example**: `if (approvalContext !== undefined) { r.metadata = { ...r.metadata, approval: { ...approvalContext, resolved: null }, ...(extraMetadata ?? {}) }; }`
+- **Gotcha**: Child Ask e2e depends on this parity — otherwise the child run looks like an approval gate. `subrun.test.ts` MUST run in its own `bun test` process (package.json already isolates it).
+
+### AskHuman persist-and-pause lives in the native tool
+- **Where**: `packages/workflows/src/ask-human.ts` after `insertPendingInteraction`
+- **Pattern**: Each AskHuman call persists a pending row, then `pauseWorkflowRun(runId)` with no approval context, then throws `AskHumanAwaitingError`. Already-paused is idempotent. Same-node concurrent Asks therefore pause twice; the executor `pauseOnAskHuman` only records node `awaiting` and emits `node_awaiting`.
+- **Gotcha**: Same-node two-Ask characterization fails if pause stays only in the executor catch (one unwind → one pause). Do not run `ask-human.test.ts` in the same `bun test` process as `dag-executor.test.ts` (`mock.module('@archon/paths')` pollution).
+
+### Pending-interaction tests are a dedicated bun test segment
+- **Where**: `packages/core/src/db/workflow-pending-interactions.test.ts`
+- **Pattern**: File mocks `./connection` at module scope, so it MUST run as `cd packages/core && bun test src/db/workflow-pending-interactions.test.ts` in its own process. ESLint ignores it; gate is prettier + that focused test.
+- **Helpers**: `seedRun`, `pauseRun`, `resolveInput`, `mixedEnvelope`, `runStatus` already exist; append new `resolvePendingInteraction` cases after the sibling-interaction test.
+- **Gotcha**: `StrReplace` on this file truncated it to ~300 lines; restore via `git checkout` and insert with a script if that happens again.
+
+### Pending-row awaiting overlay is per-node
+- **Where**: `packages/workflows/src/retry-state.ts:189-200`
+- **Pattern**: `projectLatestEffectiveNodeStates(events, pending)` overlays `awaiting` only onto nodes that own a `status === 'pending'` row. Answered rows are skipped. Mixed answered+pending on one node stays `awaiting`. A sibling with only answered rows stays at its event-derived state (`running` after `node_started`).
+- **Example**: Overlay loop is `for (const row of pending ?? []) { if (row.status !== 'pending') continue; ... state: 'awaiting' }` keyed by `row.node_id`.
+- **Gotcha**: Characterization tests must omit `node_awaiting` events; otherwise they cannot prove the overlay is what keeps the node awaiting.
+
+### Workflows tests import schemas that need workspace install
+- **Where**: `packages/workflows/src/schemas/retry.ts` via `@hono/zod-openapi`
+- **Pattern**: A fresh worktree has no `node_modules`. Run `bun install` from the repo root before `bun test`.
+- **Example**: `cd packages/workflows && bun test src/retry-state.test.ts` failed with `Cannot find module '@hono/zod-openapi'` until install.
+
+---
+
+## 2026-09-07 — US-001: Characterize pending-row node projection for mixed rows and sibling nodes
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/retry-state.test.ts` — appended same-node mixed-row and sibling-ownership projector characterization tests
+
+**Acceptance criteria verified**:
+- [x] Append same-node mixed-row characterization test verifying `projectLatestEffectiveNodeStates` keeps a node awaiting when one row is answered and another is pending without requiring a `node_awaiting` event
+- [x] Append sibling-ownership characterization test verifying awaiting overlays only onto the sibling that owns a pending Ask row, while the other sibling with answered rows remains running
+- [x] Focused test `cd packages/workflows && bun test src/retry-state.test.ts` passes (15 pass, 0 fail)
+- [x] Changes committed as `test(workflows): cover multiple pending ask projections` (`95e673af`)
+
+**Learnings**:
+- Production overlay already implements both invariants; Task 1 is characterization only — do not touch `retry-state.ts`
+- Existing overlay tests live after the `retry DAG state projection` describe block as top-level `test(...)` calls; append new cases there, not inside the describe
+- ESLint ignore pattern covers this test file; use `prettier --check` plus `bun test` as the local gate
+- Worktree needed `bun install` before tests could import `@hono/zod-openapi`
+
+---
+
+## 2026-09-07 — US-002: Characterize run-wide Ask resolution, multi-kind blockers, and run ownership in SQLite
+
+**Status**: PASSED
+**Files changed**:
+- `packages/core/src/db/workflow-pending-interactions.test.ts` — imported `PendingInteractionNotFoundError`; appended run-wide last-row, permission-kind, and child-run ownership characterization tests inside `describe('resolvePendingInteraction')`
+
+**Acceptance criteria verified**:
+- [x] Import PendingInteractionNotFoundError into packages/core/src/db/workflow-pending-interactions.test.ts destructured import.
+- [x] Add test 'keeps two Ask nodes blocked until the last run-wide pending row is answered' asserting first answer returns resumed: false, remaining_pending: 1, run status 'paused', and second answer returns resumed: true, remaining_pending: 0, run status 'running'.
+- [x] Add test 'counts a pending permission interaction when an Ask answer is resolved' proving resolvePendingInteraction counts pending rows of kind 'permission' and does not resume the run.
+- [x] Add test 'resolves a child Ask only through the child workflow run id' proving resolving with parent workflow_run_id throws PendingInteractionNotFoundError, child row remains pending, and resolving with child run id resumes child without mutating parent run status.
+- [x] Focused test `cd packages/core && bun test src/db/workflow-pending-interactions.test.ts` passes (28 pass, 0 fail)
+- [x] Changes committed as `test(core): cover run-wide ask resolution` (`bda5c7b2`)
+
+**Learnings**:
+- Production SQLite `resolvePendingInteraction` already implements run-wide remaining-count CAS, all-kind pending counting, and `(workflow_run_id, tool_use_id)` lookup — Task 2 is characterization only
+- Append after the existing sibling-interaction test inside `describe('resolvePendingInteraction')`; helpers `mixedEnvelope`, `resolveInput`, `pauseRun`, `seedRun`, `runStatus` already exist
+- This file is its own `bun test` segment because `mock.module('./connection')` conflicts with other DB tests
+- ESLint ignore pattern covers this test file; use `prettier --check` plus the focused `bun test`
+
+---
+
+## 2026-09-07 — US-003: Characterize concurrent DAG Ask scheduling and update executor comments
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/dag-executor.test.ts` — generalized Ask helpers (`deferred`, `wireAskPause`, `invokeInjectedAskHuman`, `executeAskDag`); added sibling Ask, streaming-sibling, and same-node two-Ask characterizations
+- `packages/workflows/src/dag-executor.ts` — paused-stream comments now mention AskHuman; `pauseOnAskHuman` records awaiting/emits only
+- `packages/workflows/src/ask-human.ts` — persist-and-pause: `pauseWorkflowRun(workflowRunId)` before throwing `AskHumanAwaitingError`
+- `packages/workflows/src/ask-human.test.ts` — asserts Ask-only pause is called without approval context
+
+**Acceptance criteria verified**:
+- [x] Generalize Ask test helpers: deferred(), wireAskPause, invokeInjectedAskHuman, executeAskDag
+- [x] Test persists a second sibling Ask after the first Ask has paused the run
+- [x] Test lets an already-started sibling finish streaming after another node pauses the run
+- [x] Test persists two Ask calls from one node before unwinding it as awaiting
+- [x] Update stale comments in dag-executor.ts for concurrent approval or AskHuman
+- [x] Focused test `cd packages/workflows && bun test src/dag-executor.test.ts` passes (606 pass, 0 fail)
+- [x] Commit `test(workflows): cover concurrent ask scheduling` (`e1c7cc82`)
+
+**Learnings**:
+- Plan baseline said ask-human.ts already paused; production only paused in the executor catch, so two same-node Asks paused once. Moving pause into the tool matches `IWorkflowStore.pauseWorkflowRun` Ask-only docs and the same-node AC
+- `dag-executor.test.ts` is ~26k lines; prefer a Python/eval splice over StrReplace
+- `packages/workflows` test script already isolates `ask-human.test.ts` in its own bun test process
+
+---
+
+## 2026-09-07 — US-004: Repair stateful sub-run test double and characterize child run Ask ownership
+
+**Status**: PASSED
+**Files changed**:
+- `packages/workflows/src/subrun.test.ts` — Ask-only pause characterization; `InMemoryStore.pauseWorkflowRun` writes approval metadata only when context is provided; child-run Ask e2e for ownership and parent pause without row copy
+
+**Acceptance criteria verified**:
+- [x] Add failing test 'keeps approval metadata absent for an Ask-only pause in the stateful test store' and verify it fails (received `{ resolved: null }`)
+- [x] Repair InMemoryStore.pauseWorkflowRun to only write metadata.approval when approvalContext is not undefined
+- [x] Verify test passes after minimal test-double repair
+- [x] Add exact type-only import `import type { SendQueryOptions } from '@archon/providers/types'`
+- [x] Add e2e test 'stores an Ask on the child run and pauses its parent without copying the row' with all ownership/pause assertions
+- [x] Focused test `cd packages/workflows && bun test src/subrun.test.ts` passes (69 pass, 0 fail)
+- [x] Commit `test(workflows): cover child run ask ownership` (`3e9341e1`)
+
+**Learnings**:
+- Red-green on the test double first: the current spread of undefined approvalContext is why Ask-only pauses look like approval gates
+- Child Ask e2e uses the real AskHuman native tool via `options.nativeTools`; Claude `askHuman` capability is what injects it
+- Parent pause is still a `child_workflow` approval gate; the Ask row stays on the child run id only
+
+---
+
+## 2026-09-07 — US-005: Characterize run-detail API read model with multiple outstanding Ask rows
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/api.workflow-runs.test.ts` — appended sibling + same-node Ask row-embedding and awaiting-projection characterization after the single-pending-row test
+
+**Acceptance criteria verified**:
+- [x] Add test 'embeds sibling and same-node Ask rows while projecting every pending owner as awaiting'
+- [x] mockListPendingInteractions called with run-uuid-1 and returns three rows: review answered, review pending, beta pending
+- [x] Response 200; body.run.status paused; pending_interactions contain all three rows; nodeStates projects review and beta as awaiting
+- [x] Focused test `cd packages/server && bun test src/routes/api.workflow-runs.test.ts` passes (164 pass, 0 fail)
+- [x] Commit `test(server): cover several outstanding asks` (`e544a427`)
+
+**Learnings**:
+- Production GET run-detail already lists all pending_interactions and feeds them to `projectLatestEffectiveNodeStates`; Task 5 is characterization only — do not touch `api.ts`
+- Insert after the existing single-pending overlay test, still inside `describe('GET /api/workflows/runs/:runId')`
+- ESLint ignore pattern covers this test file; use `prettier --check` plus the focused `bun test`
+
+---
+
+## 2026-09-07 — US-006: Run full validation matrix, resolve tracking conflicts, and mark Story 6.4 done
+
+**Status**: PASSED
+**Files changed**:
+- `_bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml` — removed committed conflict diagnostic, kept `@theirs` timestamps then set both `last_updated` fields to `2026-09-07 04:01:53 +0700`, marked `6-4-keep-several-asks-outstanding-without-a-second-scheduler: done`, left `epic-6: in-progress`
+
+**Acceptance criteria verified**:
+- [x] Focused regression matrix (package-isolated): retry-state 15, pending-interactions 28, workflows.test.ts 122, workflow-operations 64, dag-executor 606, subrun 69, api.workflow-runs 164 — all 0 fail
+- [x] `git diff --check` exit 0
+- [x] `bun run validate` exit 0 (type-check, lint `--max-warnings 0`, prettier, test:install, package tests)
+- [x] Tracking file already matched `@theirs` (`2026-09-07 01:23:49 +0700` from `c25ea00c`); diagnostic trailer stripped
+- [x] Story 6.4 marked `done`; epic-6 remains `in-progress`; timestamps `2026-09-07 04:01:53 +0700`
+- [x] On-disk YAML has no conflict markers (Python rg-equivalent exit 1), prettier --check 0, git diff --check 0
+- [x] Commit `chore(planning): mark AskHuman several asks done` (`cb6f50f7`)
+- [x] PR handoff at artifacts `pr-body.md` from `.github/pull_request_template.md` with `Closes #89` (not git-staged; parent workflow opens the PR)
+
+**Learnings**:
+- `conflict://` ids do not survive across assistant turns; HEAD already contained the diagnostic as file bytes
+- Do not commit Ralph `prd.json` / `progress.txt` in the sprint-status commit
+- `bun run validate` ~106s in this worktree; prettier of the whole repo is the slowest static step before tests
+
+---

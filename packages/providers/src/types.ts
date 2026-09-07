@@ -914,4 +914,19 @@ export class AskHumanNoStarterError extends Error {
   }
 }
 
-export type AskHumanControlError = AskHumanAwaitingError | AskHumanNoStarterError;
+export class AskHumanPauseFailedError extends Error {
+  readonly name = 'AskHumanPauseFailedError';
+  constructor(
+    readonly toolUseId: string,
+    readonly nodeId: string,
+    readonly workflowRunId: string,
+    readonly reason: string
+  ) {
+    super(`AskHuman pause failed for ${toolUseId}: ${reason}`);
+  }
+}
+
+export type AskHumanControlError =
+  | AskHumanAwaitingError
+  | AskHumanNoStarterError
+  | AskHumanPauseFailedError;

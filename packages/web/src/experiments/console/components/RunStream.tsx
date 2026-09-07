@@ -16,6 +16,11 @@ import type {
 } from '../primitives/event';
 import { StreamCard } from './StreamCard';
 import type { UsageMetrics, UsageReport, UsageReportGroup } from '../skills/usage';
+import type { ConsoleLogEntry } from './inspect/build-console-log-entries';
+
+function noopSelectLogRow(_rowId: string, _nodeId: string): void {
+  return;
+}
 
 interface RunStreamProps {
   messages: Message[];
@@ -26,6 +31,10 @@ interface RunStreamProps {
   selectedNodeId: string;
   /** Direct-run usage grouped by node from GET detail (`null` = unavailable). */
   usage: UsageReport | null;
+  /** Unmerged inspect rows — ordinary runs, loop iterations, and route decisions. */
+  logEntries?: readonly ConsoleLogEntry[];
+  selectedLogRowId?: string | null;
+  onSelectLogRow?: (rowId: string, nodeId: string) => void;
 }
 
 /**
@@ -59,6 +68,13 @@ type TimelineEntry =
       nodeId: string | null;
     }
   | { kind: 'node'; key: string; at: number; node: NodeRun; showDetail: boolean }
+  | {
+      kind: 'log_row';
+      key: string;
+      at: number;
+      entry: ConsoleLogEntry;
+      showDetail: boolean;
+    }
   | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent }
   | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent }
   | { kind: 'system_row'; key: string; at: number; row: SystemRow };
@@ -225,6 +241,9 @@ export function RunStream({
   showSystem,
   selectedNodeId,
   usage,
+  logEntries,
+  selectedLogRowId = null,
+  onSelectLogRow,
 }: RunStreamProps): ReactElement {
   // Single source for the folded nodes — consumed by both the timeline (one
   // divider per node) and the node-filter window so they can't drift.
@@ -319,17 +338,31 @@ export function RunStream({
       }
     }
 
-    // One divider per node: fold each node's 2–3 transitions (started + terminal,
-    // plus a resume-time skipped_prior_success) into a single NodeRun, positioned
-    // at its first transition so it heads that node's events in the stream.
-    for (const nr of nodeRuns) {
-      entries.push({
-        kind: 'node',
-        key: `n:${nr.nodeId}`,
-        at: new Date(nr.startedAt).getTime(),
-        node: nr,
-        showDetail: showSystem,
-      });
+    // Unmerged inspect rows replace the folded one-divider-per-node source when
+    // the page supplies logEntries. Message windows still come from foldNodeRuns.
+    if (logEntries !== undefined) {
+      for (const entry of logEntries) {
+        entries.push({
+          kind: 'log_row',
+          key: `n:${entry.row.id}`,
+          at: new Date(entry.startedAt).getTime(),
+          entry,
+          showDetail: showSystem,
+        });
+      }
+    } else {
+      // One divider per node: fold each node's 2–3 transitions (started + terminal,
+      // plus a resume-time skipped_prior_success) into a single NodeRun, positioned
+      // at its first transition so it heads that node's events in the stream.
+      for (const nr of nodeRuns) {
+        entries.push({
+          kind: 'node',
+          key: `n:${nr.nodeId}`,
+          at: new Date(nr.startedAt).getTime(),
+          node: nr,
+          showDetail: showSystem,
+        });
+      }
     }
 
     for (const e of events) {
@@ -340,9 +373,18 @@ export function RunStream({
         entries.push({ kind: 'system', key: `s:${e.id}`, at, event: e });
       }
     }
-    entries.sort((a, b) => a.at - b.at);
+    entries.sort((a, b) => {
+      const time = a.at - b.at;
+      if (time !== 0) return time;
+      if (a.kind === 'log_row' && b.kind === 'log_row') {
+        return (
+          a.entry.row.order - b.entry.row.order || a.entry.row.sourceIndex - b.entry.row.sourceIndex
+        );
+      }
+      return 0;
+    });
     return entries;
-  }, [messages, events, nodeRuns, showSystem]);
+  }, [messages, events, nodeRuns, showSystem, logEntries]);
 
   // The selected node's execution slice `[startedAt, nextNode.startedAt)`. Used as
   // a positional fallback so node-blind entries (message-inline tools, prose,
@@ -368,6 +410,7 @@ export function RunStream({
     // so a node's whole slice of the timeline stays visible regardless of provider.
     if (selectedNodeId !== 'all') {
       if (e.kind === 'node') return e.node.nodeId === selectedNodeId;
+      if (e.kind === 'log_row') return e.entry.row.nodeId === selectedNodeId;
       if (e.kind === 'tool' && e.nodeId !== null) return e.nodeId === selectedNodeId;
       return nodeWindow !== null && e.at >= nodeWindow.start && e.at < nodeWindow.end;
     }
@@ -398,13 +441,48 @@ export function RunStream({
         if (entry.kind === 'tool') {
           return <ToolCallItem key={entry.key} call={entry.call} timestamp={entry.timestamp} />;
         }
-        if (entry.kind === 'node') {
-          const nodeUsage = usageByNode.get(entry.node.nodeId);
+        if (entry.kind === 'log_row') {
+          const nodeUsage = entry.entry.showNodeUsage
+            ? usageByNode.get(entry.entry.row.nodeId)
+            : undefined;
+          const selectRow = onSelectLogRow ?? noopSelectLogRow;
           return (
             <NodeDivider
               key={entry.key}
+              rowId={entry.entry.row.id}
+              nodeId={entry.entry.row.nodeId}
+              nodeName={entry.entry.row.label}
+              selected={selectedLogRowId === entry.entry.row.id}
+              onSelect={selectRow}
+              status={entry.entry.displayStatus}
+              durationMs={entry.entry.durationMs}
+              timestamp={entry.entry.startedAt}
+              costUsd={entry.entry.costUsd}
+              reportedUsd={nodeUsage?.aggregate.reportedUsd}
+              estimatedUsd={nodeUsage?.aggregate.estimatedUsd}
+              hasLedgerUsage={nodeUsage !== undefined && nodeUsage.groups.length > 0}
+              numTurns={entry.entry.numTurns}
+              stopReason={entry.entry.stopReason}
+              skipReason={entry.entry.skipReason}
+              skipExpr={entry.entry.skipExpr}
+              showDetail={entry.showDetail}
+              usageGroups={nodeUsage?.groups}
+              usageAggregate={nodeUsage?.aggregate}
+              runUsage={usage}
+            />
+          );
+        }
+        if (entry.kind === 'node') {
+          const nodeUsage = usageByNode.get(entry.node.nodeId);
+          const selectRow = onSelectLogRow ?? noopSelectLogRow;
+          return (
+            <NodeDivider
+              key={entry.key}
+              rowId={entry.node.nodeId}
               nodeId={entry.node.nodeId}
               nodeName={entry.node.nodeName}
+              selected={selectedLogRowId === entry.node.nodeId}
+              onSelect={selectRow}
               status={entry.node.status}
               durationMs={entry.node.durationMs}
               timestamp={entry.node.startedAt}

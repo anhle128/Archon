@@ -62,17 +62,41 @@ export async function listGlobalCounts(): Promise<RunCounts> {
 
 /** GET /api/workflows/runs/:id — retains generated `usage` (nullable report). */
 export type RunDetailResponse = components['schemas']['WorkflowRunDetail'];
+export type WorkflowEvent = components['schemas']['WorkflowEvent'];
+export type WorkflowNodeState = components['schemas']['WorkflowNodeState'];
+export type WorkflowNodeMessage = components['schemas']['WorkflowNodeMessage'];
+export type WorkflowNodeMessagesResponse = components['schemas']['WorkflowNodeMessagesResponse'];
 
-export async function getRun(
-  id: string
-): Promise<{ run: Run; events: RunEvent[]; usage: RunDetailResponse['usage'] }> {
+export interface ConsoleRunDetail {
+  run: Run;
+  events: RunEvent[];
+  rawEvents: WorkflowEvent[];
+  nodeStates: WorkflowNodeState[];
+  approval: unknown;
+  usage: RunDetailResponse['usage'];
+}
+
+export async function getRun(id: string): Promise<ConsoleRunDetail> {
   const res = await requestJson<RunDetailResponse>(`/api/workflows/runs/${encodeURIComponent(id)}`);
+  const approval = res.run.metadata.approval ?? null;
   return {
     run: toRun(res.run),
     events: res.events.map(toRunEvent),
+    rawEvents: res.events,
+    nodeStates: res.nodeStates,
+    approval,
     // Generated WorkflowRunDetail.usage is already UsageReport | null — no cast.
     usage: res.usage,
   };
+}
+
+export async function listNodeMessages(
+  runId: string,
+  nodeId: string
+): Promise<WorkflowNodeMessagesResponse> {
+  return requestJson<WorkflowNodeMessagesResponse>(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/messages`
+  );
 }
 
 export async function cancelRun(id: string): Promise<void> {

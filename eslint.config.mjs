@@ -114,6 +114,9 @@ export default tseslint.config(
   },
 
   // Console spike (packages/web/src/experiments/console/**) — isolation guard.
+  // NFR4: no production web components/stores/contexts/routes/hooks, no React Query,
+  // no runtime @/lib/api. Type-only @/lib/api.generated is allowed; inspect graph
+  // layout may import @/lib/run-graph at runtime (outside these restricted patterns).
   // This experiment must not couple to the production web UI's state/components
   // so that it can be extracted or discarded cleanly.
   {

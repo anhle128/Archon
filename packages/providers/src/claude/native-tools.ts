@@ -11,6 +11,7 @@ import {
 import {
   AskHumanAwaitingError,
   AskHumanNoStarterError,
+  AskHumanPauseFailedError,
   type AskHumanControlError,
   type NativeTool,
   type NativeToolHandlerContext,
@@ -34,7 +35,11 @@ function isString(v: unknown): v is string {
 }
 
 function isAskHumanControlError(error: unknown): error is AskHumanControlError {
-  return error instanceof AskHumanAwaitingError || error instanceof AskHumanNoStarterError;
+  return (
+    error instanceof AskHumanAwaitingError ||
+    error instanceof AskHumanNoStarterError ||
+    error instanceof AskHumanPauseFailedError
+  );
 }
 
 /**

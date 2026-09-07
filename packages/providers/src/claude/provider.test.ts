@@ -43,6 +43,7 @@ import * as binaryResolver from './binary-resolver';
 import {
   AskHumanAwaitingError,
   AskHumanNoStarterError,
+  AskHumanPauseFailedError,
   type NativeTool,
   type NativeToolHandlerContext,
   type ResumeInteraction,
@@ -3352,11 +3353,14 @@ type ClaudeQueryCall = {
   };
 };
 
-async function invokeAskHumanCallback(args: ClaudeQueryCall): Promise<void> {
+async function invokeAskHumanCallback(
+  args: ClaudeQueryCall,
+  toolUseId = 'toolu_real'
+): Promise<void> {
   const preToolUse = args.options.hooks?.PreToolUse ?? [];
   for (const matcher of preToolUse) {
     for (const hook of matcher.hooks) {
-      await hook({ tool_name: 'mcp__archon__AskHuman', tool_use_id: 'toolu_real' }, 'toolu_real');
+      await hook({ tool_name: 'mcp__archon__AskHuman', tool_use_id: toolUseId }, toolUseId);
     }
   }
   const ask = capturedMcpTools.find(tool => tool.name === 'AskHuman');
@@ -3458,6 +3462,86 @@ describe('AskHuman control errors', () => {
     expect(call?.options.abortController.signal.aborted).toBe(true);
   });
 
+  test('abort-rejection rethrows the same AskHumanPauseFailedError without retry', async () => {
+    const controlError = new AskHumanPauseFailedError(
+      'toolu_real',
+      'review',
+      'run-1',
+      'database busy'
+    );
+    const seen: Array<NativeToolHandlerContext | undefined> = [];
+    const error = await consume(async (_input, context): Promise<string> => {
+      seen.push(context);
+      throw controlError;
+    }, scriptedQuery('abort'));
+
+    expect(error).toBe(controlError);
+    expect(seen).toEqual([{ toolUseId: 'toolu_real', sessionId: 'sess-real' }]);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const call = mockQuery.mock.calls[0]?.[0] as ClaudeQueryCall | undefined;
+    expect(call?.options.abortController.signal.aborted).toBe(true);
+  });
+
+  test('threads distinct tool-use ids through repeated AskHuman callbacks in one turn', async () => {
+    const errors = [
+      new AskHumanAwaitingError('toolu_one', 'review', 'run-1'),
+      new AskHumanAwaitingError('toolu_two', 'review', 'run-1'),
+    ];
+    const seen: Array<NativeToolHandlerContext | undefined> = [];
+    let calls = 0;
+    const error = await consume(
+      async (_input, context): Promise<string> => {
+        seen.push(context);
+        const controlError = errors[calls];
+        calls += 1;
+        if (!controlError) throw new Error('unexpected AskHuman call');
+        throw controlError;
+      },
+      async function* (args: ClaudeQueryCall): AsyncGenerator<Record<string, unknown>> {
+        yield { type: 'assistant', session_id: 'sess-real', message: { content: [] } };
+        await Promise.allSettled([
+          invokeAskHumanCallback(args, 'toolu_one'),
+          invokeAskHumanCallback(args, 'toolu_two'),
+        ]);
+        return;
+      }
+    );
+
+    expect(error).toBe(errors[1]);
+    expect(seen).toEqual([
+      { toolUseId: 'toolu_one', sessionId: 'sess-real' },
+      { toolUseId: 'toolu_two', sessionId: 'sess-real' },
+    ]);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    const call = mockQuery.mock.calls[0]?.[0] as ClaudeQueryCall | undefined;
+    expect(call?.options.abortController.signal.aborted).toBe(true);
+  });
+
+  test('keeps a pause failure ahead of later awaiting control errors', async () => {
+    const failure = new AskHumanPauseFailedError('toolu_one', 'review', 'run-1', 'database busy');
+    const sequence = [failure, new AskHumanAwaitingError('toolu_two', 'review', 'run-1')];
+    let calls = 0;
+    const error = await consume(
+      async (): Promise<string> => {
+        const controlError = sequence[calls];
+        calls += 1;
+        if (!controlError) throw new Error('unexpected AskHuman call');
+        throw controlError;
+      },
+      async function* (args: ClaudeQueryCall): AsyncGenerator<Record<string, unknown>> {
+        yield { type: 'assistant', session_id: 'sess-real', message: { content: [] } };
+        await Promise.allSettled([
+          invokeAskHumanCallback(args, 'toolu_one'),
+          invokeAskHumanCallback(args, 'toolu_two'),
+        ]);
+        return;
+      }
+    );
+
+    expect(error).toBe(failure);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
   test('normal handler errors stay SDK tool errors and do not abort', async () => {
     const boom = new Error('tool failed');
     const error = await consume(async (): Promise<string> => {
@@ -3467,6 +3551,7 @@ describe('AskHuman control errors', () => {
     expect(error).toBeUndefined();
     expect(error).not.toBeInstanceOf(AskHumanAwaitingError);
     expect(error).not.toBeInstanceOf(AskHumanNoStarterError);
+    expect(error).not.toBeInstanceOf(AskHumanPauseFailedError);
     expect(mockQuery).toHaveBeenCalledTimes(1);
     const call = mockQuery.mock.calls[0]?.[0] as ClaudeQueryCall | undefined;
     expect(call?.options.abortController.signal.aborted).toBe(false);

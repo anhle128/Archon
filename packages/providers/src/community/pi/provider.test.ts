@@ -244,6 +244,7 @@ import { ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT, PiProvider } from './provider'
 import {
   AskHumanAwaitingError,
   AskHumanNoStarterError,
+  AskHumanPauseFailedError,
   type NativeTool,
   type NativeToolHandlerContext,
   type ResumeInteraction,
@@ -2642,12 +2643,15 @@ describe('PiProvider', () => {
       await ask.execute(toolCallId, VALID_QUESTIONS, undefined, undefined, undefined);
     }
 
-    async function consumeAskQuery(handler: NativeTool['handler']): Promise<Error | undefined> {
+    async function consumeAskQuery(
+      handler: NativeTool['handler'],
+      executeTool: () => Promise<void> = () => invokeCapturedAskHuman()
+    ): Promise<Error | undefined> {
       process.env.GEMINI_API_KEY = 'sk-test';
       resetScript(scriptedAgentEnd());
       mockPrompt.mockImplementationOnce(async () => {
         try {
-          await invokeCapturedAskHuman();
+          await executeTool();
         } catch {
           // Pi's prompt loop converts tool throws into tool-result messages.
         }
@@ -2690,6 +2694,81 @@ describe('PiProvider', () => {
       expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
     });
 
+    test('rethrows the same AskHumanPauseFailedError, aborts the session, and does not recreate the session', async () => {
+      const controlError = new AskHumanPauseFailedError(
+        'call-real',
+        'review',
+        'run-1',
+        'database busy'
+      );
+      const seen: Array<NativeToolHandlerContext | undefined> = [];
+      const error = await consumeAskQuery(async (_input, context): Promise<string> => {
+        seen.push(context);
+        throw controlError;
+      });
+
+      expect(error).toBe(controlError);
+      expect(seen).toEqual([{ toolUseId: 'call-real', sessionId: 'mock-session-uuid' }]);
+      expect(mockAbort).toHaveBeenCalledTimes(1);
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+    });
+
+    test('threads distinct tool-use ids through repeated AskHuman callbacks in one turn', async () => {
+      const errors = [
+        new AskHumanAwaitingError('call-one', 'review', 'run-1'),
+        new AskHumanAwaitingError('call-two', 'review', 'run-1'),
+      ];
+      const seen: Array<NativeToolHandlerContext | undefined> = [];
+      let calls = 0;
+      const error = await consumeAskQuery(
+        async (_input, context): Promise<string> => {
+          seen.push(context);
+          const controlError = errors[calls];
+          calls += 1;
+          if (!controlError) throw new Error('unexpected AskHuman call');
+          throw controlError;
+        },
+        async () => {
+          await Promise.allSettled([
+            invokeCapturedAskHuman('call-one'),
+            invokeCapturedAskHuman('call-two'),
+          ]);
+        }
+      );
+
+      expect(error).toBe(errors[1]);
+      expect(seen).toEqual([
+        { toolUseId: 'call-one', sessionId: 'mock-session-uuid' },
+        { toolUseId: 'call-two', sessionId: 'mock-session-uuid' },
+      ]);
+      expect(mockAbort).toHaveBeenCalledTimes(2);
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+    });
+
+    test('keeps a pause failure ahead of later awaiting control errors', async () => {
+      const failure = new AskHumanPauseFailedError('call-one', 'review', 'run-1', 'database busy');
+      const sequence = [failure, new AskHumanAwaitingError('call-two', 'review', 'run-1')];
+      let calls = 0;
+      const error = await consumeAskQuery(
+        async (): Promise<string> => {
+          const controlError = sequence[calls];
+          calls += 1;
+          if (!controlError) throw new Error('unexpected AskHuman call');
+          throw controlError;
+        },
+        async () => {
+          await Promise.allSettled([
+            invokeCapturedAskHuman('call-one'),
+            invokeCapturedAskHuman('call-two'),
+          ]);
+        }
+      );
+
+      expect(error).toBe(failure);
+      expect(mockAbort).toHaveBeenCalledTimes(2);
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+    });
+
     test('normal handler errors stay Pi tool errors and do not abort the session', async () => {
       const boom = new Error('tool failed');
       const error = await consumeAskQuery(async (): Promise<string> => {
@@ -2699,6 +2778,7 @@ describe('PiProvider', () => {
       expect(error).toBeUndefined();
       expect(error).not.toBeInstanceOf(AskHumanAwaitingError);
       expect(error).not.toBeInstanceOf(AskHumanNoStarterError);
+      expect(error).not.toBeInstanceOf(AskHumanPauseFailedError);
       expect(mockAbort).not.toHaveBeenCalled();
       expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
     });

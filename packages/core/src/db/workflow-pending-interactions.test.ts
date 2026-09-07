@@ -10,6 +10,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { AskHumanNoStarterError } from '@archon/providers/types';
 import type {
+  ConfirmPendingPermissionInput,
   InsertPendingInteractionInput,
   ResolvePendingInteractionInput,
 } from '@archon/workflows/schemas/pending-interaction';
@@ -43,9 +44,12 @@ const {
   insertPendingInteraction,
   listPendingInteractions,
   resolvePendingInteraction,
+  confirmPendingPermission,
   purgePendingInteractionsInTransaction,
   PendingInteractionCorruptRowError,
+  PendingInteractionNotFoundError,
   PendingInteractionAlreadyResolvedError,
+  PendingInteractionNotFoundError,
   PendingInteractionRunNotPausedError,
   PendingInteractionValidationError,
 } = await import('./workflow-pending-interactions');
@@ -56,6 +60,7 @@ afterAll(async () => {
 
 const SENTINEL_QUESTION = 'DO_NOT_LOG_QUESTION';
 const SENTINEL_ANSWER = 'DO_NOT_LOG_ANSWER';
+const SENTINEL_INTENT = 'DO_NOT_LOG_PERMISSION_INTENT';
 
 const baseInput: InsertPendingInteractionInput = {
   workflow_run_id: 'run-1',
@@ -392,6 +397,28 @@ async function insertPausedAsk(
   await pauseRun();
 }
 
+function permissionInput(
+  overrides: Partial<ConfirmPendingPermissionInput> = {}
+): ConfirmPendingPermissionInput {
+  return {
+    workflow_run_id: 'run-1',
+    tool_use_id: 'toolu_perm_1',
+    answer: { intent: ` ${SENTINEL_INTENT} ` },
+    resolved_by: 'user-1',
+    ...overrides,
+  };
+}
+
+async function insertPausedPermission(): Promise<void> {
+  await insertPendingInteraction({
+    ...baseInput,
+    tool_use_id: 'toolu_perm_1',
+    kind: 'permission',
+    envelope: { tool: 'Bash' },
+  });
+  await pauseRun();
+}
+
 async function runStatus(runId = 'run-1'): Promise<string | undefined> {
   const result = await db.query<{ status: string }>(
     'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
@@ -482,6 +509,115 @@ describe('resolvePendingInteraction', () => {
     const events = await resolvedEvents();
     expect(events).toHaveLength(1);
     expect(events[0]?.data).toMatchObject({ resumed: false, declined: false });
+  });
+
+  test('keeps two Ask nodes blocked until the last run-wide pending row is answered', async () => {
+    await insertPendingInteraction({
+      ...baseInput,
+      node_id: 'alpha',
+      tool_use_id: 'toolu_alpha',
+      envelope: mixedEnvelope,
+    });
+    await insertPendingInteraction({
+      ...baseInput,
+      node_id: 'beta',
+      tool_use_id: 'toolu_beta',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun();
+
+    const first = await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_alpha' }));
+    expect(first.resumed).toBe(false);
+    expect(first.remaining_pending).toBe(1);
+    expect(await runStatus()).toBe('paused');
+
+    const halfway = await listPendingInteractions('run-1');
+    expect(
+      halfway
+        .map(row => ({ nodeId: row.node_id, status: row.status }))
+        .sort((left, right) => left.nodeId.localeCompare(right.nodeId))
+    ).toEqual([
+      { nodeId: 'alpha', status: 'answered' },
+      { nodeId: 'beta', status: 'pending' },
+    ]);
+
+    const last = await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_beta' }));
+    expect(last.resumed).toBe(true);
+    expect(last.remaining_pending).toBe(0);
+    expect(await runStatus()).toBe('running');
+  });
+
+  test('counts a pending permission interaction when an Ask answer is resolved', async () => {
+    await insertPendingInteraction({
+      ...baseInput,
+      node_id: 'alpha',
+      tool_use_id: 'toolu_ask',
+      envelope: mixedEnvelope,
+    });
+    await insertPendingInteraction({
+      ...baseInput,
+      node_id: 'beta',
+      tool_use_id: 'toolu_permission',
+      kind: 'permission',
+      envelope: { intent: 'write repository files' },
+    });
+    await pauseRun();
+
+    const result = await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_ask' }));
+
+    expect(result.resumed).toBe(false);
+    expect(result.remaining_pending).toBe(1);
+    expect(await runStatus()).toBe('paused');
+    const listed = await listPendingInteractions('run-1');
+    expect(listed.find(row => row.tool_use_id === 'toolu_permission')).toMatchObject({
+      tool_use_id: 'toolu_permission',
+      kind: 'permission',
+      status: 'pending',
+    });
+  });
+
+  test('resolves a child Ask only through the child workflow run id', async () => {
+    await seedRun({
+      runId: 'child-run-1',
+      userId: 'child-user-1',
+      conversationId: 'child-conversation-1',
+    });
+    await db.query('UPDATE remote_agent_workflow_runs SET parent_run_id = $1 WHERE id = $2', [
+      'run-1',
+      'child-run-1',
+    ]);
+    await insertPendingInteraction({
+      ...baseInput,
+      workflow_run_id: 'child-run-1',
+      node_id: 'child-review',
+      tool_use_id: 'toolu_child',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun('run-1');
+    await pauseRun('child-run-1');
+
+    await expect(
+      resolvePendingInteraction(
+        resolveInput({
+          workflow_run_id: 'run-1',
+          tool_use_id: 'toolu_child',
+        })
+      )
+    ).rejects.toBeInstanceOf(PendingInteractionNotFoundError);
+    expect((await listPendingInteractions('child-run-1'))[0]?.status).toBe('pending');
+
+    const result = await resolvePendingInteraction(
+      resolveInput({
+        workflow_run_id: 'child-run-1',
+        tool_use_id: 'toolu_child',
+        resolved_by: 'child-user-1',
+      })
+    );
+
+    expect(result.resumed).toBe(true);
+    expect(result.remaining_pending).toBe(0);
+    expect(await runStatus('child-run-1')).toBe('running');
+    expect(await runStatus('run-1')).toBe('paused');
   });
 
   test('rolls back the answer when the interaction-resolved event insert fails', async () => {
@@ -805,6 +941,185 @@ describe('resolvePendingInteraction', () => {
     expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_QUESTION);
     expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_ANSWER);
     expect(JSON.stringify(errorLogs)).toContain((err as PendingInteractionCorruptRowError).rowId);
+  });
+});
+
+describe('confirmPendingPermission', () => {
+  test('confirms the last Permission and commits an identifier-only event with the resume', async () => {
+    await insertPausedPermission();
+
+    const result = await confirmPendingPermission(permissionInput());
+
+    expect(result.resumed).toBe(true);
+    expect(result.remaining_pending).toBe(0);
+    expect(result.interaction.status).toBe('answered');
+    expect(result.interaction.answer).toEqual({ intent: ` ${SENTINEL_INTENT} ` });
+    expect(result.interaction.resolved_by).toBe('user-1');
+    expect(await runStatus()).toBe('running');
+    expect((await resolvedEvents())[0]?.data).toEqual({
+      node_id: 'review',
+      tool_use_id: 'toolu_perm_1',
+      kind: 'permission',
+      resumed: true,
+    });
+    expect(JSON.stringify(await resolvedEvents())).not.toContain(SENTINEL_INTENT);
+    expect(JSON.stringify(errorLogs)).not.toContain(SENTINEL_INTENT);
+  });
+
+  test('preserves the first intent when a second confirmation loses the CAS', async () => {
+    await insertPausedPermission();
+    await confirmPendingPermission(permissionInput());
+
+    await expect(
+      confirmPendingPermission(permissionInput({ answer: { intent: 'second-intent' } }))
+    ).rejects.toBeInstanceOf(PendingInteractionAlreadyResolvedError);
+
+    const [row] = await listPendingInteractions('run-1');
+    expect(row?.answer).toEqual({ intent: ` ${SENTINEL_INTENT} ` });
+  });
+
+  test('leaves the run paused while a sibling Ask remains pending', async () => {
+    await insertPendingInteraction({
+      ...baseInput,
+      tool_use_id: 'toolu_perm_1',
+      kind: 'permission',
+      envelope: {},
+    });
+    await insertPendingInteraction({
+      ...baseInput,
+      tool_use_id: 'toolu_ask_1',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun();
+
+    const result = await confirmPendingPermission(permissionInput());
+
+    expect(result.resumed).toBe(false);
+    expect(result.remaining_pending).toBe(1);
+    expect(await runStatus()).toBe('paused');
+  });
+
+  test('resumes when an answered Ask leaves Permission as the final pending row', async () => {
+    await insertPendingInteraction({
+      ...baseInput,
+      tool_use_id: 'toolu_perm_1',
+      kind: 'permission',
+      envelope: {},
+    });
+    await insertPendingInteraction({
+      ...baseInput,
+      tool_use_id: 'toolu_ask_1',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun();
+    const askResult = await resolvePendingInteraction(resolveInput({ tool_use_id: 'toolu_ask_1' }));
+    expect(askResult.resumed).toBe(false);
+
+    const result = await confirmPendingPermission(permissionInput());
+
+    expect(result.resumed).toBe(true);
+    expect(result.remaining_pending).toBe(0);
+    expect(await runStatus()).toBe('running');
+  });
+
+  test('rolls back the confirmation when the resolved event insert fails', async () => {
+    await insertPausedPermission();
+    await db.query(`
+    CREATE TRIGGER abort_permission_event BEFORE INSERT ON remote_agent_workflow_events
+    BEGIN
+      SELECT RAISE(ABORT, 'event insert blocked');
+    END
+  `);
+    try {
+      await expect(confirmPendingPermission(permissionInput())).rejects.toThrow();
+      const [row] = await listPendingInteractions('run-1');
+      expect(row?.status).toBe('pending');
+      expect(row?.answer).toBeNull();
+      expect(await runStatus()).toBe('paused');
+    } finally {
+      await db.query('DROP TRIGGER IF EXISTS abort_permission_event');
+    }
+  });
+
+  test('rolls back the confirmation when the paused-run resume CAS loses', async () => {
+    await insertPausedPermission();
+    await db.query(`
+    CREATE TRIGGER skip_permission_resume BEFORE UPDATE ON remote_agent_workflow_runs
+    WHEN NEW.status = 'running' AND OLD.status = 'paused'
+    BEGIN
+      SELECT RAISE(IGNORE);
+    END
+  `);
+    try {
+      await expect(confirmPendingPermission(permissionInput())).rejects.toBeInstanceOf(
+        PendingInteractionRunNotPausedError
+      );
+      const [row] = await listPendingInteractions('run-1');
+      expect(row?.status).toBe('pending');
+      expect(row?.answer).toBeNull();
+    } finally {
+      await db.query('DROP TRIGGER IF EXISTS skip_permission_resume');
+    }
+  });
+
+  test('rejects a confirmation before the run reaches paused', async () => {
+    await insertPendingInteraction({
+      ...baseInput,
+      tool_use_id: 'toolu_perm_1',
+      kind: 'permission',
+      envelope: {},
+    });
+    await expect(confirmPendingPermission(permissionInput())).rejects.toBeInstanceOf(
+      PendingInteractionRunNotPausedError
+    );
+    expect((await listPendingInteractions('run-1'))[0]?.status).toBe('pending');
+  });
+
+  test('rejects a pending Ask without consuming it', async () => {
+    await insertPendingInteraction({
+      ...baseInput,
+      tool_use_id: 'toolu_perm_1',
+      envelope: mixedEnvelope,
+    });
+    await pauseRun();
+    const error = await confirmPendingPermission(permissionInput()).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(error).toBeInstanceOf(PendingInteractionValidationError);
+    expect((error as PendingInteractionValidationError).code).toBe('kind_not_permission');
+    expect((await listPendingInteractions('run-1'))[0]?.status).toBe('pending');
+  });
+
+  test('rejects a whitespace-only intent before opening the transaction', async () => {
+    await insertPausedPermission();
+    const error = await confirmPendingPermission(
+      permissionInput({ answer: { intent: '   ' } })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(error).toBeInstanceOf(PendingInteractionValidationError);
+    expect((error as PendingInteractionValidationError).code).toBe('invalid_body');
+    expect((await listPendingInteractions('run-1'))[0]?.status).toBe('pending');
+  });
+
+  test('reports a missing run and a missing call id without exposing intent', async () => {
+    const missingRun = await confirmPendingPermission(
+      permissionInput({ workflow_run_id: 'missing-run' })
+    ).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(missingRun).toBeInstanceOf(PendingInteractionNotFoundError);
+
+    await pauseRun();
+    const missingCall = await confirmPendingPermission(permissionInput()).then(
+      () => null,
+      (caught: unknown) => caught
+    );
+    expect(missingCall).toBeInstanceOf(PendingInteractionNotFoundError);
+    expect(JSON.stringify([missingRun, missingCall, errorLogs])).not.toContain(SENTINEL_INTENT);
   });
 });
 

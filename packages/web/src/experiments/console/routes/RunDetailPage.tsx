@@ -6,36 +6,39 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type ReactNode,
 } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
-import { RunStream } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
-import { RunGraphPanel } from '../components/RunGraphPanel';
 import { ArtifactPanel } from '../components/ArtifactPanel';
+import { ConsoleInspectPane } from '../components/ConsoleInspectPane';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
+import { buildConsoleLogEntries } from '../components/inspect/build-console-log-entries';
+import { buildLogRows } from '../components/inspect/build-log-rows';
+import {
+  readNodeSearchParam,
+  resolveInitialInspectSelection,
+  selectInspectNode,
+  type InspectSelection,
+} from '../components/inspect/console-inspect-selection';
+import { readApprovalContext } from '../components/inspect/read-approval-context';
+import { synthesizeLogNodeStates } from '../components/inspect/synthesize-log-node-states';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useRunStreamSSE } from '../lib/sse';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import { runMessageConversationId, type Run, type RunEnvOverlay } from '../primitives/run';
-import { foldNodeRuns, type RunEvent } from '../primitives/event';
+import { foldNodeRuns } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
-import type { ArtifactFile } from '../skills/runs';
-import type { UsageReport } from '../skills/usage';
-
-interface RunDetailView {
-  run: Run;
-  events: RunEvent[];
-  usage: UsageReport | null;
-}
+import type { ArtifactFile, ConsoleRunDetail } from '../skills/runs';
 
 /**
  * Run detail — the "logs" page, promoted out of a hidden tab.
@@ -110,6 +113,16 @@ function writeNodeFilter(v: string): void {
   }
 }
 
+function isKnownInspectNode(
+  nodeId: string,
+  nodeStates: ConsoleRunDetail['nodeStates'],
+  rows: ReturnType<typeof buildLogRows>
+): boolean {
+  return (
+    nodeStates.some(state => state.nodeId === nodeId) || rows.some(row => row.nodeId === nodeId)
+  );
+}
+
 /**
  * ENV chip/table gate for run detail. Malformed/legacy `metadata.envOverlay`
  * stays `null` on the Run primitive — never render false audit UI from hybrids.
@@ -122,7 +135,10 @@ export function hasRunEnvOverlayUi(
 export function RunDetailPage(): ReactElement {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const appliedRunIdRef = useRef<string | null>(null);
+  const prevSearchNodeRef = useRef<string | null>(null);
   const [showToolCalls, setShowToolCalls] = useState<boolean>(() =>
     readToggle(TOGGLE_KEYS.toolCalls, true)
   );
@@ -130,17 +146,13 @@ export function RunDetailPage(): ReactElement {
     readToggle(TOGGLE_KEYS.system, false)
   );
   const [view, setView] = useState<DetailView>(() => readView());
-  const [selectedNodeId, setSelectedNodeId] = useState<string>(() => readNodeFilter());
+  const [streamNodeFilter, setStreamNodeFilter] = useState<string>(() => readNodeFilter());
+  const [inspectSelection, setInspectSelection] = useState<InspectSelection>({
+    nodeId: null,
+    logRowId: null,
+  });
 
-  // Hoisted above any early returns so the hook order stays stable.
-  const scrollToNode = useCallback((nodeId: string): void => {
-    const el = document.getElementById(`node-transition-${nodeId}`);
-    if (el !== null) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, []);
-
-  // `Project | null` / `RunDetailView | null` rather than the `as unknown as T`
+  // `Project | null` / `ConsoleRunDetail | null` rather than the `as unknown as T`
   // casts the original sentinel used — keeps the null path honest for
   // downstream readers (they can guard explicitly instead of meeting a
   // mis-typed value).
@@ -149,7 +161,7 @@ export function RunDetailPage(): ReactElement {
     () => (projectId !== undefined ? skill.getProject(projectId) : Promise.resolve(null))
   );
 
-  const { data: detail, error: detailError } = useEntity<RunDetailView | null>(
+  const { data: detail, error: detailError } = useEntity<ConsoleRunDetail | null>(
     runId !== undefined ? K.run(runId) : 'noop:no-run-id',
     () => (runId !== undefined ? skill.getRun(runId) : Promise.resolve(null))
   );
@@ -206,6 +218,32 @@ export function RunDetailPage(): ReactElement {
       runId !== undefined ? skill.listRunArtifacts(runId) : Promise.resolve([] as ArtifactFile[])
   );
 
+  const inspectNodeStates = useMemo(() => {
+    if (detail === undefined || detail === null) return [];
+    return synthesizeLogNodeStates(
+      detail.nodeStates,
+      detail.rawEvents,
+      detail.run.status,
+      detail.approval
+    );
+  }, [detail]);
+
+  const logRows = useMemo(
+    () => buildLogRows(inspectNodeStates, detail?.rawEvents ?? []),
+    [inspectNodeStates, detail]
+  );
+
+  const logEntries = useMemo(
+    () =>
+      buildConsoleLogEntries({
+        rows: logRows,
+        rawEvents: detail?.rawEvents ?? [],
+        nodeRuns: foldNodeRuns(detail?.events ?? []),
+        runStartedAt: detail?.run.startedAt ?? '',
+      }),
+    [logRows, detail]
+  );
+
   // Distinct nodes drive the node-filter dropdown — derived from the same fold
   // the stream renders, so the options match the dividers exactly.
   const nodeOptions = useMemo(
@@ -221,10 +259,61 @@ export function RunDetailPage(): ReactElement {
   // "Waiting for first event…" frame.
   useLayoutEffect(() => {
     if (detail === undefined || detail === null) return;
-    if (selectedNodeId !== 'all' && !nodeOptions.some(o => o.id === selectedNodeId)) {
-      setSelectedNodeId('all');
+    if (streamNodeFilter !== 'all' && !nodeOptions.some(o => o.id === streamNodeFilter)) {
+      setStreamNodeFilter('all');
     }
-  }, [detail, nodeOptions, selectedNodeId]);
+  }, [detail, nodeOptions, streamNodeFilter]);
+
+  useEffect(() => {
+    if (detail === undefined || detail === null || runId === undefined) return;
+    if (appliedRunIdRef.current === runId) return;
+    appliedRunIdRef.current = runId;
+    setInspectSelection(
+      resolveInitialInspectSelection({
+        requestedNodeId: readNodeSearchParam(location.search),
+        nodeStates: inspectNodeStates,
+        rows: logRows,
+        approvalNodeId: readApprovalContext(detail.approval)?.nodeId ?? null,
+      })
+    );
+  }, [detail, runId, inspectNodeStates, logRows, location.search]);
+
+  useEffect(() => {
+    const requested = readNodeSearchParam(location.search);
+    const previous = prevSearchNodeRef.current;
+    prevSearchNodeRef.current = requested;
+    if (appliedRunIdRef.current !== runId || runId === undefined) return;
+    if (requested === null || requested === previous) return;
+    if (requested === inspectSelection.nodeId) return;
+    if (!isKnownInspectNode(requested, inspectNodeStates, logRows)) return;
+    setInspectSelection({ nodeId: requested, logRowId: null });
+  }, [location.search, runId, inspectSelection.nodeId, inspectNodeStates, logRows]);
+
+  const replaceNodeSearch = useCallback(
+    (nodeId: string | null): void => {
+      const params = new URLSearchParams(location.search);
+      if (nodeId === null || nodeId === '') params.delete('node');
+      else params.set('node', nodeId);
+      const next = params.toString();
+      const search = next === '' ? '' : `?${next}`;
+      if (search === location.search) return;
+      navigate({ search }, { replace: true });
+    },
+    [location.search, navigate]
+  );
+
+  const onInspectSelect = useCallback(
+    (nodeId: string, rowId?: string): void => {
+      setInspectSelection(selectInspectNode(nodeId, rowId ?? null));
+      replaceNodeSearch(nodeId);
+    },
+    [replaceNodeSearch]
+  );
+
+  const onCloseRoom = useCallback((): void => {
+    setInspectSelection({ nodeId: null, logRowId: null });
+    replaceNodeSearch(null);
+  }, [replaceNodeSearch]);
 
   // Auto-scroll to bottom on new content IF user is already near the bottom.
   const lastBottomRef = useRef(true);
@@ -379,13 +468,55 @@ export function RunDetailPage(): ReactElement {
       messageCount={messageList.length}
       artifactCount={artifactFiles?.length ?? null}
       nodeOptions={nodeOptions}
-      selectedNodeId={selectedNodeId}
+      selectedNodeId={streamNodeFilter}
       onSelectNode={next => {
-        setSelectedNodeId(next);
+        setStreamNodeFilter(next);
         writeNodeFilter(next);
       }}
     />
   );
+
+  const logHeader: ReactNode = (
+    <>
+      <div className="sticky top-0 z-10 bg-surface px-6">{toolbar}</div>
+      <div className="px-6 pt-4">
+        {detail.usage === null ? (
+          <div
+            className="mb-3 rounded-[10px] border border-warning/40 bg-warning/[0.06] px-3 py-2 text-[12px] text-warning"
+            role="status"
+          >
+            Usage report unavailable for this run. This is not zero cost.
+          </div>
+        ) : null}
+        {hasRunEnvOverlayUi(run) ? <WorkflowEnvResolvedTable overlay={run.envOverlay} /> : null}
+        <RunStartedLine run={run} />
+      </div>
+    </>
+  );
+
+  const logFooter: ReactNode = (
+    <div className="px-6 pb-4">
+      <RunFinishedLine run={run} />
+      {run.status === 'paused' && run.approval !== null && run.approval !== undefined ? (
+        <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-warning" />
+            <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
+              Waiting for approval
+            </span>
+          </div>
+          <ApprovalContext run={run} />
+          <div className="mt-2">
+            <ApprovalPanel run={run} />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const projectCwd = project?.path;
+  const inspectView = view === 'graph' ? 'graph' : 'log';
+  const showInspectPane = view !== 'artifacts' && projectCwd !== undefined;
 
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
@@ -398,85 +529,44 @@ export function RunDetailPage(): ReactElement {
         />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {view === 'log' ? (
-            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-              <div className="w-full px-6">
-                <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
-
-                <div className="py-4">
-                  {detail.usage === null ? (
-                    <div
-                      className="mb-3 rounded-[10px] border border-warning/40 bg-warning/[0.06] px-3 py-2 text-[12px] text-warning"
-                      role="status"
-                    >
-                      Usage report unavailable for this run. This is not zero cost.
-                    </div>
-                  ) : null}
-                  {hasRunEnvOverlayUi(run) ? (
-                    <WorkflowEnvResolvedTable overlay={run.envOverlay} />
-                  ) : null}
-                  <RunStartedLine run={run} />
-
-                  <div className="mt-2">
-                    <RunStream
-                      messages={messageList}
-                      events={events}
-                      showToolCalls={showToolCalls}
-                      showSystem={showSystem}
-                      selectedNodeId={selectedNodeId}
-                      usage={detail.usage}
-                    />
-                  </div>
-
-                  <RunFinishedLine run={run} />
-
-                  {run.status === 'paused' &&
-                  run.approval !== null &&
-                  run.approval !== undefined ? (
-                    <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
-                      <div className="mb-2 flex items-center gap-2">
-                        <span
-                          aria-hidden
-                          className="h-2 w-2 animate-pulse rounded-full bg-warning"
-                        />
-                        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
-                          Waiting for approval
-                        </span>
-                      </div>
-                      <ApprovalContext run={run} />
-                      <div className="mt-2">
-                        <ApprovalPanel run={run} />
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          ) : view === 'graph' ? (
+          {view === 'artifacts' ? (
             <>
               <div className="px-6">{toolbar}</div>
-              {project !== undefined && project !== null ? (
-                <RunGraphPanel
-                  workflowName={run.workflow}
-                  projectCwd={project.path}
-                  events={events}
-                  onNodeSelect={(nodeId): void => {
-                    setView('log');
-                    writeView('log');
-                    // Defer scroll until the log view has mounted.
-                    requestAnimationFrame(() => {
-                      scrollToNode(nodeId);
-                    });
-                  }}
-                />
-              ) : (
-                <div className="p-6 text-[12px] text-text-tertiary">Loading project…</div>
-              )}
+              <ArtifactPanel runId={runId} />
+            </>
+          ) : showInspectPane && projectCwd !== undefined ? (
+            <>
+              {view === 'graph' ? <div className="px-6">{toolbar}</div> : null}
+              <ConsoleInspectPane
+                view={inspectView}
+                run={run}
+                projectId={projectId}
+                projectCwd={projectCwd}
+                messages={messageList}
+                events={events}
+                rawEvents={detail.rawEvents}
+                nodeStates={inspectNodeStates}
+                approval={detail.approval}
+                logEntries={logEntries}
+                usage={detail.usage}
+                streamNodeFilter={streamNodeFilter}
+                selectedNodeId={inspectSelection.nodeId}
+                selectedLogRowId={inspectSelection.logRowId}
+                showToolCalls={showToolCalls}
+                showSystem={showSystem}
+                logHeader={logHeader}
+                logFooter={logFooter}
+                logScrollRef={scrollRef}
+                onSelectNode={onInspectSelect}
+                onCloseRoom={onCloseRoom}
+                loadDefinition={skill.getWorkflowDagNodes}
+                loadMessages={skill.listNodeMessages}
+              />
             </>
           ) : (
             <>
               <div className="px-6">{toolbar}</div>
-              <ArtifactPanel runId={runId} />
+              <div className="p-6 text-[12px] text-text-tertiary">Loading project…</div>
             </>
           )}
         </div>

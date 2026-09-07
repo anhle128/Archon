@@ -1,5 +1,6 @@
 import { cn } from '@/lib/utils';
 
+import { nodeStatusLabel } from './awaiting-chrome';
 import type { LogRow } from './build-log-rows';
 
 export interface NodeRunListProps {
@@ -11,7 +12,7 @@ export interface NodeRunListProps {
 const STATUS_COLORS: Record<LogRow['status'], string> = {
   pending: 'bg-accent/20 text-accent',
   running: 'bg-accent/20 text-accent',
-  awaiting: 'bg-accent/20 text-accent',
+  awaiting: 'bg-warning/20 text-warning',
   completed: 'bg-success/20 text-success',
   failed: 'bg-error/20 text-error',
   skipped: 'bg-surface text-text-secondary',
@@ -46,7 +47,7 @@ export function NodeRunList({
                 STATUS_COLORS[row.status]
               )}
             >
-              {row.status}
+              {nodeStatusLabel(row.status)}
             </span>
           </button>
         );

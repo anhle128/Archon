@@ -20,7 +20,7 @@ Mounted at `/console/*`. Not part of the shipped product. Validates the mental m
 
 The composer's 📎 attaches files (≤5, ≤10 MB each, type-guarded client-side; the
 server validates authoritatively) and sends them via the existing multipart
-`sendMessage`. **Limitation:** files can't ride the *first* message of a brand-new
+`sendMessage`. **Limitation:** files can't ride the _first_ message of a brand-new
 conversation (`createConversation` is JSON-only) — the UI shows a notice to
 re-attach once the chat exists. Drag-drop / paste / optimistic chips are tracked
 in #1913.
@@ -37,24 +37,30 @@ narrows nothing.
 
 ## Constraints
 
-- **Isolated.** Forbidden imports from `packages/web/src/{components,stores,contexts,routes,hooks}` and `@tanstack/react-query`, `@/lib/api` (function exports). Enforced by ESLint. Type-only imports from `@/lib/api.generated` are allowed.
+- **Isolated.** Forbidden imports from `packages/web/src/{components,stores,contexts,routes,hooks}` and `@tanstack/react-query`, `@/lib/api` (function exports). Enforced by ESLint and `console-isolation.test.ts`. Type-only imports from `@/lib/api.generated` are allowed. The inspect graph's only sanctioned runtime `@/lib` import is `@/lib/run-graph`.
 - **Skill API is the single mutation surface.** Every UI action calls one skill verb. See `skills/`.
 - **Design tokens reused.** Uses the oklch semantic tokens from `packages/web/src/index.css` (`bg-surface`, `text-text-primary`, `bg-success`, `bg-warning`, `bg-error`, etc.).
-- **Vocabulary.** Only *Project, Run, Workflow, Worktree* appear in user-facing copy. No *Dashboard, Deployment, Infrastructure, Secrets, Activity, Pipeline, Stage*.
+- **Vocabulary.** Only _Project, Run, Workflow, Worktree_ appear in user-facing copy. No _Dashboard, Deployment, Infrastructure, Secrets, Activity, Pipeline, Stage_.
+
+## Inspect command center
+
+- **Log filter vs inspect selection.** `StreamToolbar` still owns the chronological Log filter (`archon.console.runNodeFilter`, default `all`, including **All nodes**). Opening a node room is a separate `InspectSelection` synchronized with `?node=` on `/console/p/:projectId/r/:runId`. Chat result cards and the workflow dock deep-link with `consoleRunHref`.
+- **Agent transcripts.** `GET /api/workflows/runs/:runId/nodes/:nodeId/messages` is requested only for agent rooms and polled every 1s while the run is `running` or `paused`.
+- **Epic 6 handoff.** Backend `awaiting` is shown as ordinary `running` inspect chrome. Interactive Ask cards, input composers, pending-interaction slots, and "Waiting on you" UI belong to Epic 6.
 
 ## Persisted UI state (localStorage)
 
 Client-only view preferences. All reads are try/catch-guarded and fall back to the default, so a disabled/over-quota store never breaks rendering.
 
-| Key | Default | Set by | Purpose |
-|-----|---------|--------|---------|
-| `archon.console.detailView` | `log` | Run detail | Active tab (`log` / `graph` / `artifacts`) |
-| `archon.console.showToolCalls` | `1` (on) | Run detail | Tool-calls toggle in the stream |
-| `archon.console.showSystem` | `0` (off) | Run detail | System/detail toggle in the stream |
-| `archon.console.runNodeFilter` | `all` | Run detail | Node filter (`all` or a nodeId); auto-resets when the node is absent from the open run |
-| `archon.console.railWidth` | — | Project rail | Persisted sidebar width |
-| `archon.console.lastWorkflow` | — | Chat / dispatch | Last-used workflow |
-| `archon.console.builderProject` | — | Workflow builder | Selected project (`cwd`); also mirrored as `?project=` |
+| Key                             | Default   | Set by           | Purpose                                                                                |
+| ------------------------------- | --------- | ---------------- | -------------------------------------------------------------------------------------- |
+| `archon.console.detailView`     | `log`     | Run detail       | Active tab (`log` / `graph` / `artifacts`)                                             |
+| `archon.console.showToolCalls`  | `1` (on)  | Run detail       | Tool-calls toggle in the stream                                                        |
+| `archon.console.showSystem`     | `0` (off) | Run detail       | System/detail toggle in the stream                                                     |
+| `archon.console.runNodeFilter`  | `all`     | Run detail       | Node filter (`all` or a nodeId); auto-resets when the node is absent from the open run |
+| `archon.console.railWidth`      | —         | Project rail     | Persisted sidebar width                                                                |
+| `archon.console.lastWorkflow`   | —         | Chat / dispatch  | Last-used workflow                                                                     |
+| `archon.console.builderProject` | —         | Workflow builder | Selected project (`cwd`); also mirrored as `?project=`                                 |
 
 ## Status
 

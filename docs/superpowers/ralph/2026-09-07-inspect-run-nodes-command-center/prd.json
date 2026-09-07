@@ -1,0 +1,277 @@
+{
+  "feature": "Inspect Run Nodes on Command Center",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Extend the Typed Console Data Boundary",
+      "description": "As a console operator, I want typed run-detail and node-message query endpoints, so that the console inspect UI can read raw events, projected node states, and agent transcripts safely.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/skills/runs.node-messages.test.ts and packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts asserting client contracts with spyOn(globalThis, 'fetch').",
+        "Add type aliases WorkflowEvent, WorkflowNodeState, WorkflowNodeMessage, WorkflowNodeMessagesResponse from components['schemas'] to skills/runs.ts.",
+        "Expand ConsoleRunDetail interface to include run, events, rawEvents, nodeStates, approval, and usage.",
+        "getRun('run/1') requests /api/workflows/runs/run%2F1, returns untouched rawEvents, nodeStates, and approval before presentation adapters run, while preserving existing events, run, and usage.",
+        "listNodeMessages('run/1', 'node a') requests /api/workflows/runs/run%2F1/nodes/node%20a/messages and returns text, tool, and status entries without reshaping them.",
+        "Non-2xx responses from getRun or listNodeMessages reject through requestJson instead of returning an empty fallback.",
+        "Add collision-safe keys K.nodeMessages and K.workflowDagNodes with individually encoded segments to store/keys.ts.",
+        "Export DagNode from skills/workflows.ts and implement getWorkflowDagNodes(workflowName, cwd) requesting /api/workflows?cwd=... and returning raw workflow definition nodes unchanged; missing workflow rejects with Workflow not found: <workflowName>.",
+        "bun test src/experiments/console/skills/runs.node-messages.test.ts src/experiments/console/skills/workflows.dag-nodes.test.ts passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 1 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:118-174). Files: packages/web/src/experiments/console/skills/runs.node-messages.test.ts, packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts, packages/web/src/experiments/console/store/keys.ts, packages/web/src/experiments/console/skills/runs.ts, packages/web/src/experiments/console/skills/workflows.ts. Use generated API types and no 'any'.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/web/src/experiments/console/skills/runs.node-messages.test.ts, packages/web/src/experiments/console/skills/workflows.dag-nodes.test.ts, packages/web/src/experiments/console/store/keys.ts, packages/web/src/experiments/console/skills/runs.ts, packages/web/src/experiments/console/skills/workflows.ts."
+    },
+    {
+      "id": "US-002",
+      "title": "Establish Approval and Inspect-Status Policy",
+      "description": "As a console operator, I want typed approval-context parsing and an awaiting-to-running inspect status policy, so that gate decisions are parsed safely and human interaction controls are not shown prematurely.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/components/inspect/read-approval-context.test.ts and inspect-status.test.ts covering accepted/rejected shapes and status mapping.",
+        "Implement read-approval-context.ts with ApprovalContext interface and readApprovalContext(value: unknown): ApprovalContext | null requiring string nodeId and message, accepting only approval, plannotator_gate, child_workflow, interactive_loop, and writeback types.",
+        "Implement getPlannotatorReviewUrl({ status, approval }) accepting review links only when run status is paused and URL uses http: or https:.",
+        "Implement inspect-status.ts exporting InspectStatus ('pending' | 'running' | 'completed' | 'failed' | 'skipped'), inspectStatus(value: string), inspectStatusLabel(value: string), and isInspectRunLive(status: string).",
+        "inspectStatus and inspectStatusLabel map 'awaiting' to 'running'; pending, running, completed, failed, and skipped pass through; other strings map to pending.",
+        "isInspectRunLive returns true only for 'running' and 'paused' status.",
+        "bun test src/experiments/console/components/inspect/read-approval-context.test.ts src/experiments/console/components/inspect/inspect-status.test.ts passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 2 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:175-241). Files: packages/web/src/experiments/console/components/inspect/read-approval-context.ts, read-approval-context.test.ts, inspect-status.ts, inspect-status.test.ts. No casts to 'any'. Follow exact signatures at plan lines 193-236.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/web/src/experiments/console/components/inspect/read-approval-context.ts, read-approval-context.test.ts, inspect-status.ts, inspect-status.test.ts."
+    },
+    {
+      "id": "US-003",
+      "title": "Build the Unmerged Log Projection",
+      "description": "As a console operator, I want unmerged log rows and synthetic fallback states, so that ordinary node runs, loop iterations, and route decisions display distinctly in chronological order without duplicating usage ledger data.",
+      "acceptanceCriteria": [
+        "Create build-log-rows.test.ts, synthesize-log-node-states.test.ts, and build-console-log-entries.test.ts covering ordinary, loop-iteration, route-decision, fallback states, and usage placement.",
+        "Implement build-log-rows.ts with LogRow and LogRowSelection ('node' | 'loop_iteration' | 'route_iteration') sorting by source event-array order, then projected-state index.",
+        "Group loop rows by positive safe-integer data.iteration and route rows by positive safe-integer data.execution_seq; suppress the ordinary row for loop or route-loop nodes when specific iteration/route rows exist.",
+        "Implement synthesize-log-node-states.ts where existing projected states always win and synthetic states are added only for missing node ids from loop-iteration metadata or selectable declared pause (approval, plannotator_gate, child_workflow; excluding interactive_loop and writeback).",
+        "Implement build-console-log-entries.ts with ConsoleLogEntry interface deriving startedAt, durationMs, costUsd, numTurns, stopReason, skipReason, skipExpr, and showNodeUsage.",
+        "Set showNodeUsage to true only on the final chronological row for a given nodeId so cumulative ledger data appears once.",
+        "Use runStartedAt as the final timestamp fallback for every row.",
+        "bun test src/experiments/console/components/inspect/build-log-rows.test.ts src/experiments/console/components/inspect/synthesize-log-node-states.test.ts src/experiments/console/components/inspect/build-console-log-entries.test.ts passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 3 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:242-328). Files: packages/web/src/experiments/console/components/inspect/build-log-rows.ts, build-log-rows.test.ts, synthesize-log-node-states.ts, synthesize-log-node-states.test.ts, build-console-log-entries.ts, build-console-log-entries.test.ts. Follow contracts at plan lines 264-320.",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/experiments/console/components/inspect/build-log-rows.ts, build-log-rows.test.ts, synthesize-log-node-states.ts, synthesize-log-node-states.test.ts, build-console-log-entries.ts, build-console-log-entries.test.ts."
+    },
+    {
+      "id": "US-004",
+      "title": "Resolve Room Types, Data, and Selection",
+      "description": "As a console operator, I want type-aware room resolution, deterministic per-room data selectors, message slicing, and URL/live selection precedence, so that every selected node displays the correct room content.",
+      "acceptanceCriteria": [
+        "Create resolve-room-kind.test.ts, select-room-data.test.ts, select-node-room-messages.test.ts, and console-inspect-selection.test.ts covering all node body types and selection precedence.",
+        "Implement resolve-room-kind.ts with RoomKind ('agent' | 'stdout' | 'gate' | 'workflow' | 'route_loop' | 'loop_group') and NodeBodyKind identifying bodies by schema keys, qualifying loop-group children with dot-separated ids, and returning agent room with nodeType 'unknown' only after approval and event fallbacks fail.",
+        "Implement select-room-data.ts with selectNodeStdout, selectGateChrome, selectChildRun, selectRouteDecision, and selectLoopGroupChrome returning typed data without throwing on malformed payloads.",
+        "Implement select-node-room-messages.ts sorting messages by seq, preserving full transcript for non-loop selections, slicing loop rows from matching iteration_started to terminal/next-start, and returning full transcript if iteration markers are missing.",
+        "Implement console-inspect-selection.ts with readNodeSearchParam, resolveInitialInspectSelection, and selectInspectNode where valid ?node= wins, falling back to first inspect-running node, then declared approval, then first log row.",
+        "bun test src/experiments/console/components/inspect/resolve-room-kind.test.ts src/experiments/console/components/inspect/select-room-data.test.ts src/experiments/console/components/inspect/select-node-room-messages.test.ts src/experiments/console/components/inspect/console-inspect-selection.test.ts passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 4 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:329-510). Files: packages/web/src/experiments/console/components/inspect/resolve-room-kind.ts, resolve-room-kind.test.ts, select-room-data.ts, select-room-data.test.ts, select-node-room-messages.ts, select-node-room-messages.test.ts, console-inspect-selection.ts, console-inspect-selection.test.ts. Import RunStatus from console skills.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/experiments/console/components/inspect/resolve-room-kind.ts, resolve-room-kind.test.ts, select-room-data.ts, select-room-data.test.ts, select-node-room-messages.ts, select-node-room-messages.test.ts, console-inspect-selection.ts, console-inspect-selection.test.ts."
+    },
+    {
+      "id": "US-005",
+      "title": "Render the Console-Owned Node Room",
+      "description": "As a console operator, I want a single console-owned node room component that renders agent, stdout, gate, child run, route, and loop-group rooms with 1s live agent polling, so that node details are viewable without premature HITL controls.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/test/install-happy-dom.ts installing and restoring global DOM environment for React 19 tests.",
+        "Create ConsoleNodeRoom.test.tsx testing agent transcript, tool entries, live polling (1s setInterval), stdout pre, gate decision controls, child run link, route decision, loop-group view, and absence of Epic 6 UI.",
+        "Implement ConsoleNodeRoom.tsx adhering to ConsoleNodeRoomProps interface with onClose, loadMessages, and stable room header.",
+        "Poll node messages via refetch() every 1,000 ms only when isLive is true and room kind is 'agent'; clear interval on dependency change and unmount.",
+        "Render agent messages (text, tool, status) in server sequence order; render tool inputs/outputs as formatted JSON; format markdown text; map status 'awaiting' to 'running'.",
+        "Render bash/script stdout in pre with exit code and truncation metadata; render gate message with ApprovalPanel when canDecide is true; render child workflow run deep-link /console/p/:projectId/r/:childRunId.",
+        "Do not read, render, or import pending_interactions, AskCard, or ChatComposer; do not display 'Waiting on you' or 'awaiting' labels.",
+        "NODE_ENV=development bun test src/experiments/console/components/ConsoleNodeRoom.test.tsx passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 5 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:511-569). Files: packages/web/src/experiments/console/test/install-happy-dom.ts, packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx, packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx. Use injected loadMessages in tests, no mock.module().",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-004"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/experiments/console/test/install-happy-dom.ts, packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx, packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx."
+    },
+    {
+      "id": "US-006",
+      "title": "Adapt the DAG to the Shared Run-Graph Layout",
+      "description": "As a console operator, I want DAG nodes and projected states adapted to the shared run-graph geometry library, so that layout positions and viewport bounds are computed deterministically without duplicate state projectors.",
+      "acceptanceCriteria": [
+        "Create build-run-graph-input.test.ts and graph-viewport.test.ts covering dependencies, conditional edges, route labels, loop back-edges, duplicate projected states, and viewport bounds/scale.",
+        "Implement build-run-graph-input.ts exporting buildRunGraphInput(nodes, nodeStates): ConsoleGraphModel using layout from @/lib/run-graph.",
+        "Use projected nodeStates as the only live status authority; normalize awaiting to running before passing to layout.",
+        "Emit dependency, conditional, and route edges from typed DAG fields; append outcome to edge id when route targets collide; suppress duplicate dependency edges to route targets.",
+        "Implement graph-viewport.ts with graphBounds(positions) and fitGraphScale(viewportWidth, viewportHeight, bounds, padding) using 180x80 node footprint and 64px canvas padding.",
+        "Clamp fit scale to 0.25 <= scale <= 1.0, returning 1 for empty or non-positive dimensions.",
+        "bun test src/experiments/console/components/graph/build-run-graph-input.test.ts src/experiments/console/components/graph/graph-viewport.test.ts passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 6 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:570-627). Files: packages/web/src/experiments/console/components/graph/build-run-graph-input.ts, build-run-graph-input.test.ts, graph-viewport.ts, graph-viewport.test.ts. Only import from @/lib/run-graph; use local ['positive', 'negative', 'exhausted'] as const.",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/experiments/console/components/graph/build-run-graph-input.ts, build-run-graph-input.test.ts, graph-viewport.ts, graph-viewport.test.ts."
+    },
+    {
+      "id": "US-007",
+      "title": "Replace the Console Graph Renderer",
+      "description": "As a console operator, I want a console-owned SVG/HTML graph panel with pan, zoom, fit, arrows, and selection, so that I can inspect workflow execution graph visually.",
+      "acceptanceCriteria": [
+        "Create packages/web/src/experiments/console/components/RunGraphPanel.test.tsx verifying nodes, route labels, dashed back-edges, arrow markers, selection aria-current, zoom/pan/fit controls, and definition error handling.",
+        "Modify packages/web/src/experiments/console/components/RunGraphPanel.tsx to implement RunGraphPanelProps { nodes, nodeStates, selectedNodeId, definitionPending, definitionError, onSelectNode }.",
+        "Memoize buildRunGraphInput(nodes, nodeStates) and render SVG routes and HTML node cards inside canvas transform with 64px translation.",
+        "Render node cards at shared positions with 180x80 dimensions, nodeBodyKind type glyph, label, id, inspect status, and selection ring.",
+        "Clicking a node calls onSelectNode(nodeId) without changing view.",
+        "Implement manual zoom clamped to 0.25 <= scale <= 1.5 in 0.1 increments and fit button using fitGraphScale.",
+        "Remove internal useEntity, workflow skill queries, Dagre layout, and raw-event state derivation from RunGraphPanel.",
+        "NODE_ENV=development bun test src/experiments/console/components/RunGraphPanel.test.tsx passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 7 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:628-667). Files: packages/web/src/experiments/console/components/RunGraphPanel.tsx, packages/web/src/experiments/console/components/RunGraphPanel.test.tsx. Pure shell-specific renderer over @/lib/run-graph.",
+      "dependsOn": [
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/experiments/console/components/RunGraphPanel.tsx, RunGraphPanel.test.tsx, packages/web/src/experiments/console/routes/RunDetailPage.tsx."
+    },
+    {
+      "id": "US-008",
+      "title": "Make Every Log Row Selectable",
+      "description": "As a console operator, I want every ordinary node run, loop iteration, and route decision row to be individually selectable in the Log, so that I can inspect each execution slice without breaking existing filter or usage ledger behavior.",
+      "acceptanceCriteria": [
+        "Update NodeDivider.test.tsx asserting row selection calls onSelect(rowId, nodeId), sets aria-current='true', and keeps usage-expansion control separately operable.",
+        "Modify NodeDivider.tsx adding rowId, selected, and onSelect props; make identity/status region full-width button with aria-current; move usage expansion to adjacent chevron button without nested interactive elements.",
+        "Update RunStream.test.tsx asserting ordinary, loop-iteration, and route-decision rows render as distinct dividers in chronological order, with cumulative usage only on showNodeUsage row.",
+        "Modify RunStream.tsx accepting logEntries, selectedLogRowId, and onSelectLogRow; filter logEntries by row.nodeId when streamNodeFilter is not 'all'; retain message windows from foldNodeRuns.",
+        "Preserve existing duration, cost, turns, stop reason, skip reason, and coverage behaviors.",
+        "NODE_ENV=development bun test src/experiments/console/components/NodeDivider.test.tsx src/experiments/console/components/RunStream.test.tsx passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 8 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:668-705). Files: packages/web/src/experiments/console/components/NodeDivider.tsx, NodeDivider.test.tsx, RunStream.tsx, RunStream.test.tsx. Separate Log filtering (selectedNodeId/streamNodeFilter) from row selection.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/src/experiments/console/components/NodeDivider.tsx, NodeDivider.test.tsx, RunStream.tsx, RunStream.test.tsx."
+    },
+    {
+      "id": "US-009",
+      "title": "Compose One Persistent Inspect Pane",
+      "description": "As a console operator, I want Log and Graph views hosted in a persistent split pane alongside a single mounted node room, so that switching between views never unmounts or resets room state.",
+      "acceptanceCriteria": [
+        "Create ConsoleInspectPane.test.tsx verifying view switching between log and graph retains the same mounted room DOM element and transcript loader call count.",
+        "Implement ConsoleInspectPane.tsx adhering to ConsoleInspectPaneProps interface with view ('log' | 'graph'), loadDefinition, and loadMessages.",
+        "Load definition nodes via useEntity(K.workflowDagNodes(projectCwd, run.workflow), ...); pass query error to Graph while room uses event fallback.",
+        "Render Log or Graph in left pane and exactly one ConsoleNodeRoom as stable right sibling (flex-col lg:flex-row with 380px right column at large widths).",
+        "Resolve selectedRow by selectedLogRowId and selectedNodeId, falling back to most recent row for selected node.",
+        "Clicking either a log divider or graph node invokes onSelectNode callback.",
+        "NODE_ENV=development bun test src/experiments/console/components/ConsoleInspectPane.test.tsx passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 9 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:706-762). Files: packages/web/src/experiments/console/components/ConsoleInspectPane.tsx, ConsoleInspectPane.test.tsx. Do not conditionally unmount ConsoleNodeRoom when view toggles.",
+      "dependsOn": [
+        "US-005",
+        "US-007",
+        "US-008"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/experiments/console/components/ConsoleInspectPane.tsx, ConsoleInspectPane.test.tsx."
+    },
+    {
+      "id": "US-010",
+      "title": "Integrate URL Selection Without Breaking Log Filtering",
+      "description": "As a console operator, I want the run detail page to synchronize node selection with the ?node= URL query parameter while preserving StreamToolbar Log filtering, so that inspect links can be shared and bookmarked without altering Log view filters.",
+      "acceptanceCriteria": [
+        "Update RunDetailPage.test.tsx testing ?node= deep-linking, invalid query fallback, view switching retaining room, closing room removing ?node=, and StreamToolbar 'All nodes' filtering without resetting room.",
+        "Replace local RunDetailView with exported ConsoleRunDetail type in RunDetailPage.tsx.",
+        "Rename filter state to streamNodeFilter, preserving its local-storage key and 'all' default; separate InspectSelection state.",
+        "Derive inspectNodeStates, logRows, and logEntries with useMemo in exact order.",
+        "Initialize selection once per run using resolveInitialInspectSelection; honor later ?node= changes with navigate({ search }, { replace: true }) without reopening on parameter removal.",
+        "Log click sets nodeId and logRowId; Graph click sets nodeId and clears logRowId; room close clears both and removes ?node= from URL.",
+        "StreamToolbar controls only streamNodeFilter; Artifacts view remains full width; ConsoleInspectPane renders for Log and Graph views.",
+        "NODE_ENV=development bun test src/experiments/console/routes/RunDetailPage.test.tsx passes from packages/web."
+      ],
+      "technicalNotes": "Plan Task 10 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:763-806). Files: packages/web/src/experiments/console/routes/RunDetailPage.tsx, RunDetailPage.test.tsx. Preserve existing lifecycle, SSE, and artifact browsing behaviors.",
+      "dependsOn": [
+        "US-004",
+        "US-009"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/web/src/experiments/console/routes/RunDetailPage.tsx, RunDetailPage.test.tsx."
+    },
+    {
+      "id": "US-011",
+      "title": "Deep-Link Timeline Status and Lock the Isolation Boundary",
+      "description": "As an engineer, I want chat timeline status entries to deep-link to active or approval nodes and console production code strictly isolated under NFR4, so that command-center navigation is seamless and no legacy or premature HITL code leaks in.",
+      "acceptanceCriteria": [
+        "Create console-run-href.ts and test verifying /console/p/:projectId/r/:runId?node=:nodeId with URL-encoded parameters.",
+        "Update ConsoleWorkflowResultCard.tsx to link run detail using consoleRunHref(run.projectId, run.id, run.currentNode ?? null).",
+        "Update WorkflowDock.tsx to link running runs to run.currentNode and paused runs to run.approval?.nodeId ?? run.currentNode ?? null using consoleRunHref.",
+        "Create console-isolation.test.ts recursively verifying production files under src/experiments/console have no imports from @/components, legacy stores, contexts, routes, hooks, @tanstack/react-query, or runtime @/lib/api, allowing only type imports from @/lib/api.generated and runtime imports from @/lib/run-graph.",
+        "Verify console-isolation.test.ts asserts no pending_interactions, AskCard, ChatComposer, or user-facing 'Waiting on you' / 'awaiting' strings in inspect files.",
+        "Update console README.md with Log-filter vs inspect-selection rules, run-graph exception, and Epic 6 handoff; update comment in eslint.config.mjs.",
+        "bun test src/experiments/console/console-isolation.test.ts src/experiments/console/components/console-run-href.test.ts and NODE_ENV=development bun test src/experiments/console/ pass from packages/web."
+      ],
+      "technicalNotes": "Plan Task 11 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:807-849). Files: packages/web/src/experiments/console/components/console-run-href.ts, console-run-href.test.ts, packages/web/src/experiments/console/console-isolation.test.ts, ConsoleWorkflowResultCard.tsx, WorkflowDock.tsx, README.md, eslint.config.mjs.",
+      "dependsOn": [
+        "US-010"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/web/src/experiments/console/components/console-run-href.ts, console-run-href.test.ts, packages/web/src/experiments/console/console-isolation.test.ts, ConsoleWorkflowResultCard.tsx, WorkflowDock.tsx, README.md, eslint.config.mjs."
+    },
+    {
+      "id": "US-012",
+      "title": "Validate, Record Evidence, and Close the Epic",
+      "description": "As a release engineer, I want all console tests and repository validation verified green before closing Story 5.5 and Epic 5, so that zero regressions exist in the repository.",
+      "acceptanceCriteria": [
+        "Run NODE_ENV=development bun test src/experiments/console/ from packages/web and record passing test counts.",
+        "Run bun run validate from the repository root and confirm all linters, type checks, and tests pass.",
+        "Update _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml marking 5-5-inspect-a-run-as-nodes-on-command-center as 'done'.",
+        "Mark epic-5 as 'done' in sprint-status.yaml after confirming Stories 5.1 through 5.5 are all 'done', while keeping epic-6 unchanged.",
+        "bun run format:check and git diff --check pass with no whitespace or scope regressions.",
+        "git diff --stat confirms only planned files and the sprint tracker were modified."
+      ],
+      "technicalNotes": "Plan Task 12 (docs/superpowers/plans/2026-09-07-inspect-run-nodes-command-center.md:850-870). File: _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. Only update the tracker after all validation passes.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007",
+        "US-008",
+        "US-009",
+        "US-010",
+        "US-011"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Implemented in iteration 12. Console: 782 pass / 0 fail / 67 files. bun run validate green. Files: _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. Unblock commits: packages/workflows/src/dag-executor.test.ts, packages/workflows/src/loader.test.ts."
+    }
+  ]
+}

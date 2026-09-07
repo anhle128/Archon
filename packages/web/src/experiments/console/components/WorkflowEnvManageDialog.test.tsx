@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { act, createElement, useState, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Window } from 'happy-dom';
+import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
 import {
   NodePatchEditor,
   WorkflowEnvEditorView,
@@ -174,41 +174,6 @@ function asClickable(el: Element): Clickable {
   return el as unknown as Clickable;
 }
 
-function installHappyDom(): Window {
-  const win = new Window({ url: 'https://localhost/' });
-  // happy-dom types intentionally diverge from lib.dom; install via unknown bag.
-  const bag: Record<string, unknown> = {
-    window: win,
-    document: win.document,
-    self: win,
-    HTMLElement: win.HTMLElement,
-    Element: win.Element,
-    Node: win.Node,
-    Text: win.Text,
-    DocumentFragment: win.DocumentFragment,
-    SVGElement: win.SVGElement,
-    HTMLInputElement: win.HTMLInputElement,
-    HTMLButtonElement: win.HTMLButtonElement,
-    HTMLFormElement: win.HTMLFormElement,
-    HTMLIFrameElement: win.HTMLIFrameElement,
-    navigator: win.navigator,
-    location: win.location,
-    getComputedStyle: win.getComputedStyle.bind(win),
-    requestAnimationFrame: win.requestAnimationFrame.bind(win),
-    cancelAnimationFrame: win.cancelAnimationFrame.bind(win),
-    MutationObserver: win.MutationObserver,
-    Event: win.Event,
-    CustomEvent: win.CustomEvent,
-    KeyboardEvent: win.KeyboardEvent,
-    MouseEvent: win.MouseEvent,
-    FocusEvent: win.FocusEvent,
-    InputEvent: win.InputEvent,
-    IS_REACT_ACT_ENVIRONMENT: true,
-  };
-  Object.assign(globalThis as object, bag);
-  return win;
-}
-
 async function flush(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -253,7 +218,7 @@ function requireTestId(root: Element, testId: string): Element {
 }
 
 describe('WorkflowEnvEditorView mounted no-op patches', () => {
-  let win: Window;
+  let win: ReturnType<typeof installHappyDom>;
   let host: Element;
   let root: Root;
   const spies: { mockRestore: () => void }[] = [];
@@ -278,6 +243,7 @@ describe('WorkflowEnvEditorView mounted no-op patches', () => {
     });
     for (const s of spies.splice(0)) s.mockRestore();
     win.close();
+    restoreHappyDom();
   });
 
   function track<T extends { mockRestore: () => void }>(s: T): T {

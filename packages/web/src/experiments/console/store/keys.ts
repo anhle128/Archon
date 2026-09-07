@@ -42,6 +42,10 @@ export const K = {
   workflowEnvPreview: (cwd: string, workflowName: string, envId: string | null): string =>
     workflowEnvPreviewCacheKey(cwd, workflowName, envId),
   artifacts: (runId: string): string => `artifacts:${runId}`,
+  nodeMessages: (runId: string, nodeId: string): string =>
+    `run-node-messages:${encodeURIComponent(runId)}:${encodeURIComponent(nodeId)}`,
+  workflowDagNodes: (cwd: string | undefined, workflowName: string): string =>
+    `workflow-dag-nodes:${encodeURIComponent(cwd ?? '')}:${encodeURIComponent(workflowName)}`,
   // Installation-wide settings surfaces (static keys — one row each).
   config: 'config' as const,
   // Health has two consumers — the Settings SystemPanel and the IDE docker-check.

@@ -227,3 +227,31 @@ test('answered pending rows do not overlay awaiting', () => {
   );
   expect(states.get('review')?.state).toBe('running');
 });
+
+test('keeps a node awaiting while one of its two Ask rows remains pending', () => {
+  const states = projectLatestEffectiveNodeStates(
+    [{ event_type: 'node_started', step_name: 'review', data: {} }],
+    [
+      { node_id: 'review', status: 'answered' },
+      { node_id: 'review', status: 'pending' },
+    ]
+  );
+
+  expect(states.get('review')?.state).toBe('awaiting');
+});
+
+test('overlays awaiting only onto the sibling node that owns a pending Ask row', () => {
+  const states = projectLatestEffectiveNodeStates(
+    [
+      { event_type: 'node_started', step_name: 'alpha', data: {} },
+      { event_type: 'node_started', step_name: 'beta', data: {} },
+    ],
+    [
+      { node_id: 'alpha', status: 'answered' },
+      { node_id: 'beta', status: 'pending' },
+    ]
+  );
+
+  expect(states.get('alpha')?.state).toBe('running');
+  expect(states.get('beta')?.state).toBe('awaiting');
+});

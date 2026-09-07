@@ -65,6 +65,28 @@ export const askAnswerBodySchema = z.union([
 
 export type AskAnswerBody = z.infer<typeof askAnswerBodySchema>;
 
+export const permissionConfirmBodySchema = z
+  .object({
+    intent: z
+      .string()
+      .min(1)
+      .refine(value => value.trim().length > 0, 'Intent must not be blank'),
+  })
+  .strict();
+
+export type PermissionConfirmBody = z.infer<typeof permissionConfirmBodySchema>;
+
+export const confirmPendingPermissionInputSchema = z
+  .object({
+    workflow_run_id: z.string().min(1),
+    tool_use_id: z.string().min(1),
+    answer: permissionConfirmBodySchema,
+    resolved_by: z.string().min(1),
+  })
+  .strict();
+
+export type ConfirmPendingPermissionInput = z.infer<typeof confirmPendingPermissionInputSchema>;
+
 export const resolvePendingInteractionInputSchema = z
   .object({
     workflow_run_id: z.string().min(1),

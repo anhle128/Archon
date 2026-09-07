@@ -16,6 +16,7 @@ import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@a
 import {
   askAnswerBodySchema,
   pendingInteractionSchema,
+  permissionConfirmBodySchema,
 } from '@archon/workflows/schemas/pending-interaction';
 import {
   nodeMessageTextSchema,
@@ -227,6 +228,8 @@ export const workflowRunDetailSchema = z
      * non-null `UsageReport` component used by GET /api/usage.
      */
     usage: nullableUsageReportResponseSchema,
+    viewer_is_starter: z.boolean(),
+    starter_display_name: z.string().nullable(),
   })
   .openapi('WorkflowRunDetail');
 
@@ -306,6 +309,10 @@ export const retryWorkflowNodeResponseSchema = z
 
 /** POST /api/workflows/runs/:runId/ask/:requestId/answer request body. */
 export const askAnswerRequestSchema = askAnswerBodySchema.openapi('AskAnswerBody');
+
+/** POST /api/workflows/runs/:runId/permissions/:callId/confirm request body. */
+export const permissionConfirmRequestSchema =
+  permissionConfirmBodySchema.openapi('PermissionConfirmBody');
 
 /** POST /api/workflows/runs/:runId/approve request body. */
 export const approveWorkflowRunBodySchema = z

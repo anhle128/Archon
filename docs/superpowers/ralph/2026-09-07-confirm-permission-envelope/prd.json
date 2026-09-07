@@ -1,0 +1,119 @@
+{
+  "feature": "Confirm a Permission by Envelope Only",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Define Permission confirm contract and schemas",
+      "description": "As a workflow developer, I want canonical schemas for Permission confirmation and persistence input, so that the engine, database, operations, and server layers share strict type contracts.",
+      "acceptanceCriteria": [
+        "packages/workflows/src/schemas/pending-interaction.ts exports permissionConfirmBodySchema, PermissionConfirmBody, confirmPendingPermissionInputSchema, and ConfirmPendingPermissionInput using z from @hono/zod-openapi and z.infer.",
+        "permissionConfirmBodySchema is strict and accepts only an object with an intent string containing at least one non-whitespace character, preserving surrounding whitespace verbatim without trimming.",
+        "permissionConfirmBodySchema rejects empty objects, empty string intent, whitespace-only intent, non-string intent, extra unexpected fields, and ask-style structures (such as decline or answers).",
+        "confirmPendingPermissionInputSchema accepts strictly workflow_run_id, tool_use_id, answer (validating against permissionConfirmBodySchema), and resolved_by, rejecting any extraneous fields.",
+        "Existing schemas pendingInteractionSchema, askAnswerBodySchema, and resolvePendingInteractionInputSchema in pending-interaction.ts remain unchanged.",
+        "packages/workflows/src/schemas/pending-interaction.test.ts verifies all permission schema constraints, type inferences, and invalid body rejections.",
+        "Focused test runs pass via bun test src/schemas/pending-interaction.test.ts in packages/workflows."
+      ],
+      "technicalNotes": "Follow plan Task 1 (docs/superpowers/plans/2026-09-07-confirm-permission-envelope.md:178-270) and Authoritative Contracts (lines 97-123). Modify packages/workflows/src/schemas/pending-interaction.ts and packages/workflows/src/schemas/pending-interaction.test.ts.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/workflows/src/schemas/pending-interaction.ts, packages/workflows/src/schemas/pending-interaction.test.ts. Commit cfc8747b."
+    },
+    {
+      "id": "US-002",
+      "title": "Implement atomic Permission confirmation CAS and safe event logging",
+      "description": "As an operator, I want pending Permission interactions confirmed atomically with run resumption when no pending interactions remain, so that first write wins, sibling interactions are respected, and no intent strings leak.",
+      "acceptanceCriteria": [
+        "packages/core/src/db/workflow-pending-interactions.ts exports confirmPendingPermission(input: ConfirmPendingPermissionInput): Promise<ResolvePendingInteractionResult> and adds 'kind_not_permission' to PendingInteractionValidationCode.",
+        "confirmPendingPermission validates input against confirmPendingPermissionInputSchema and throws PendingInteractionValidationError('invalid_body') for invalid shapes or whitespace-only intents before opening a transaction.",
+        "confirmPendingPermission executes inside db.withTransaction, locking workflow run and pending interaction rows using workflowRunLockClause (FOR UPDATE in PostgreSQL).",
+        "Throws PendingInteractionNotFoundError if the run or interaction row does not exist, PendingInteractionAlreadyResolvedError if the interaction status is not 'pending', PendingInteractionRunNotPausedError if the run status is not 'paused', and PendingInteractionValidationError('kind_not_permission') if current.kind !== 'permission'.",
+        "Performs a CAS update on remote_agent_pending_interactions setting status = 'answered', answer = JSON.stringify(answer), resolved_at = dialect.now(), and resolved_by = resolvedBy; throws PendingInteractionAlreadyResolvedError if rowCount === 0.",
+        "Queries remaining pending interactions count: if remaining is zero, invokes resumeWorkflowRunInTransaction(query, workflowRunId, dialect, 'paused-ask') and sets resumed = true; throws PendingInteractionRunNotPausedError if resume CAS fails.",
+        "Inserts an interaction_resolved audit event via insertWorkflowEvent with data containing strictly { node_id, tool_use_id, kind: 'permission', resumed } and step_name = node_id, guaranteeing atomic commit or rollback with the interaction and resume.",
+        "Neither the submitted intent value, answer payload, nor envelope payload ever appears in structured logs, persisted events, or thrown errors.",
+        "Existing resolvePendingInteraction remains Ask-only and continues to reject Permission rows with 'kind_not_ask'.",
+        "All tests in packages/core/src/db/workflow-pending-interactions.test.ts and packages/core/src/db/workflows.resume-cas.integration.test.ts pass against real SQLite."
+      ],
+      "technicalNotes": "Follow plan Task 2 (docs/superpowers/plans/2026-09-07-confirm-permission-envelope.md:271-570) and Authoritative Contracts (lines 125-142). Modify packages/core/src/db/workflow-pending-interactions.ts and packages/core/src/db/workflow-pending-interactions.test.ts.",
+      "dependsOn": [
+        "US-001"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/core/src/db/workflow-pending-interactions.ts, packages/core/src/db/workflow-pending-interactions.test.ts. Commit e46cf29c."
+    },
+    {
+      "id": "US-003",
+      "title": "Authorize Permission confirmation operations and update DB mocks",
+      "description": "As a workflow operations layer, I want starter-authorized permission confirmation that emits live events and logs safely post-commit, so that only the run starter can confirm and consumers receive truthful signals.",
+      "acceptanceCriteria": [
+        "packages/core/src/operations/workflow-operations.ts exports PermissionRunNotFoundError, PermissionAuthenticationRequiredError, PermissionForbiddenError, ConfirmPermissionInput, ConfirmPermissionResult, and confirmPermission(input: ConfirmPermissionInput): Promise<ConfirmPermissionResult>.",
+        "confirmPermission requires an authenticated actorUserId (throws PermissionAuthenticationRequiredError with exact message 'Authentication required' if undefined or empty string).",
+        "confirmPermission loads the run via workflowDb.getWorkflowRun(runId); throws PermissionRunNotFoundError with exact message 'Workflow run not found: <runId>' if missing; logs errorName and runId as operations.workflow_permission_lookup_failed and throws 'Failed to look up workflow run <runId>' on DB failure without leaking raw errors.",
+        "confirmPermission validates that run.user_id !== null and run.user_id === actorUserId; throws PermissionForbiddenError with exact message 'Not allowed to confirm permission for run <runId>' for non-starters (including admins) or unowned runs.",
+        "confirmPermission delegates to confirmPendingPermission passing runId, callId (as tool_use_id), body (as answer), and actorUserId (as resolved_by) exactly once.",
+        "confirmPermission logs workflow.permission_resolved with { workflowRunId, nodeId, toolUseId, resumed } and emits interaction_resolved via getWorkflowEventEmitter().emit({ type: 'interaction_resolved', runId, nodeId, resumed }) only after the persistence transaction commits.",
+        "No intent string, answer payload, or envelope payload reaches logger or emitter payloads on success or failure.",
+        "All mock factories for @archon/core/db/workflow-pending-interactions across packages/core/src/operations/workflow-operations.test.ts, packages/server/src/routes/api.workflow-runs.test.ts, packages/cli/src/commands/workflow.test.ts, and packages/cli/src/commands/workflow-command-contract.test.ts export confirmPendingPermission.",
+        "Focused test runs pass via bun test in packages/core for workflow-operations.test.ts, packages/server for api.workflow-runs.test.ts, and packages/cli for workflow.test.ts and workflow-command-contract.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 3 (docs/superpowers/plans/2026-09-07-confirm-permission-envelope.md:571-869) and Authoritative Contracts (lines 144-168). Modify packages/core/src/operations/workflow-operations.ts, packages/core/src/operations/workflow-operations.test.ts, packages/server/src/routes/api.workflow-runs.test.ts, packages/cli/src/commands/workflow.test.ts, and packages/cli/src/commands/workflow-command-contract.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/core/src/operations/workflow-operations.ts, packages/core/src/operations/workflow-operations.test.ts, packages/server/src/routes/api.workflow-runs.test.ts, packages/cli/src/commands/workflow.test.ts, packages/cli/src/commands/workflow-command-contract.test.ts. Commit 30322393."
+    },
+    {
+      "id": "US-004",
+      "title": "Register authenticated OpenAPI route for Permission confirmation",
+      "description": "As an API consumer, I want an authenticated POST route to confirm a permission interaction by callId, so that the HTTP API conforms to OpenAPI and maps errors securely.",
+      "acceptanceCriteria": [
+        "packages/server/src/routes/schemas/workflow.schemas.ts exports permissionConfirmRequestSchema = permissionConfirmBodySchema.openapi('PermissionConfirmBody').",
+        "packages/server/src/routes/api.ts registers POST /api/workflows/runs/{runId}/permissions/{callId}/confirm using registerOpenApiRoute with confirmPermissionRoute and response schema workflowRunActionResponseSchema.",
+        "The route applies pre-validation authentication middleware returning 401 'Authentication required' before body parsing when resolveAuthContext yields no requester.",
+        "Valid confirmation by the starter returns 200 with { success: true, message: ... }, indicating whether other interactions remain.",
+        "Maps typed errors to HTTP status codes: PermissionAuthenticationRequiredError to 401, PermissionForbiddenError to 403, PermissionRunNotFoundError and PendingInteractionNotFoundError to 404, PendingInteractionAlreadyResolvedError and PendingInteractionRunNotPausedError to 409, and PendingInteractionValidationError to 400.",
+        "Unexpected failures return 500 with { error: 'Failed to confirm permission' } and log api.workflow_permission_confirm_failed without logging intent or raw error details.",
+        "The handler does not invoke tryAutoResumeAfterGate, dispatchToOrchestrator, or resumeWorkflowRun.",
+        "The OpenAPI document at /api/openapi.json exposes the POST /api/workflows/runs/{runId}/permissions/{callId}/confirm route and PermissionConfirmBody component schema.",
+        "All route tests in packages/server/src/routes/api.workflow-runs.test.ts pass."
+      ],
+      "technicalNotes": "Follow plan Task 4 (docs/superpowers/plans/2026-09-07-confirm-permission-envelope.md:870-1319). Modify packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, and packages/server/src/routes/api.workflow-runs.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/server/src/routes/schemas/workflow.schemas.ts, packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts. Commit 37449709."
+    },
+    {
+      "id": "US-005",
+      "title": "Regenerate API types, validate repository, and complete Story 6.7",
+      "description": "As a project maintainer, I want generated TypeScript types updated, non-goals verified, full repository validation passing, and sprint status cleanly updated, so that Story 6.7 is ready to merge.",
+      "acceptanceCriteria": [
+        "All focused tests pass: pending-interaction.test.ts, workflow-pending-interactions.test.ts, workflows.resume-cas.integration.test.ts, workflow-operations.test.ts, api.workflow-runs.test.ts, workflow.test.ts, workflow-command-contract.test.ts, dag-executor.test.ts characterization ('ignores answered Permission rows when mapping Ask resume'), and executor.test.ts characterization ('rejects a still-pending Permission').",
+        "Diff against base SHA contains only approved files and no migrations, provider modifications, engine resume injection logic, UI components, or console experiment changes.",
+        "packages/web/src/lib/api.generated.d.ts is regenerated from a running server's live /api/openapi.json, containing PermissionConfirmBody and the /api/workflows/runs/{runId}/permissions/{callId}/confirm route declaration.",
+        "Full repository validation (bun run validate) exits zero with no lint or type errors.",
+        "The conflict-registry report text in _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml is removed, development_status.6-7-confirm-a-permission-by-envelope-only is set to 'done', epic-6 remains 'in-progress', and last_updated is updated to the current timestamp.",
+        "Prettier checks on sprint-status.yaml pass with no formatting or whitespace issues."
+      ],
+      "technicalNotes": "Follow plan Task 5 (docs/superpowers/plans/2026-09-07-confirm-permission-envelope.md:1320-1526) and Acceptance Criteria (lines 1489-1510). Regenerate packages/web/src/lib/api.generated.d.ts and modify _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/lib/api.generated.d.ts, _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml. Commit a189e2e8. Unblock commits 8a6cc533, 70c241f8, ac3781f4."
+    }
+  ]
+}

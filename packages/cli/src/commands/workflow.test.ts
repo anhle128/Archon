@@ -248,6 +248,26 @@ mock.module('@archon/core/db/workflow-pending-interactions', () => ({
       remaining_pending: 0,
     })
   ),
+  confirmPendingPermission: mock(() =>
+    Promise.resolve({
+      interaction: {
+        id: 'pending-permission',
+        workflow_run_id: 'run-permission',
+        node_id: 'permission-node',
+        tool_use_id: 'tool-permission',
+        kind: 'permission' as const,
+        status: 'answered' as const,
+        envelope: {},
+        answer: { intent: 'allow-once' },
+        provider_session_id: 'session-permission',
+        created_at: new Date('2026-09-07T00:00:00.000Z'),
+        resolved_at: new Date('2026-09-07T00:00:01.000Z'),
+        resolved_by: 'user-permission',
+      },
+      resumed: false,
+      remaining_pending: 1,
+    })
+  ),
 }));
 
 mock.module('@archon/core/db/messages', () => ({

@@ -78,4 +78,33 @@ describe('NodeRunList', () => {
 
     expect(visibleText(markup)).toBe('Review running Loop ×2 completed Router #4 failed');
   });
+
+  test('renders awaiting status with warning tokens and waiting on you', () => {
+    const awaitingRow = row({
+      id: 'start-ask',
+      nodeId: 'ask',
+      label: 'Ask',
+      status: 'awaiting',
+      order: 3,
+      sourceIndex: 3,
+      selection: { kind: 'node' },
+    });
+    const markup = renderToStaticMarkup(
+      <NodeRunList
+        rows={[ROWS[0], awaitingRow, ROWS[2]]}
+        selectedRowId={null}
+        onSelect={(_row: LogRow): void => {
+          return;
+        }}
+      />
+    );
+
+    expect(markup).toContain('waiting on you');
+    expect(markup).toContain('text-warning');
+    expect(markup).toContain('running');
+    expect(markup).toContain('text-accent');
+    expect(markup).toContain('failed');
+    expect(markup).toContain('text-error');
+    expect(visibleText(markup)).toBe('Review running Ask waiting on you Router #4 failed');
+  });
 });

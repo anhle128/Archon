@@ -1,12 +1,48 @@
 import { describe, expect, test } from 'bun:test';
+import { Window } from 'happy-dom';
 
-import {
-  buildWorkflowDagNodeStates,
-  resolveWorkflowExecutionBody,
-  type WorkflowExecutionBody,
-} from './WorkflowExecution';
+import type { WorkflowExecutionBody } from './WorkflowExecution';
 import type { WorkflowRunView } from './source-control/dag-run-tabs';
-import type { WorkflowEventResponse } from '@/lib/api';
+import { getWorkflowRun, type WorkflowEventResponse } from '@/lib/api';
+
+const workflowExecutionImportWindow = new Window({ url: 'https://localhost/' });
+const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+const previousSelf = Object.getOwnPropertyDescriptor(globalThis, 'self');
+const previousHTMLElement = Object.getOwnPropertyDescriptor(globalThis, 'HTMLElement');
+Object.assign(globalThis as object, {
+  document: workflowExecutionImportWindow.document,
+  window: workflowExecutionImportWindow,
+  self: workflowExecutionImportWindow,
+  HTMLElement: workflowExecutionImportWindow.HTMLElement,
+});
+const {
+  buildWorkflowDagNodeStates,
+  emptyAskActionStates,
+  mapWorkflowRunDetail,
+  resolveWorkflowExecutionBody,
+} = await import('./WorkflowExecution');
+// Radix keeps import-time DOM references; restore globals but keep the window alive.
+if (previousDocument === undefined) {
+  Reflect.deleteProperty(globalThis, 'document');
+} else {
+  Object.defineProperty(globalThis, 'document', previousDocument);
+}
+if (previousWindow === undefined) {
+  Reflect.deleteProperty(globalThis, 'window');
+} else {
+  Object.defineProperty(globalThis, 'window', previousWindow);
+}
+if (previousSelf === undefined) {
+  Reflect.deleteProperty(globalThis, 'self');
+} else {
+  Object.defineProperty(globalThis, 'self', previousSelf);
+}
+if (previousHTMLElement === undefined) {
+  Reflect.deleteProperty(globalThis, 'HTMLElement');
+} else {
+  Object.defineProperty(globalThis, 'HTMLElement', previousHTMLElement);
+}
 
 function workflowEvent(overrides: Partial<WorkflowEventResponse>): WorkflowEventResponse {
   return {
@@ -130,5 +166,84 @@ describe('buildWorkflowDagNodeStates', () => {
         expect(resolveWorkflowExecutionBody({ isDag: false, activeView })).toBe('sequential');
       }
     });
+  });
+});
+
+describe('mapWorkflowRunDetail', () => {
+  function runDetail(
+    overrides: {
+      pending_interactions?: Awaited<ReturnType<typeof getWorkflowRun>>['pending_interactions'];
+      viewer_is_starter?: boolean;
+      starter_display_name?: string | null;
+      metadata?: Record<string, unknown>;
+    } = {}
+  ): Awaited<ReturnType<typeof getWorkflowRun>> {
+    return {
+      run: {
+        id: 'run-1',
+        workflow_name: 'demo',
+        conversation_id: 'conv-1',
+        parent_conversation_id: null,
+        codebase_id: 'cb-1',
+        status: 'paused',
+        user_message: 'go',
+        metadata: overrides.metadata ?? { error: 'AskHuman is not supported by provider claude' },
+        started_at: '2026-09-07T00:00:00.000Z',
+        completed_at: null,
+        last_activity_at: null,
+        working_path: null,
+        user_id: 'user-1',
+        parent_run_id: null,
+        output_root: null,
+        parent_platform_id: 'parent-1',
+        conversation_platform_id: null,
+      },
+      events: [],
+      nodeStates: [],
+      pending_interactions: overrides.pending_interactions ?? [
+        {
+          id: 'ask-1',
+          workflow_run_id: 'run-1',
+          node_id: 'review',
+          tool_use_id: 'tool-ask',
+          kind: 'ask',
+          status: 'pending',
+          envelope: { questions: [] },
+          answer: null,
+          provider_session_id: 'sess-1',
+          created_at: '2026-09-07T00:00:00.000Z',
+          resolved_at: null,
+          resolved_by: null,
+        },
+      ],
+      usage: null,
+      viewer_is_starter: overrides.viewer_is_starter ?? true,
+      starter_display_name:
+        overrides.starter_display_name === undefined ? 'Avery' : overrides.starter_display_name,
+    };
+  }
+
+  test('maps Ask read-model fields', () => {
+    const mapped = mapWorkflowRunDetail(runDetail());
+    expect(mapped.pendingInteractions).toHaveLength(1);
+    expect(mapped.pendingInteractions[0]?.id).toBe('ask-1');
+    expect(mapped.viewerIsStarter).toBe(true);
+    expect(mapped.starterDisplayName).toBe('Avery');
+    expect(mapped.runError).toBe('AskHuman is not supported by provider claude');
+
+    const nonStringError = mapWorkflowRunDetail(runDetail({ metadata: { error: { code: 7 } } }));
+    expect(nonStringError.runError).toBeNull();
+  });
+});
+
+describe('emptyAskActionStates', () => {
+  test('creates fresh Ask action state per run', () => {
+    const first = emptyAskActionStates();
+    const second = emptyAskActionStates();
+    expect(first).toEqual({});
+    expect(second).toEqual({});
+    expect(first).not.toBe(second);
+    first['tool-ask'] = { phase: 'sending' };
+    expect(second).toEqual({});
   });
 });
