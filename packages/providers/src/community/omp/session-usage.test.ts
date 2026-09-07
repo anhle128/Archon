@@ -527,8 +527,13 @@ describe('collectHiddenSessionUsage', () => {
   });
 
   test('oversized line omits all hidden enrichment', async () => {
+    // Production MAX_LINE_BYTES is 8 MiB; shrink the seam so this exclusive
+    // comparison stays cheap under CI load (the 8 MiB fixture timed out at
+    // Bun's 5000 ms default on ubuntu-latest).
+    const lineBound = 400;
+    setSessionUsageBoundsForTest({ maxLineBytes: lineBound });
     const fx = await layoutFresh({ withAdvisor: false, withTask: false });
-    const huge = 'x'.repeat(MAX_LINE_BYTES + 10);
+    const huge = 'x'.repeat(lineBound + 10);
     await writeTranscript(path.join(fx.artifactDir, '__advisor.jsonl'), [
       sessionHeader('adv', fx.cwd),
       `{"type":"message","message":{"role":"assistant","provider":"x","model":"y","usage":{"input":1,"output":1,"cost":{"total":1}},"content":[{"type":"text","text":"${huge}"}]}}`,
