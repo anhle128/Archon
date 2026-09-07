@@ -46,7 +46,10 @@ narrows nothing.
 
 - **Log filter vs inspect selection.** `StreamToolbar` still owns the chronological Log filter (`archon.console.runNodeFilter`, default `all`, including **All nodes**). Opening a node room is a separate `InspectSelection` synchronized with `?node=` on `/console/p/:projectId/r/:runId`. Chat result cards and the workflow dock deep-link with `consoleRunHref`.
 - **Agent transcripts.** `GET /api/workflows/runs/:runId/nodes/:nodeId/messages` is requested only for agent rooms and polled every 1s while the run is `running` or `paused`.
-- **Epic 6 handoff.** Backend `awaiting` is shown as ordinary `running` inspect chrome. Interactive Ask cards, input composers, pending-interaction slots, and "Waiting on you" UI belong to Epic 6.
+- **AskHuman.** Command Center agent rooms render structured Ask cards from GET-run `pending_interactions` at the matching tool invocation.
+  Awaiting chrome uses warning tokens and `waiting on you` / `Awaiting input (n)`.
+  Console still must not import production UI modules, React Query, `@/lib/api` functions, or legacy Ask React modules.
+  `ChatComposer` on the chat page is not an Ask path.
 
 ## Persisted UI state (localStorage)
 

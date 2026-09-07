@@ -13,9 +13,6 @@ const FORBIDDEN_SPEC_PREFIXES = [
   '@tanstack/react-query',
 ] as const;
 
-const FORBIDDEN_INSPECT_IDENTIFIERS = ['pending_interactions', 'AskCard', 'ChatComposer'] as const;
-const FORBIDDEN_INSPECT_STRINGS = ['Waiting on you', 'awaiting'] as const;
-
 interface ImportSite {
   spec: string;
   typeOnly: boolean;
@@ -117,32 +114,44 @@ describe('console NFR4 isolation', () => {
     );
   });
 
-  test('inspect and room production files omit premature HITL chrome', async () => {
-    const inspectFiles: string[] = [];
-    for await (const path of new Bun.Glob('components/inspect/**/*.{ts,tsx}').scan({
-      cwd: CONSOLE_ROOT,
-    })) {
-      const relativePath = path.replaceAll('\\', '/');
-      if (isProductionSource(relativePath)) inspectFiles.push(relativePath);
-    }
-    inspectFiles.push('components/ConsoleNodeRoom.tsx', 'components/ConsoleInspectPane.tsx');
-
-    const violations: string[] = [];
-    for (const relativePath of inspectFiles) {
+  test('Ask UI stays console-owned and out of the conversation composer', async () => {
+    const askSurfaceFiles = [
+      'components/ConsoleNodeRoom.tsx',
+      'components/ConsoleInspectPane.tsx',
+      'routes/RunDetailPage.tsx',
+    ];
+    const importViolations: string[] = [];
+    for (const relativePath of askSurfaceFiles) {
       const source = await readFile(join(CONSOLE_ROOT, relativePath), 'utf8');
-      for (const identifier of FORBIDDEN_INSPECT_IDENTIFIERS) {
-        if (source.includes(identifier)) {
-          violations.push(`${relativePath} contains ${identifier}`);
-        }
-      }
-      const allowAwaiting = relativePath.endsWith('inspect-status.ts');
-      for (const phrase of FORBIDDEN_INSPECT_STRINGS) {
-        if (phrase === 'awaiting' && allowAwaiting) continue;
-        if (source.includes(phrase)) {
-          violations.push(`${relativePath} contains ${phrase}`);
+      for (const site of parseImports(source)) {
+        if (site.spec.includes('components/workflows') || site.spec.endsWith('/ChatComposer')) {
+          importViolations.push(`${relativePath} imports ${site.spec}`);
         }
       }
     }
-    expect(violations).toEqual([]);
+    expect(importViolations).toEqual([]);
+
+    const room = compact(
+      await readFile(join(CONSOLE_ROOT, 'components/ConsoleNodeRoom.tsx'), 'utf8')
+    );
+    const page = compact(await readFile(join(CONSOLE_ROOT, 'routes/RunDetailPage.tsx'), 'utf8'));
+    expect(room).toContain("from'./ask/ConsoleAskCard'");
+    expect(page).toContain("from'../components/ask/ConsoleAskChrome'");
+
+    const chatViolations: string[] = [];
+    for (const relativePath of ['components/ChatComposer.tsx', 'routes/ChatPage.tsx']) {
+      const source = await readFile(join(CONSOLE_ROOT, relativePath), 'utf8');
+      for (const identifier of [
+        'pendingInteractions',
+        'answerAskHuman',
+        'ConsoleAskCard',
+        'ConsoleAskChrome',
+      ]) {
+        if (source.includes(identifier)) {
+          chatViolations.push(`${relativePath} contains ${identifier}`);
+        }
+      }
+    }
+    expect(chatViolations).toEqual([]);
   });
 });
