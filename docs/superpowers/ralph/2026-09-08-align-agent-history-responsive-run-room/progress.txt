@@ -1,5 +1,10 @@
 ## Codebase Patterns
 
+### Execution header fields come only from the selected row
+- **Where**: `packages/web/src/lib/execution-room-model.ts` (`buildExecutionHeader`, `runtimeForSelection`)
+- **Pattern**: Timing and provider/model are taken from the selected row and its matching `node_started` event. Do not scan sibling rows with `rows.some`. Occurrence selections may carry `retryEpoch`/`iteration` for `Attempt N` / `Iteration N` labels.
+- **Example**: `durationMs: input.row.durationMs ?? null`
+
 ### Compose text and tool projectors
 - **Where**: `packages/web/src/lib/agent-history.ts` (`buildAgentHistory`)
 - **Pattern**: Call `projectToolTranscript(projectTextTranscript(rows))` instead of reimplementing delta/snapshot folding or call/result pairing.
@@ -150,3 +155,31 @@
 
 ---
 
+## 2026-09-08 — US-005: Model execution identity and header data
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/execution-room-model.ts` — chooseExecutionForNode, buildExecutionHeader, runtimeForSelection, roomOpenerId, askCardId
+- `packages/web/src/lib/execution-room-model.test.ts` — selection precedence, labels, offsets, runtime matching, opener ids
+- `packages/web/src/components/workflows/build-log-rows.ts` — startedOffsetMs and unknownScope on LogRow
+- `packages/web/src/components/workflows/build-log-rows.test.ts` — occurrence offset + fallback unknownScope
+- `packages/web/src/experiments/console/components/inspect/build-log-rows.ts` — same LogRow derivation
+- `packages/web/src/experiments/console/components/inspect/build-log-rows.test.ts` — same timing assertions
+- `packages/web/src/components/workflows/resolve-graph-room-row.ts` — synthetic rows marked unknownScope
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx` — synthetic inspect rows marked unknownScope
+
+**Acceptance criteria verified**:
+- [x] `execution-room-model.ts` exports `chooseExecutionForNode`, `buildExecutionHeader`, `runtimeForSelection`, `roomOpenerId`, and `askCardId`
+- [x] `chooseExecutionForNode` resolves valid lastExplicitRowId > awaiting > running > latest by order; null for unknown node
+- [x] `buildExecutionHeader` derives Iteration N / Attempt N / Execution unknown, startedOffsetMs from run started_at, duration only from the selected row, provider/model from matching node_started, unknownScope
+- [x] `roomOpenerId` encodes surface, kind, and key with encodeURIComponent and a stable prefix
+- [x] `askCardId` encodes tool_use_id with prefix `run-ask-card-`
+- [x] Legacy and Console `buildLogRows` derive `startedOffsetMs` and `unknownScope` on LogRow
+- [x] Tests in `execution-room-model.test.ts`, `build-log-rows.test.ts`, and console `build-log-rows.test.ts` pass
+
+**Learnings**:
+- `retry_epoch` is 0-based; header Attempt N is `retryEpoch + 1`
+- LogRow.unknownScope is optional so existing fixtures type-check; builders always set it
+- Unscoped `node_started` matching ignores events that carry occurrence_id
+
+---

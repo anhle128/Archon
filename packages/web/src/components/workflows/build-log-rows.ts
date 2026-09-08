@@ -15,7 +15,13 @@ export type LogRowSelection =
   | { kind: 'node' }
   | { kind: 'loop_iteration'; iteration: number }
   | { kind: 'route_iteration'; executionSeq: number }
-  | { kind: 'occurrence'; occurrenceId: string; attemptId?: string };
+  | {
+      kind: 'occurrence';
+      occurrenceId: string;
+      attemptId?: string;
+      retryEpoch?: number;
+      iteration?: number;
+    };
 
 export interface LogRow {
   id: string;
@@ -29,6 +35,30 @@ export interface LogRow {
   startedAt?: string;
   /** ms duration – present when built from server nodeExecutions */
   durationMs?: number;
+  startedOffsetMs?: number;
+  unknownScope?: boolean;
+}
+
+function startedOffsetMs(
+  startedAt: string | undefined,
+  runStartedAt: string | undefined
+): number | undefined {
+  if (startedAt === undefined || runStartedAt === undefined || runStartedAt.length === 0) {
+    return undefined;
+  }
+  const started = Date.parse(startedAt);
+  const runStarted = Date.parse(runStartedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(runStarted)) return undefined;
+  return Math.max(0, started - runStarted);
+}
+
+function derivedTiming(
+  unknownScope: boolean,
+  startedAt: string | undefined,
+  runStartedAt: string | undefined
+): Pick<LogRow, 'unknownScope' | 'startedOffsetMs'> {
+  const offset = startedOffsetMs(startedAt, runStartedAt);
+  return offset === undefined ? { unknownScope } : { unknownScope, startedOffsetMs: offset };
 }
 
 // ---------------------------------------------------------------------------
@@ -43,6 +73,8 @@ function statusFromNodeExecution(raw: string): WorkflowNodeStateResponse['status
       return 'failed';
     case 'running':
       return 'running';
+    case 'awaiting':
+      return 'awaiting';
     case 'pending':
       return 'pending';
     case 'skipped':
@@ -65,18 +97,27 @@ function labelForExecution(baseName: string, exec: NodeExecution): string {
   return baseName;
 }
 
+function occurrenceSelection(exec: NodeExecution): LogRowSelection {
+  if (exec.occurrence_id === undefined) return { kind: 'node' };
+  const lastLoop = exec.loop_ancestry?.[exec.loop_ancestry.length - 1];
+  return {
+    kind: 'occurrence',
+    occurrenceId: exec.occurrence_id,
+    attemptId: exec.attempt_id,
+    ...(exec.retry_epoch !== undefined ? { retryEpoch: exec.retry_epoch } : {}),
+    ...(lastLoop !== undefined ? { iteration: lastLoop.iteration } : {}),
+  };
+}
+
 function buildFromOccurrences(
   nodeExecutions: readonly NodeExecution[],
-  nameById: Map<string, string>
+  nameById: Map<string, string>,
+  runStartedAt: string | undefined
 ): LogRow[] {
   return nodeExecutions.map((exec, order) => {
     const nodeId = exec.node_id;
     const baseName = nameById.get(nodeId) ?? nodeId;
     const rowId = exec.attempt_id ?? exec.occurrence_id ?? `exec:${nodeId}:${String(order)}`;
-    const selection: LogRowSelection =
-      exec.occurrence_id !== undefined
-        ? { kind: 'occurrence', occurrenceId: exec.occurrence_id, attemptId: exec.attempt_id }
-        : { kind: 'node' };
     return {
       id: rowId,
       nodeId,
@@ -84,9 +125,10 @@ function buildFromOccurrences(
       status: statusFromNodeExecution(exec.status),
       order,
       sourceIndex: order,
-      selection,
+      selection: occurrenceSelection(exec),
       startedAt: exec.started_at,
       durationMs: exec.duration_ms,
+      ...derivedTiming(exec.occurrence_id === undefined, exec.started_at, runStartedAt),
     };
   });
 }
@@ -98,11 +140,12 @@ function buildFromOccurrences(
 export function buildLogRows(
   nodeStates: readonly WorkflowNodeStateResponse[],
   events: readonly WorkflowEventResponse[],
-  nodeExecutions?: readonly NodeExecution[]
+  nodeExecutions?: readonly NodeExecution[],
+  runStartedAt?: string
 ): LogRow[] {
   if (nodeExecutions && nodeExecutions.length > 0) {
     const nameById = new Map<string, string>(nodeStates.map(s => [s.nodeId, s.name]));
-    return buildFromOccurrences(nodeExecutions, nameById);
+    return buildFromOccurrences(nodeExecutions, nameById, runStartedAt);
   }
 
   const statesById = new Map<string, { state: WorkflowNodeStateResponse; index: number }>();
@@ -139,6 +182,10 @@ export function buildLogRows(
         order: existing?.order ?? order,
         sourceIndex: stateEntry.index,
         selection: { kind: 'loop_iteration', iteration },
+        ...derivedTiming(true, existing === undefined ? event.created_at : undefined, runStartedAt),
+        ...(existing?.startedOffsetMs !== undefined
+          ? { startedOffsetMs: existing.startedOffsetMs }
+          : {}),
       });
       loopRowsByNode.set(nodeId, rows);
       return;
@@ -162,6 +209,7 @@ export function buildLogRows(
           order,
           sourceIndex: stateEntry.index,
           selection: { kind: 'route_iteration', executionSeq },
+          ...derivedTiming(true, event.created_at, runStartedAt),
         });
       }
       routeRowsByNode.set(nodeId, rows);
@@ -218,6 +266,11 @@ export function buildLogRows(
       order: eventIndex >= 0 ? eventIndex : events.length + sourceIndex,
       sourceIndex,
       selection: { kind: 'node' },
+      ...derivedTiming(
+        true,
+        eventIndex >= 0 ? events[eventIndex]?.created_at : undefined,
+        runStartedAt
+      ),
     });
   });
   return rows.sort((a, b) => a.order - b.order || a.sourceIndex - b.sourceIndex);

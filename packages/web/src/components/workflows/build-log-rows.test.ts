@@ -71,6 +71,7 @@ describe('buildLogRows', () => {
         order: 0,
         sourceIndex: 0,
         selection: { kind: 'node' },
+        unknownScope: true,
       },
     ]);
   });
@@ -176,6 +177,7 @@ describe('buildLogRows', () => {
         order: 0,
         sourceIndex: 0,
         selection: { kind: 'route_iteration', executionSeq: 1 },
+        unknownScope: true,
       },
       {
         id: 'route-2',
@@ -185,6 +187,7 @@ describe('buildLogRows', () => {
         order: 1,
         sourceIndex: 0,
         selection: { kind: 'route_iteration', executionSeq: 2 },
+        unknownScope: true,
       },
     ]);
   });
@@ -242,6 +245,7 @@ describe('buildLogRows', () => {
         order: 2,
         sourceIndex: 0,
         selection: { kind: 'node' },
+        unknownScope: true,
       },
     ]);
   });
@@ -274,6 +278,7 @@ describe('buildLogRows', () => {
         order: 1,
         sourceIndex: 0,
         selection: { kind: 'node' },
+        unknownScope: true,
       },
     ]);
   });
@@ -358,6 +363,69 @@ describe('buildLogRows', () => {
       status: 'skipped',
       order: 0,
       selection: { kind: 'node' },
+      unknownScope: true,
+    });
+  });
+
+  test('server occurrences derive start offset from the run start and mark scoped rows', () => {
+    const rows = buildLogRows(
+      [nodeState({ nodeId: 'review', name: 'Review', status: 'completed' })],
+      [],
+      [
+        {
+          node_id: 'review',
+          status: 'completed',
+          occurrence_id: 'occ-1',
+          attempt_id: 'att-1',
+          retry_epoch: 2,
+          started_at: '2026-09-08T00:00:05.000Z',
+          duration_ms: 1200,
+        },
+      ],
+      '2026-09-08T00:00:00.000Z'
+    );
+
+    expect(rows).toEqual([
+      {
+        id: 'att-1',
+        nodeId: 'review',
+        label: 'Review',
+        status: 'completed',
+        order: 0,
+        sourceIndex: 0,
+        selection: {
+          kind: 'occurrence',
+          occurrenceId: 'occ-1',
+          attemptId: 'att-1',
+          retryEpoch: 2,
+        },
+        startedAt: '2026-09-08T00:00:05.000Z',
+        durationMs: 1200,
+        startedOffsetMs: 5000,
+        unknownScope: false,
+      },
+    ]);
+  });
+
+  test('event fallback rows are unknown scope and offset from the originating event', () => {
+    const rows = buildLogRows(
+      [nodeState({ nodeId: 'review', name: 'Review', status: 'running' })],
+      [
+        workflowEvent({
+          id: 'start-1',
+          event_type: 'node_started',
+          step_name: 'review',
+          created_at: '2026-09-08T00:00:04.000Z',
+        }),
+      ],
+      undefined,
+      '2026-09-08T00:00:00.000Z'
+    );
+
+    expect(rows[0]).toMatchObject({
+      id: 'start-1',
+      startedOffsetMs: 4000,
+      unknownScope: true,
     });
   });
 });
