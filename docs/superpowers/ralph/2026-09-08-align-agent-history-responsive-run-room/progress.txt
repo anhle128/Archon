@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### Graph opener ids live on the node root
+- **Where**: `ExecutionDagNode.tsx`, `build-workflow-dag-view-model.ts`, `RunGraphPanel.tsx`
+- **Pattern**: View-model data carries `openerId: roomOpenerId('legacy', 'graph', nodeId)`. Legacy puts it on the node root with `tabIndex={-1}`. Console puts it on the existing focusable node button.
+- **Example**: `id={roomOpenerId('console', 'graph', node.definition.id)}`
+
+### Header Awaiting input is a button only with a callback
+- **Where**: `RunDetailHeader.tsx`, `RunDetailPage.tsx`
+- **Pattern**: Render the warning button only when `askAwaiting` and `onAwaitingInput` are both present. The page opens the awaiting execution via `firstPendingAskAwaitingNodeId` and does not switch Log/Graph/Artifacts.
+- **Example**: `onInspectSelect(nodeId, undefined, null)`
+
 ### parent_platform_id is optional string, not null
 - **Where**: `packages/web/src/experiments/console/skills/runs.ts`, `runs.node-messages.test.ts`, `RunDetailPage.test.tsx`
 - **Pattern**: OpenAPI types `parent_platform_id` as `string | undefined`. Fixtures that `satisfies RunDetailResponse` cannot assign `null`. Omit the field for the missing case; `getRun` maps it with `?? null`.
@@ -483,5 +493,37 @@
 - OpenAPI `parent_platform_id` is optional string, not `string | null`; assigning `null` in `satisfies RunDetailResponse` fails `tsc`
 - Creating a conversation is POST `/api/conversations`; sending is POST `/api/conversations/:id/message` — assert create by exact path, not prefix
 - Composer stays on the page under the inspect pane so room-open and room-closed both have it
+
+---
+
+## 2026-09-09 — US-013: Align header, tabs, graph, tokens, and focus openers
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/index.css` — `--rv-node-kind-size`, `--rv-node-label-size`, `--rv-node-meta-size`, `--rv-tab-size` under both run-view roots (`--rv-tool-card-border` already present)
+- `packages/docs-web/src/content/docs/brand/index.md` — documents the four presentation tokens
+- `packages/web/src/components/workflows/ExecutionDagNode.tsx` — `openerId`, `tabIndex={-1}`, token typography
+- `packages/web/src/components/workflows/ExecutionDagNode.test.tsx` — opener id, tabIndex, token classes
+- `packages/web/src/components/workflows/build-workflow-dag-view-model.ts` — `openerId: roomOpenerId('legacy', 'graph', dagNode.id)`
+- `packages/web/src/components/workflows/build-workflow-dag-view-model.test.ts` — slash-encoded opener ids
+- `packages/web/src/experiments/console/components/RunGraphPanel.tsx` — console graph opener id + token sizes
+- `packages/web/src/experiments/console/components/RunGraphPanel.test.tsx` — review/fix button ids
+- `packages/web/src/experiments/console/components/RunDetailHeader.tsx` — Awaiting input button when callback supplied
+- `packages/web/src/experiments/console/components/RunDetailHeader.test.tsx` — click invokes callback; approval/completed stay spans
+- `packages/web/src/experiments/console/components/StreamToolbar.tsx` — `--rv-tab-size`, wrap/scroll nav without page overflow
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — `onAwaitingInput` opens awaiting execution without changing view
+
+**Acceptance criteria verified**:
+- [x] index.css defines the five `--rv-*` tokens under `.legacy-run-view` and `.console-run-view`
+- [x] brand docs document the new presentation tokens
+- [x] Legacy graph node root has `openerId` and `tabIndex={-1}`
+- [x] Console graph focusable node button uses `roomOpenerId('console', 'graph', node.id)`
+- [x] RunDetailHeader renders Awaiting input as a button when askAwaiting and onAwaitingInput
+- [x] StreamToolbar uses relative tab typography without horizontal page overflow
+- [x] Tests in ExecutionDagNode, build-workflow-dag-view-model, RunGraphPanel, and RunDetailHeader pass
+
+**Learnings**:
+- Header Awaiting input stays a span when `onAwaitingInput` is omitted so existing copy-only tests remain valid
+- `--rv-tool-card-border` was already defined; add the four size tokens without duplicating the border shorthand
 
 ---

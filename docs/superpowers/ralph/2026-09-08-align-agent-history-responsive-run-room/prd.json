@@ -275,8 +275,8 @@
         "US-010"
       ],
       "priority": 13,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 13. Files: packages/web/src/index.css, packages/docs-web/src/content/docs/brand/index.md, ExecutionDagNode.tsx/.test.tsx, build-workflow-dag-view-model.ts/.test.ts, RunGraphPanel.tsx/.test.tsx, RunDetailHeader.tsx/.test.tsx, StreamToolbar.tsx, RunDetailPage.tsx."
     },
     {
       "id": "US-014",

@@ -27,7 +27,7 @@ import {
   type AskActionState,
   type AskActionStateByRequest,
 } from '../components/ask/ask-answer-controller';
-import { isAskAwaitingRun } from '../components/ask/awaiting-chrome';
+import { firstPendingAskAwaitingNodeId, isAskAwaitingRun } from '../components/ask/awaiting-chrome';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { buildConsoleLogEntries } from '../components/inspect/build-console-log-entries';
 import { buildLogRows } from '../components/inspect/build-log-rows';
@@ -655,6 +655,14 @@ export function RunDetailPage(): ReactElement {
           projectName={project?.name ?? projectId}
           usage={detail.usage}
           askAwaiting={isAskAwaitingRun(run.status, detail.pendingInteractions)}
+          onAwaitingInput={(): void => {
+            const nodeId = firstPendingAskAwaitingNodeId({
+              pending: detail.pendingInteractions,
+              nodes: inspectNodeStates,
+            });
+            if (nodeId === null) return;
+            onInspectSelect(nodeId, undefined, null);
+          }}
         />
         <ConsoleAskChrome
           status={run.status}

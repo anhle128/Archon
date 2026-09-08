@@ -5,6 +5,7 @@ import type { Root } from 'react-dom/client';
 
 import type { WorkflowNodeState } from '../skills/runs';
 import type { DagNode } from '../skills/workflows';
+import { roomOpenerId } from '@/lib/execution-room-model';
 import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
 import { buildRunGraphInput } from './graph/build-run-graph-input';
 import { fitGraphScale, graphBounds } from './graph/graph-viewport';
@@ -157,6 +158,18 @@ describe('RunGraphPanel', () => {
     const untaken = host.querySelector('[data-edge-id="review_router->done"]');
     expect(taken?.getAttribute('stroke')).not.toBe(untaken?.getAttribute('stroke'));
     expect(host.querySelector('marker')).not.toBeNull();
+  });
+
+  test('focusable node buttons use console graph opener ids', async () => {
+    await act(async () => {
+      renderPanel();
+    });
+    await flush();
+
+    const review = host.querySelector('[data-node-id="review"]');
+    const fix = host.querySelector('[data-node-id="fix"]');
+    expect(review?.id).toBe(roomOpenerId('console', 'graph', 'review'));
+    expect(fix?.id).toBe(roomOpenerId('console', 'graph', 'fix'));
   });
 
   test('clicking a node calls onSelectNode without changing view', async () => {

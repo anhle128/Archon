@@ -89,7 +89,7 @@ function Tab({ label, active, onClick, count }: TabProps): ReactElement {
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`relative px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] transition-colors ${
+      className={`relative px-3 py-1.5 font-mono text-[length:var(--rv-tab-size)] font-semibold uppercase tracking-[0.1em] transition-colors ${
         active ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'
       }`}
     >
@@ -123,8 +123,8 @@ export function StreamToolbar({
 }: StreamToolbarProps): ReactElement {
   const isLog = view === 'log';
   return (
-    <div className="flex items-center gap-3 border-b border-border/60 bg-surface py-2 text-[11px]">
-      <div className="flex items-center gap-1">
+    <div className="flex min-w-0 flex-wrap items-center gap-3 overflow-x-auto border-b border-border/60 bg-surface py-2 text-[length:var(--rv-tab-size)]">
+      <nav className="flex min-w-0 flex-wrap items-center gap-1" aria-label="Run views">
         <Tab
           label="Log"
           active={isLog}
@@ -147,7 +147,7 @@ export function StreamToolbar({
             onChangeView('artifacts');
           }}
         />
-      </div>
+      </nav>
 
       {isLog ? (
         <span className="ml-3 font-mono text-[12px] text-text-tertiary">
