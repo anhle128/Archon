@@ -12,6 +12,7 @@ bun run cli workflow run pr-e2e-verify \
 ```
 
 The issue must link the complete approved plan and mockup with same-repository GitHub `blob` or `tree` URLs pinned to a commit.
+It must also pin every reference input file, including saved mockup PNGs and reference assets, before test authoring.
 The workflow saves the full issue title/body, PR metadata and every linked source file before test authoring.
 It verifies that the checkout source files match those pinned bytes.
 Unpinned or unsupported cross-repository sources fail with an explicit error.
@@ -37,6 +38,9 @@ It is set to five repairs, with verification after each repair.
 If verification still fails, the exhausted node exits nonzero and retains the findings.
 Do not restart or reset a run to bypass that limit.
 A failed source/contract audit stops before product repair.
+Additional trigger text reaches the test author through `$USER_MESSAGE` and cannot override source authority or write boundaries.
+It can identify retained prior authoring files as read-only inputs; copy or adapt only eligible test support into the new checkout and freshly author, audit and verify the complete contract.
+Do not edit prior run files or reuse their authority, locks, command results, images or review verdicts as new evidence.
 
 ## Acceptance manifest
 
@@ -77,6 +81,10 @@ This example shows one criterion, not the complete required manifest:
 ```
 
 `source` is `issue.md` or an exact path from `authority.files`.
+`visual.source` must name the actual reference input from `authority.files`; for a PNG-based reference, name the saved PNG, not only its ancestor HTML.
+Every additional reference input must also be in the issue-pinned authority.
+The author checks these inputs before authoring, and the independent audit rejects inputs outside that authority.
+A missing pinned input is an explicit source gap, not permission to use an unpinned fallback or claim complete acceptance.
 Each requirement quote must exist in its preserved source.
 Each requirement needs criteria, and each criterion needs an exact durable E2E file and test title.
 For a nested test, join its enclosing `describe` titles and leaf title with `›`; exclude the file name.
@@ -91,12 +99,17 @@ For a criterion that needs no image comparison, set `visual` to `null`.
 For shared behavior, use `surface: "shared"`.
 
 Test authoring may correct existing false assertions, helpers, workflow fixtures and Playwright configuration before freeze.
+JavaScript module fixtures with the `.mjs` extension are allowed only under `e2e/fixtures/`.
+The author may also extend test-only scenarios in the existing `packages/providers/src/e2e-fake/provider.ts` and `provider.test.ts` before freeze, using existing provider types for rich Markdown and missing/truncated tool output.
+Preserve the fake provider's env-gated registration and default behavior; this permission does not include production providers, engine, API, shared types, authentication or provider settings.
 List corrected existing unit-test paths in `unitTests`.
 Authoring must not change product implementation, package scripts, dependency locks or source authority.
+Exercise retained controls through real actions in valid existing lifecycle states; do not require Cancel or Retry on an ineligible paused run or expand permissions to match decorative mockup controls.
 Meaningful failing tests on the original UI are required; a skill that assumes green tests at authoring does not override this bugfix contract.
 Record those failures and browser observations in `author-notes.md` in the artifact directory.
 
-The freeze includes all E2E files, corrected unit tests, workflow and gate scripts, package manifests, dependency locks and configuration files.
+The freeze includes all E2E files, the full fake-provider directory, corrected unit tests, workflow and gate scripts, package manifests, dependency locks and configuration files.
+It also protects CI workflows, schema definitions and existing authorization/isolation regression checks; `criticalFiles` in the helper owns the exact path set.
 It also locks the manifest, author notes and independent audit.
 The authority, lock and checks digests pass through Archon's saved node outputs, so a changed artifact cannot replace its own expected hash.
 Repair can change product implementation and add real provider contract anchors.
@@ -115,6 +128,9 @@ It saves command exit codes and logs.
 A failed setup/build cannot lead to acceptance of a stale bundle.
 The test suite uses the existing fixture-owned isolated server, SQLite database and executor.
 The fake AI provider is a test seam; independent review still requires real provider contract anchors for all mocked or changed external surfaces.
+Native Playwright abort or bounded delay followed by `route.continue()` without request overrides is allowed transport fault injection.
+To delay a real response, use `route.fetch()`, a bounded release and `route.fulfill({ response })` with the unchanged response; do not forge or override the body, status or headers.
+Keep the real server, DB and executor, and remove owned routes in `finally`.
 
 Tests write fresh PNG captures under `UI_VERIFY_EVIDENCE_DIR`.
 Use Playwright's test output directory when that variable is absent during normal CI.

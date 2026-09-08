@@ -43,6 +43,24 @@ The old plan's completion checkboxes and acceptance reports are claims to verify
 Do not edit the plan, mockup, requirements, or approved baselines to match an incorrect implementation.
 Desktop dimensions come from the mockup; responsive and accessibility behavior absent from the mockup comes from the visual contract and UX design.
 
+### Preserved mockup images
+
+These existing images are the permitted reference inputs when the browser cannot open the mockup HTML.
+Their pinned bytes must be included in `authority.files` before authoring and must remain unchanged through publication.
+For a PNG-based comparison, `visual.source` names the actual preserved PNG input, not an HTML file that the test did not render.
+The original `*-actual-*.png` captures are old failure evidence, not approved reference images.
+Narrow captures remain comparison context only where the responsive rules require a better layout.
+The available mockup PNGs show only the initial Console Log and Legacy Graph views, with no room open.
+They do not provide the remaining state references required by the full capture matrix.
+Those approved state captures must be supplied before complete visual acceptance can pass; old product captures and source-only assertions cannot replace them.
+
+| Viewport  | Console reference                                                                                                                                                         | Legacy reference                                                                                                                                                        |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1440×1000 | [Console 1440×1000](https://github.com/anhle128/Archon/blob/981c7b39f/plans/260907-1454-workflow-run-hitl-mockup-alignment/reports/captures/console-mockup-1440x1000.png) | [Legacy 1440×1000](https://github.com/anhle128/Archon/blob/981c7b39f/plans/260907-1454-workflow-run-hitl-mockup-alignment/reports/captures/legacy-mockup-1440x1000.png) |
+| 1280×900  | [Console 1280×900](https://github.com/anhle128/Archon/blob/981c7b39f/plans/260907-1454-workflow-run-hitl-mockup-alignment/reports/captures/console-mockup-1280x900.png)   | [Legacy 1280×900](https://github.com/anhle128/Archon/blob/981c7b39f/plans/260907-1454-workflow-run-hitl-mockup-alignment/reports/captures/legacy-mockup-1280x900.png)   |
+| 390×844   | [Console 390×844](https://github.com/anhle128/Archon/blob/981c7b39f/plans/260907-1454-workflow-run-hitl-mockup-alignment/reports/captures/console-mockup-390x844.png)     | [Legacy 390×844](https://github.com/anhle128/Archon/blob/981c7b39f/plans/260907-1454-workflow-run-hitl-mockup-alignment/reports/captures/legacy-mockup-390x844.png)     |
+| 768×1024  | [Console 768×1024](https://github.com/anhle128/Archon/blob/981c7b39f/plans/260907-1454-workflow-run-hitl-mockup-alignment/reports/captures/console-mockup-768x1024.png)   | [Legacy 768×1024](https://github.com/anhle128/Archon/blob/981c7b39f/plans/260907-1454-workflow-run-hitl-mockup-alignment/reports/captures/legacy-mockup-768x1024.png)   |
+
 ## Confirmed failures and causes
 
 1. **Room opens without a node click.**

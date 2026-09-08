@@ -40,7 +40,7 @@ The current `pr-e2e-verify` repairs only missing external-service test coverage;
 | ----------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
 | 1. Build and review the workflow contract | Done    | Source-backed criteria; immutable plan, mockup, and critical tests; validated loop routing                  |
 | 2. Create the bootstrap PR                | Done    | Focused checks and `bun run validate`; new branch and draft PR targeting `develop`                          |
-| 3. Run local Archon repair                | Ready   | Real run ID; failing browser checks; Sonnet 5 repair nodes; repeated independent review                     |
+| 3. Run local Archon repair                | Blocked | Complete approved state references; real run ID; Sonnet 5 repair nodes; repeated independent review         |
 | 4. Prove complete UI alignment            | Pending | Every criterion checked on both surfaces; matched-state desktop comparisons; usable 390px and 768px layouts |
 | 5. Finish delivery and prevention         | Pending | Automatic PR UI regression check; complete validation; final PR evidence; no owned orphan processes         |
 
@@ -101,12 +101,19 @@ Keep user-owned `WATCHDOG.yml` outside all commits.
 - Integrated `bun run validate` passed with 10,580 passing tests and zero failures after two stale Ralph test contracts were aligned with the incoming provider change.
 - The existing automatic CI caller now uses the named issue/PR contract and exact-run publication evidence.
 - Root reviewed owned process cleanup, complete test titles, and guarded publication of the verified direct child.
-- Bootstrap draft PR #145 is open; actual workflow execution and UI acceptance remain pending.
+- Bootstrap draft PR #145 is open.
+- Actual run `fd073a371ebadbd502b8cbf616d90175` completed test authoring and failed at `freeze-contract` after the independent audit found 21 coverage and enforcement gaps.
+- The run preserved real browser failures and its authored tests in an engine checkpoint; no product UI repair ran and no repair entry was consumed.
+- The workflow boundary fixes permit narrow test-provider scenario support before freeze, preserve its later lock, protect verification controls, and pin the actual reference image inputs.
+- The available approved PNGs cover initial Console Log and Legacy Graph only.
+- The other state references in the full capture matrix are missing, and browser policy prevents recapturing the mockup HTML through another URL or tool.
+- Do not start a replacement run until the missing approved references are resolved; preserve the failed run and its evidence.
 - Provider selection is configured in workflow nodes; no separate Sonnet CLI probe is required.
 - Root owns issue context, coordination, source traceability, and final acceptance.
 - All product UI repairs must run through the Archon workflow with Sonnet 5.
 
 # Open questions
 
-None.
 The user confirmed `anhle128/Archon → develop` and Claude Sonnet 5 for UI repair.
+The remaining external dependency is the approved reference capture set for the complete state matrix.
+The coordinator requested those captures from the user and must not create or approve replacement baselines.
