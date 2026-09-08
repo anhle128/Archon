@@ -1,0 +1,11 @@
+name: e2e-hitl-long-history
+description: "E2E — deterministic node history larger than one cursor page."
+mutates_checkout: false
+
+nodes:
+  - id: long-history
+    provider: e2e-fake
+    model: e2e-fake-model
+    prompt: |
+      <<E2E_SCENARIO>>{"emitTool":true,"repeatTool":120}<</E2E_SCENARIO>>
+      $ARGUMENTS

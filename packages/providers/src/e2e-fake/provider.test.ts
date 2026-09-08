@@ -80,6 +80,67 @@ describe('E2eFakeProvider', () => {
     expect(chunks[1].toolCallId).toBe(chunks[2].toolCallId);
   });
 
+  test('omitted repeatTool keeps the unsuffixed tool id and chunk sequence', async () => {
+    const prompt = '<<E2E_SCENARIO>>{"emitTool":true}<</E2E_SCENARIO>>';
+    const chunks = await collect(provider.sendQuery(prompt, '/tmp', 'sess'));
+    expect(chunks[0]).toEqual({ type: 'assistant', content: E2E_FAKE_TOOL_PASS_TEXT });
+    expect(chunks[1]).toMatchObject({
+      type: 'tool',
+      toolName: E2E_FAKE_TOOL_NAME,
+      toolCallId: 'e2e-fake-tool-sess',
+    });
+    expect(chunks[2]).toMatchObject({
+      type: 'tool_result',
+      toolName: E2E_FAKE_TOOL_NAME,
+      toolOutput: E2E_FAKE_TOOL_OUTPUT,
+      toolCallId: 'e2e-fake-tool-sess',
+      toolOutcome: 'success',
+    });
+    const tools = chunks.filter(chunk => chunk.type === 'tool');
+    expect(tools).toHaveLength(1);
+  });
+
+  test('repeatTool emits distinct sequential call/result pairs', async () => {
+    const prompt = '<<E2E_SCENARIO>>{"emitTool":true,"repeatTool":3}<</E2E_SCENARIO>>';
+    const chunks = await collect(provider.sendQuery(prompt, '/tmp', 'sess'));
+    expect(chunks[0]).toEqual({ type: 'assistant', content: E2E_FAKE_TOOL_PASS_TEXT });
+    const tools = chunks.filter(chunk => chunk.type === 'tool');
+    const results = chunks.filter(chunk => chunk.type === 'tool_result');
+    expect(tools).toHaveLength(3);
+    expect(results).toHaveLength(3);
+    const ids = tools.map(chunk => {
+      if (chunk.type !== 'tool') throw new Error('expected tool');
+      return chunk.toolCallId;
+    });
+    expect(ids).toEqual(['e2e-fake-tool-sess-1', 'e2e-fake-tool-sess-2', 'e2e-fake-tool-sess-3']);
+    expect(new Set(ids).size).toBe(3);
+    for (let index = 0; index < 3; index += 1) {
+      const tool = tools[index];
+      const result = results[index];
+      if (tool?.type !== 'tool' || result?.type !== 'tool_result') {
+        throw new Error('expected tool pair');
+      }
+      expect(tool.toolCallId).toBe(result.toolCallId);
+      expect(chunks[1 + index * 2]?.type).toBe('tool');
+      expect(chunks[2 + index * 2]?.type).toBe('tool_result');
+    }
+  });
+
+  test('rejects 0, 201, non-integer, and non-number repeatTool', async () => {
+    const invalid = [
+      '{"emitTool":true,"repeatTool":0}',
+      '{"emitTool":true,"repeatTool":201}',
+      '{"emitTool":true,"repeatTool":1.5}',
+      '{"emitTool":true,"repeatTool":"3"}',
+      '{"emitTool":true,"repeatTool":true}',
+    ];
+    for (const body of invalid) {
+      await expect(
+        collect(provider.sendQuery(`<<E2E_SCENARIO>>${body}<</E2E_SCENARIO>>`, '/tmp'))
+      ).rejects.toThrow('scenario directive failed validation');
+    }
+  });
+
   test('throws when askHuman scenario has no native tool', async () => {
     const prompt = '<<E2E_SCENARIO>>{"askHuman":true}<</E2E_SCENARIO>>';
     await expect(collect(provider.sendQuery(prompt, '/tmp'))).rejects.toThrow(

@@ -46,6 +46,7 @@ const scenarioSchema = z
     askHuman: z.boolean().optional(),
     delayMs: z.number().int().nonnegative().optional(),
     doneWhenPromptIncludes: z.string().min(1).optional(),
+    repeatTool: z.number().int().min(1).max(200).optional(),
   })
   .strict();
 
@@ -314,21 +315,27 @@ export class E2eFakeProvider implements IAgentProvider {
     }
 
     if (scenario.emitTool === true) {
-      const toolCallId = `e2e-fake-tool-${sessionId}`;
+      const repeat = scenario.repeatTool ?? 1;
       yield { type: 'assistant', content: E2E_FAKE_TOOL_PASS_TEXT };
-      yield {
-        type: 'tool',
-        toolName: E2E_FAKE_TOOL_NAME,
-        toolInput: { ...E2E_FAKE_TOOL_INPUT },
-        toolCallId,
-      };
-      yield {
-        type: 'tool_result',
-        toolName: E2E_FAKE_TOOL_NAME,
-        toolOutput: E2E_FAKE_TOOL_OUTPUT,
-        toolCallId,
-        toolOutcome: 'success',
-      };
+      for (let index = 0; index < repeat; index += 1) {
+        const toolCallId =
+          scenario.repeatTool === undefined
+            ? `e2e-fake-tool-${sessionId}`
+            : `e2e-fake-tool-${sessionId}-${String(index + 1)}`;
+        yield {
+          type: 'tool',
+          toolName: E2E_FAKE_TOOL_NAME,
+          toolInput: { ...E2E_FAKE_TOOL_INPUT },
+          toolCallId,
+        };
+        yield {
+          type: 'tool_result',
+          toolName: E2E_FAKE_TOOL_NAME,
+          toolOutput: E2E_FAKE_TOOL_OUTPUT,
+          toolCallId,
+          toolOutcome: 'success',
+        };
+      }
     } else {
       yield { type: 'assistant', content: '[e2e-fake] deterministic response' };
     }
