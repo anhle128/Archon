@@ -1,8 +1,9 @@
 /**
- * Exact execution identity and header data for run rooms.
+ * Exact execution identity, header data, and room visit transitions.
  *
- * Selection, labels, opener ids, and runtime fields stay pure so Legacy and
- * Console can share the same resolution without sharing UI.
+ * Selection, labels, opener ids, runtime fields, and visit reducers stay
+ * pure so Legacy and Console can share the same resolution without sharing UI.
+ * Focus restoration stays the caller's DOM responsibility via openerId.
  */
 import type { components } from './api.generated';
 import type { RoomSurface } from './room-split-layout';
@@ -172,4 +173,74 @@ export function roomOpenerId(surface: RoomSurface, kind: RoomOpenerKind, key: st
 
 export function askCardId(requestId: string): string {
   return `run-ask-card-${encodeURIComponent(requestId)}`;
+}
+
+export interface RoomVisitSelection {
+  nodeId: string;
+  rowId: string;
+  openerId: string | null;
+}
+
+export interface RoomVisitState {
+  runId: string;
+  selection: RoomVisitSelection | null;
+  lastExplicitRowByNode: Record<string, string>;
+  appliedDeepLinkNode: string | null;
+  scrollTopByScope: Record<string, number>;
+}
+
+export function resetRoomVisit(runId: string): RoomVisitState {
+  return {
+    runId,
+    selection: null,
+    lastExplicitRowByNode: {},
+    appliedDeepLinkNode: null,
+    scrollTopByScope: {},
+  };
+}
+
+export function openRoom(state: RoomVisitState, selection: RoomVisitSelection): RoomVisitState {
+  return {
+    ...state,
+    selection,
+    lastExplicitRowByNode: {
+      ...state.lastExplicitRowByNode,
+      [selection.nodeId]: selection.rowId,
+    },
+  };
+}
+
+export function closeRoom(state: RoomVisitState): RoomVisitState {
+  return { ...state, selection: null };
+}
+
+export function rememberRoomScroll(
+  state: RoomVisitState,
+  scopeKey: string,
+  scrollTop: number
+): RoomVisitState {
+  return {
+    ...state,
+    scrollTopByScope: { ...state.scrollTopByScope, [scopeKey]: scrollTop },
+  };
+}
+
+export function applyRoomDeepLink(
+  state: RoomVisitState,
+  queryNode: string | null,
+  rows: readonly ExecutionChoiceRow[]
+): RoomVisitState {
+  if (queryNode === null) {
+    if (state.appliedDeepLinkNode === null) return state;
+    return { ...state, appliedDeepLinkNode: null };
+  }
+  if (state.appliedDeepLinkNode === queryNode) return state;
+  const row = chooseExecutionForNode(rows, queryNode, state.lastExplicitRowByNode[queryNode]);
+  if (row === null) {
+    return { ...state, appliedDeepLinkNode: queryNode };
+  }
+  return openRoom(
+    { ...state, appliedDeepLinkNode: queryNode },
+    { nodeId: queryNode, rowId: row.id, openerId: null }
+  );
 }

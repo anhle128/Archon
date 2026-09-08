@@ -2,9 +2,14 @@ import { describe, expect, test } from 'bun:test';
 
 import type { components } from './api.generated';
 import {
+  applyRoomDeepLink,
   askCardId,
   buildExecutionHeader,
   chooseExecutionForNode,
+  closeRoom,
+  openRoom,
+  rememberRoomScroll,
+  resetRoomVisit,
   roomOpenerId,
   runtimeForSelection,
   type ExecutionRow,
@@ -270,5 +275,93 @@ describe('roomOpenerId and askCardId', () => {
 
   test('encodes Ask request ids with the run-ask-card- prefix', () => {
     expect(askCardId('tool/use 1')).toBe('run-ask-card-tool%2Fuse%201');
+  });
+});
+
+describe('room visit transitions', () => {
+  const awaiting = row({ id: 'awaiting', status: 'awaiting', order: 2 });
+  const completed = row({ id: 'completed', status: 'completed', order: 0 });
+  const rows = [completed, awaiting];
+  const openerId = 'legacy-log-awaiting';
+
+  test('opening stores the explicit row and opener', () => {
+    const opened = openRoom(resetRoomVisit('run-1'), {
+      nodeId: NODE_ID,
+      rowId: awaiting.id,
+      openerId,
+    });
+    expect(opened.selection).toEqual({
+      nodeId: NODE_ID,
+      rowId: awaiting.id,
+      openerId,
+    });
+    expect(opened.lastExplicitRowByNode).toEqual({ [NODE_ID]: awaiting.id });
+  });
+
+  test('closing clears only selection', () => {
+    const opened = openRoom(resetRoomVisit('run-1'), {
+      nodeId: NODE_ID,
+      rowId: awaiting.id,
+      openerId,
+    });
+    const withScroll = rememberRoomScroll(opened, 'run-1:review', 120);
+    const closed = closeRoom(withScroll);
+    expect(closed.selection).toBeNull();
+    expect(closed.lastExplicitRowByNode).toEqual({ [NODE_ID]: awaiting.id });
+    expect(closed.scrollTopByScope).toEqual({ 'run-1:review': 120 });
+    expect(closed.runId).toBe('run-1');
+  });
+
+  test('applyRoomDeepLink with a null query clears only the marker', () => {
+    const opened = applyRoomDeepLink(resetRoomVisit('run-1'), NODE_ID, rows);
+    const withScroll = rememberRoomScroll(opened, 'scope', 40);
+    const cleared = applyRoomDeepLink(withScroll, null, rows);
+    expect(cleared.appliedDeepLinkNode).toBeNull();
+    expect(cleared.selection).toEqual(opened.selection);
+    expect(cleared.lastExplicitRowByNode).toEqual(opened.lastExplicitRowByNode);
+    expect(cleared.scrollTopByScope).toEqual({ scope: 40 });
+  });
+
+  test('a query value opens once, ignores manual close, and reopens after leaving', () => {
+    let state = applyRoomDeepLink(resetRoomVisit('run-1'), NODE_ID, rows);
+    expect(state.selection?.rowId).toBe(awaiting.id);
+    expect(state.appliedDeepLinkNode).toBe(NODE_ID);
+
+    state = closeRoom(state);
+    state = applyRoomDeepLink(state, NODE_ID, rows);
+    expect(state.selection).toBeNull();
+    expect(state.appliedDeepLinkNode).toBe(NODE_ID);
+
+    state = applyRoomDeepLink(state, null, rows);
+    expect(state.appliedDeepLinkNode).toBeNull();
+
+    state = applyRoomDeepLink(state, NODE_ID, rows);
+    expect(state.selection?.rowId).toBe(awaiting.id);
+    expect(state.appliedDeepLinkNode).toBe(NODE_ID);
+  });
+
+  test('an unknown query node leaves the room closed', () => {
+    const state = applyRoomDeepLink(resetRoomVisit('run-1'), 'missing', rows);
+    expect(state.selection).toBeNull();
+    expect(state.appliedDeepLinkNode).toBe('missing');
+  });
+
+  test('a changed run id returns a fresh state with every map empty', () => {
+    const previous = rememberRoomScroll(
+      openRoom(resetRoomVisit('run-1'), {
+        nodeId: NODE_ID,
+        rowId: awaiting.id,
+        openerId,
+      }),
+      'scope',
+      80
+    );
+    const next = resetRoomVisit('run-2');
+    expect(next.runId).toBe('run-2');
+    expect(next.selection).toBeNull();
+    expect(next.lastExplicitRowByNode).toEqual({});
+    expect(next.scrollTopByScope).toEqual({});
+    expect(next.appliedDeepLinkNode).toBeNull();
+    expect(previous.runId).toBe('run-1');
   });
 });

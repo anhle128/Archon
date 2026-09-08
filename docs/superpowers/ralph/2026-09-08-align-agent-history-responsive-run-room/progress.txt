@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### Deep-link once-per-entry is a marker, not a close
+- **Where**: `packages/web/src/lib/execution-room-model.ts` (`applyRoomDeepLink`, `closeRoom`)
+- **Pattern**: `appliedDeepLinkNode` records the current query value. A matching query after `closeRoom` is a no-op; `null` clears only the marker so a later identical query can open again. `closeRoom` must not wipe `lastExplicitRowByNode` or `scrollTopByScope`.
+- **Example**: `if (state.appliedDeepLinkNode === queryNode) return state;`
+
+### Happy-dom getBoundingClientRect stubs
+- **Where**: `packages/web/src/lib/use-container-split-mode.test.tsx`
+- **Pattern**: happy-dom's `HTMLElement.prototype.getBoundingClientRect` returns a branded `DOMRect`. Assigning a plain object fails `tsc`. Replace the property with `Object.defineProperty` and restore the original descriptor.
+- **Example**: `Object.defineProperty(win.HTMLElement.prototype, 'getBoundingClientRect', { configurable: true, value: () => ({ width }) });`
+
 ### Execution header fields come only from the selected row
 - **Where**: `packages/web/src/lib/execution-room-model.ts` (`buildExecutionHeader`, `runtimeForSelection`)
 - **Pattern**: Timing and provider/model are taken from the selected row and its matching `node_started` event. Do not scan sibling rows with `rows.some`. Occurrence selections may carry `retryEpoch`/`iteration` for `Attempt N` / `Iteration N` labels.
@@ -181,5 +191,31 @@
 - `retry_epoch` is 0-based; header Attempt N is `retryEpoch + 1`
 - LogRow.unknownScope is optional so existing fixtures type-check; builders always set it
 - Unscoped `node_started` matching ignores events that carry occurrence_id
+
+---
+
+## 2026-09-08 — US-006: Model room visits, responsive mode, and scroll following
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/execution-room-model.ts` — RoomVisitState, openRoom, closeRoom, applyRoomDeepLink, rememberRoomScroll, resetRoomVisit
+- `packages/web/src/lib/execution-room-model.test.ts` — visit open/close, once-per-entry deep link, runId reset
+- `packages/web/src/lib/room-scroll-follow.ts` — createScrollFollow, onRoomScroll, jumpToLatest
+- `packages/web/src/lib/room-scroll-follow.test.ts` — top/bottom init, 24px threshold, saved scroll, jump
+- `packages/web/src/lib/use-container-split-mode.ts` — rem-aware ResizeObserver split/single hook
+- `packages/web/src/lib/use-container-split-mode.test.tsx` — 16px/20px thresholds, missing observer fallback, disconnect
+
+**Acceptance criteria verified**:
+- [x] `execution-room-model.ts` exports `RoomVisitState`, `openRoom`, `closeRoom`, `applyRoomDeepLink`, `rememberRoomScroll`, and `resetRoomVisit`
+- [x] `closeRoom` clears selection while preserving `lastExplicitRowByNode` and `scrollTopByScope`; `resetRoomVisit` returns fresh state for a changed runId
+- [x] `applyRoomDeepLink` applies a query node once per entry, ignores manual close while the query persists, and reopens after the query leaves and re-enters
+- [x] `room-scroll-follow.ts` exports `createScrollFollow`, `onRoomScroll`, and `jumpToLatest`: completed/failed start at top, running/awaiting follow at bottom, >24px from bottom disables follow, jump reenables follow
+- [x] `use-container-split-mode.ts` exports `useContainerSplitMode(ref, minRem = 60)` measuring `minRem * rootFontPx` via ResizeObserver
+- [x] Tests in `execution-room-model.test.ts`, `room-scroll-follow.test.ts`, and `use-container-split-mode.test.tsx` pass
+
+**Learnings**:
+- `applyRoomDeepLink` must not generic over `T extends ExecutionChoiceRow` when it does not return `T` (`no-unnecessary-type-parameters`)
+- Saved `scrollTop` disables follow on reopen even for running rows
+- `.test.tsx` is ESLint-checked; use `T[]` not `Array<T>`
 
 ---

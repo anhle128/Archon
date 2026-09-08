@@ -118,8 +118,8 @@
         "US-005"
       ],
       "priority": 6,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/lib/execution-room-model.ts, packages/web/src/lib/execution-room-model.test.ts, packages/web/src/lib/room-scroll-follow.ts, packages/web/src/lib/room-scroll-follow.test.ts, packages/web/src/lib/use-container-split-mode.ts, packages/web/src/lib/use-container-split-mode.test.tsx."
     },
     {
       "id": "US-007",
