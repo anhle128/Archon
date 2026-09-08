@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { HttpError } from '../lib/http';
 import { K } from '../store/keys';
-import { getRun, listNodeMessages, type RunDetailResponse } from './runs';
+import {
+  getNodeMessage,
+  getNodeMessages,
+  getRun,
+  listNodeMessages,
+  type RunDetailResponse,
+} from './runs';
 import type { components } from '@/lib/api.generated';
 
 type FetchSpy = ReturnType<typeof spyOn<typeof globalThis, 'fetch'>>;
@@ -20,10 +26,13 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function stubFetch(handler: (url: string) => Response): FetchSpy {
-  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(((input: RequestInfo | URL) => {
+function stubFetch(handler: (url: string, init?: RequestInit) => Response): FetchSpy {
+  fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(((
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ) => {
     const url = typeof input === 'string' ? input : input.toString();
-    return Promise.resolve(handler(url));
+    return Promise.resolve(handler(url, init));
   }) as typeof fetch);
   return fetchSpy;
 }
@@ -229,5 +238,59 @@ describe('K.nodeMessages', () => {
   test('encodes each segment independently so ids cannot collide', () => {
     expect(K.nodeMessages('run/1', 'node a')).toBe('run-node-messages:run%2F1:node%20a');
     expect(K.nodeMessages('run:1', 'a')).not.toBe(K.nodeMessages('run', '1:a'));
+  });
+});
+
+describe('getNodeMessages inspect boundary', () => {
+  test('forwards AbortSignal through requestJson and keeps cursor query params', async () => {
+    // Omitting RequestInit.signal from requestJson must fail this test.
+    const controller = new AbortController();
+    stubFetch((url, init) => {
+      expect(url).toBe(
+        '/api/workflows/runs/run%2F1/nodes/node%20a/messages?afterSeq=4&limit=10&occurrenceId=11111111-1111-4111-8111-111111111111&attemptId=22222222-2222-4222-8222-222222222222'
+      );
+      expect(url).not.toContain('signal');
+      expect(init?.signal).toBe(controller.signal);
+      return jsonResponse({ messages: [], hasMore: false, highWatermark: 0 });
+    });
+
+    await getNodeMessages('run/1', 'node a', {
+      afterSeq: 4,
+      limit: 10,
+      occurrenceId: '11111111-1111-4111-8111-111111111111',
+      attemptId: '22222222-2222-4222-8222-222222222222',
+      signal: controller.signal,
+    });
+
+    expect(fetchSpy?.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+  });
+});
+
+describe('getNodeMessage inspect boundary', () => {
+  test('encodes slash and space ids, returns the row, and forwards AbortSignal', async () => {
+    // Omitting RequestInit.signal from requestJson must fail this test.
+    const message: components['schemas']['WorkflowNodeMessage'] = {
+      kind: 'text',
+      payload: { text: 'full' },
+      id: 'message/one',
+      seq: 1,
+      created_at: '2026-09-07T00:00:02.000Z',
+    };
+    const controller = new AbortController();
+    stubFetch((url, init) => {
+      expect(url).toBe('/api/workflows/runs/run%2Fone/nodes/node%20one/messages/message%2Fone');
+      expect(init?.signal).toBe(controller.signal);
+      return jsonResponse(message);
+    });
+
+    const result = await getNodeMessage('run/one', 'node one', 'message/one', {
+      signal: controller.signal,
+    });
+
+    expect(fetchSpy?.mock.calls[0]?.[0]).toBe(
+      '/api/workflows/runs/run%2Fone/nodes/node%20one/messages/message%2Fone'
+    );
+    expect(result).toEqual(message);
+    expect(fetchSpy?.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
   });
 });

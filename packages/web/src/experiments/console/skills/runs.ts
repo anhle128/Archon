@@ -107,7 +107,7 @@ export async function getRun(id: string): Promise<ConsoleRunDetail> {
   };
 }
 
-export async function listNodeMessages(
+export async function getNodeMessages(
   runId: string,
   nodeId: string,
   options?: {
@@ -115,16 +115,40 @@ export async function listNodeMessages(
     limit?: number;
     occurrenceId?: string;
     attemptId?: string;
+    signal?: AbortSignal;
   }
 ): Promise<WorkflowNodeMessagesResponse> {
+  const { signal, ...queryFields } = options ?? {};
   const qs = new URLSearchParams();
-  if (options?.afterSeq !== undefined) qs.set('afterSeq', String(options.afterSeq));
-  if (options?.limit !== undefined) qs.set('limit', String(options.limit));
-  if (options?.occurrenceId !== undefined) qs.set('occurrenceId', options.occurrenceId);
-  if (options?.attemptId !== undefined) qs.set('attemptId', options.attemptId);
+  if (queryFields.afterSeq !== undefined) qs.set('afterSeq', String(queryFields.afterSeq));
+  if (queryFields.limit !== undefined) qs.set('limit', String(queryFields.limit));
+  if (queryFields.occurrenceId !== undefined) qs.set('occurrenceId', queryFields.occurrenceId);
+  if (queryFields.attemptId !== undefined) qs.set('attemptId', queryFields.attemptId);
   const query = qs.size > 0 ? `?${qs.toString()}` : '';
   return requestJson<WorkflowNodeMessagesResponse>(
-    `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/messages${query}`
+    `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/messages${query}`,
+    signal === undefined ? undefined : { signal }
+  );
+}
+
+export const listNodeMessages = getNodeMessages;
+
+export async function getNodeMessage(
+  runId: string,
+  nodeId: string,
+  messageId: string,
+  options?: { signal?: AbortSignal }
+): Promise<WorkflowNodeMessage> {
+  const url =
+    '/api/workflows/runs/' +
+    encodeURIComponent(runId) +
+    '/nodes/' +
+    encodeURIComponent(nodeId) +
+    '/messages/' +
+    encodeURIComponent(messageId);
+  return requestJson<WorkflowNodeMessage>(
+    url,
+    options?.signal === undefined ? undefined : { signal: options.signal }
   );
 }
 

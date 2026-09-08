@@ -709,22 +709,40 @@ export async function getWorkflowNodeMessages(
     limit?: number;
     occurrenceId?: string;
     attemptId?: string;
+    signal?: AbortSignal;
   }
 ): Promise<WorkflowNodeMessagesResponse> {
+  const { signal, ...queryFields } = options ?? {};
   const qs = new URLSearchParams();
-  if (options?.afterSeq !== undefined) qs.set('afterSeq', String(options.afterSeq));
-  if (options?.limit !== undefined) qs.set('limit', String(options.limit));
-  if (options?.occurrenceId !== undefined) qs.set('occurrenceId', options.occurrenceId);
-  if (options?.attemptId !== undefined) qs.set('attemptId', options.attemptId);
+  if (queryFields.afterSeq !== undefined) qs.set('afterSeq', String(queryFields.afterSeq));
+  if (queryFields.limit !== undefined) qs.set('limit', String(queryFields.limit));
+  if (queryFields.occurrenceId !== undefined) qs.set('occurrenceId', queryFields.occurrenceId);
+  if (queryFields.attemptId !== undefined) qs.set('attemptId', queryFields.attemptId);
   const query = qs.size > 0 ? `?${qs.toString()}` : '';
-  return fetchJSON(
+  const url =
     '/api/workflows/runs/' +
-      encodeURIComponent(runId) +
-      '/nodes/' +
-      encodeURIComponent(nodeId) +
-      '/messages' +
-      query
-  );
+    encodeURIComponent(runId) +
+    '/nodes/' +
+    encodeURIComponent(nodeId) +
+    '/messages' +
+    query;
+  return fetchJSON(url, signal === undefined ? undefined : { signal });
+}
+
+export async function getWorkflowNodeMessage(
+  runId: string,
+  nodeId: string,
+  messageId: string,
+  options?: { signal?: AbortSignal }
+): Promise<WorkflowNodeMessageResponse> {
+  const url =
+    '/api/workflows/runs/' +
+    encodeURIComponent(runId) +
+    '/nodes/' +
+    encodeURIComponent(nodeId) +
+    '/messages/' +
+    encodeURIComponent(messageId);
+  return fetchJSON(url, options?.signal === undefined ? undefined : { signal: options.signal });
 }
 export async function getWorkflowRunByWorker(
   workerPlatformId: string

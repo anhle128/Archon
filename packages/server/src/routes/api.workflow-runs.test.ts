@@ -7,6 +7,7 @@ import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
 import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
+import { MAX_TOOL_OUTPUT_CHARS } from '../adapters/web/truncate';
 
 // ---------------------------------------------------------------------------
 // Mock setup — must be before dynamic imports of mocked modules
@@ -3131,7 +3132,7 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     expect(body.messages[0]?.payload.questions).toBeUndefined();
   });
 
-  test('no-query response is exactly { messages } with no metadata or paging keys', async () => {
+  test('no-query response is exactly { messages } with row metadata and no paging keys', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
     mockListNodeMessages.mockImplementationOnce(async () => [
       {
@@ -3142,13 +3143,7 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
         kind: 'text',
         payload: { text: 'hello' },
         created_at: '2026-01-01T00:00:00.000Z',
-        metadata: {
-          execution: {
-            occurrence_id: '11111111-1111-4111-8111-111111111111',
-            attempt_id: '22222222-2222-4222-8222-222222222222',
-            retry_epoch: 0,
-          },
-        },
+        metadata: { stream_id: 'stream-1' },
       },
     ]);
 
@@ -3156,20 +3151,66 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     const response = await app.request('/api/workflows/runs/run-uuid-1/nodes/plan/messages');
     expect(response.status).toBe(200);
     const body = (await response.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(['messages']);
+    expect(Object.keys(body)).toEqual(['messages']);
     const messages = body.messages as Array<Record<string, unknown>>;
-    expect(Object.keys(messages[0] ?? {}).sort()).toEqual([
-      'created_at',
-      'id',
-      'kind',
-      'payload',
-      'seq',
-    ]);
-    expect(messages[0]).not.toHaveProperty('metadata');
+    expect(messages[0]?.metadata).toEqual({ stream_id: 'stream-1' });
     expect(body).not.toHaveProperty('nextCursor');
     expect(body).not.toHaveProperty('hasMore');
     expect(body).not.toHaveProperty('highWatermark');
     expect(mockListNodeMessages.mock.calls[0]).toEqual(['run-uuid-1', 'plan']);
+  });
+
+  test('cursor mode marks truncated tool output without writing it back', async () => {
+    const fullOutput = 'x'.repeat(MAX_TOOL_OUTPUT_CHARS + 200_000);
+    const storedMetadata = { stream_id: 'stream-1' };
+    const storedRow: MockNodeMessageRow = {
+      id: 'msg-long',
+      workflow_run_id: 'run-uuid-1',
+      node_id: 'plan',
+      seq: 1,
+      kind: 'tool',
+      payload: {
+        name: 'Read',
+        id: 'tool-1',
+        input: { path: 'big.txt' },
+        output: fullOutput,
+      },
+      created_at: '2026-01-01T00:00:00.000Z',
+      metadata: storedMetadata,
+    };
+    mockGetWorkflowRun.mockImplementation(async () => MOCK_RUNNING_RUN);
+    mockGetNodeMessageHighWatermark.mockImplementationOnce(async () => 1);
+    mockListNodeMessages.mockImplementationOnce(async () => [storedRow]);
+    mockGetNodeMessage.mockImplementationOnce(async () => storedRow);
+
+    const { app } = makeApp();
+    const listResponse = await app.request(
+      '/api/workflows/runs/run-uuid-1/nodes/plan/messages?limit=1'
+    );
+    expect(listResponse.status).toBe(200);
+    const listBody = (await listResponse.json()) as {
+      messages: Array<{ payload: { output?: string }; metadata?: Record<string, unknown> }>;
+    };
+    const listOutput = listBody.messages[0]?.payload.output ?? '';
+    expect(listOutput.length).toBeLessThan(fullOutput.length);
+    expect(listBody.messages[0]?.metadata).toEqual({
+      stream_id: 'stream-1',
+      truncated: true,
+      output_state: 'truncated',
+    });
+    expect(storedMetadata).toEqual({ stream_id: 'stream-1' });
+    expect(storedRow.payload.output).toBe(fullOutput);
+
+    const detailResponse = await app.request(
+      '/api/workflows/runs/run-uuid-1/nodes/plan/messages/msg-long'
+    );
+    expect(detailResponse.status).toBe(200);
+    const detailBody = (await detailResponse.json()) as {
+      payload: { output?: string };
+      metadata?: Record<string, unknown>;
+    };
+    expect(detailBody.payload.output).toBe(fullOutput);
+    expect(detailBody.metadata).toEqual({ stream_id: 'stream-1' });
   });
 
   test('cursor mode returns metadata, nextCursor, hasMore, and highWatermark', async () => {

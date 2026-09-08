@@ -131,6 +131,7 @@ import type {
 } from '@archon/workflows/schemas/workflow-run';
 import type { ThinkingConfig } from '@archon/workflows/schemas/dag-node';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { NodeMessage } from '@archon/workflows/schemas/node-message';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
@@ -5211,6 +5212,66 @@ export function registerApiRoutes(
     }
   });
 
+  function nodeMessageMetadata(
+    metadata: NodeMessage['metadata']
+  ): { metadata: NonNullable<NodeMessage['metadata']> } | Record<string, never> {
+    return metadata !== undefined && metadata !== null ? { metadata } : {};
+  }
+
+  function toWorkflowNodeMessageResponse(
+    row: NodeMessage,
+    truncateOutput: boolean
+  ): z.infer<typeof workflowNodeMessageResponseSchema> {
+    const createdAt = toISOString(row.created_at);
+    if (row.kind === 'tool') {
+      if (truncateOutput && typeof row.payload.output === 'string') {
+        const output = truncateToolOutput(row.payload.output);
+        const metadata =
+          output !== row.payload.output
+            ? {
+                ...(row.metadata ?? {}),
+                truncated: true,
+                output_state: 'truncated' as const,
+              }
+            : row.metadata;
+        return {
+          id: row.id,
+          seq: row.seq,
+          kind: row.kind,
+          payload: { ...row.payload, output },
+          created_at: createdAt,
+          ...nodeMessageMetadata(metadata),
+        };
+      }
+      return {
+        id: row.id,
+        seq: row.seq,
+        kind: row.kind,
+        payload: row.payload,
+        created_at: createdAt,
+        ...nodeMessageMetadata(row.metadata),
+      };
+    }
+    if (row.kind === 'text') {
+      return {
+        id: row.id,
+        seq: row.seq,
+        kind: row.kind,
+        payload: row.payload,
+        created_at: createdAt,
+        ...nodeMessageMetadata(row.metadata),
+      };
+    }
+    return {
+      id: row.id,
+      seq: row.seq,
+      kind: row.kind,
+      payload: row.payload,
+      created_at: createdAt,
+      ...nodeMessageMetadata(row.metadata),
+    };
+  }
+
   // GET /api/workflows/runs/:runId/nodes/:nodeId/messages - One node transcript
   registerOpenApiRoute(getWorkflowNodeMessagesRoute, async c => {
     const runId = c.req.param('runId') ?? '';
@@ -5227,13 +5288,7 @@ export function registerApiRoutes(
       if (!cursorMode) {
         const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId);
         return c.json({
-          messages: rows.map(row => ({
-            id: row.id,
-            seq: row.seq,
-            kind: row.kind,
-            payload: row.payload,
-            created_at: toISOString(row.created_at),
-          })),
+          messages: rows.map(row => toWorkflowNodeMessageResponse(row, false)),
         });
       }
       const limit = query.limit ?? 100;
@@ -5252,19 +5307,7 @@ export function registerApiRoutes(
       });
       const last = page[page.length - 1];
       return c.json({
-        messages: page.map(row => ({
-          id: row.id,
-          seq: row.seq,
-          kind: row.kind,
-          payload:
-            row.kind === 'tool' && typeof row.payload.output === 'string'
-              ? { ...row.payload, output: truncateToolOutput(row.payload.output) }
-              : row.payload,
-          created_at: toISOString(row.created_at),
-          ...(row.metadata !== undefined && row.metadata !== null
-            ? { metadata: row.metadata }
-            : {}),
-        })),
+        messages: page.map(row => toWorkflowNodeMessageResponse(row, true)),
         ...(last !== undefined ? { nextCursor: String(last.seq) } : {}),
         hasMore,
         highWatermark,
@@ -5291,14 +5334,7 @@ export function registerApiRoutes(
       if (!run) return apiError(c, 404, 'Workflow run not found');
       const row = await workflowNodeMessageDb.getNodeMessage(runId, nodeId, messageId);
       if (!row) return apiError(c, 404, 'Workflow node message not found');
-      return c.json({
-        id: row.id,
-        seq: row.seq,
-        kind: row.kind,
-        payload: row.payload,
-        created_at: toISOString(row.created_at),
-        ...(row.metadata !== undefined && row.metadata !== null ? { metadata: row.metadata } : {}),
-      });
+      return c.json(toWorkflowNodeMessageResponse(row, false));
     } catch (error) {
       getLog().error(
         {
