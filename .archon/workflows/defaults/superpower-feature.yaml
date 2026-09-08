@@ -28,8 +28,8 @@ nodes:
 
   - id: write-plan
     description: Write the Superpowers implementation plan with Grok 4.6.
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    provider: claude
+    model: "opus"
     effort: xhigh
     context: fresh
     depends_on:
@@ -104,7 +104,6 @@ nodes:
       If a decision cannot be inferred, keep an Open Questions section with a safe provisional default.
       Keep each full Markdown sentence on its own physical line.
 
-      Write your review notes to $ARTIFACTS_DIR/superpowers/plan-review.md.
       Return only JSON.
     output_format:
       type: object
