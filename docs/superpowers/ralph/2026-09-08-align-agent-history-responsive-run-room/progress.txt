@@ -1,5 +1,20 @@
 ## Codebase Patterns
 
+### Wait for run query data before applyRoomDeepLink
+- **Where**: `packages/web/src/components/workflows/WorkflowExecution.tsx`
+- **Pattern**: `applyRoomDeepLink` marks `appliedDeepLinkNode` even when no row matches. Calling it while `queryData` is undefined (empty rows) consumes the deep-link and the room never opens after rows load. Skip the effect until `queryData` is defined.
+- **Example**: `if (queryData === undefined) return;`
+
+### Percent panel tests need defaultLayout, not defaultSize strings
+- **Where**: `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx`
+- **Pattern**: happy-dom ignores `defaultSize: '60%'` and falls back to 50/50 flex-grow. Pass `defaultLayout` as `{ 'legacy-run-view': 60, 'legacy-run-room': 40 }` so tests can match 60/40.
+- **Example**: `defaultLayout={roomOpen ? { 'legacy-run-view': 100 - ratio, 'legacy-run-room': ratio } : { 'legacy-run-view': 100 }}`
+
+### Same-node graph re-click is canonical, not last-explicit
+- **Where**: `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` (`handleGraphNodeClick`)
+- **Pattern**: If the clicked graph node is already selected, pass `null` as lastExplicit so `chooseExecutionForNode` returns the canonical last iteration. Restore last-explicit only when opening a different (or closed) node.
+- **Example**: `const lastExplicit = selectedNodeId === nodeId ? null : (lastExplicitRowByNode[nodeId] ?? null);`
+
 ### Deep-link once-per-entry is a marker, not a close
 - **Where**: `packages/web/src/lib/execution-room-model.ts` (`applyRoomDeepLink`, `closeRoom`)
 - **Pattern**: `appliedDeepLinkNode` records the current query value. A matching query after `closeRoom` is a no-op; `null` clears only the marker so a later identical query can open again. `closeRoom` must not wipe `lastExplicitRowByNode` or `scrollTopByScope`.
@@ -217,5 +232,33 @@
 - `applyRoomDeepLink` must not generic over `T extends ExecutionChoiceRow` when it does not return `T` (`no-unnecessary-type-parameters`)
 - Saved `scrollTop` disables follow on reopen even for running rows
 - `.test.tsx` is ESLint-checked; use `T[]` not `Array<T>`
+
+---
+
+## 2026-09-08 — US-007: Integrate the legacy room lifecycle
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` — controlled selectedLogRowId, on-demand PercentResizablePanel room, hidden main view in single mode, Close/Back
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx` — absence-by-default, split/single, Back closes
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — RoomVisitState, applyRoomDeepLink after query load, focus restore, shell chrome
+- `packages/web/src/components/workflows/WorkflowExecution.test.tsx` — ordinary visit, log open, focus restore, last-explicit graph, deep-link, runId reset
+- `packages/web/src/components/workflows/NodeRunList.tsx` — `id={roomOpenerId('legacy', 'log', row.id)}`
+- `packages/web/src/components/workflows/NodeRunList.test.tsx` — opener ids
+- deleted `packages/web/src/lib/select-initial-node.ts` and `.test.ts`
+
+**Acceptance criteria verified**:
+- [x] Room panel and separator render only when selectedNodeId is non-null; PercentResizablePanel ids `legacy-run-view` and `legacy-run-room`
+- [x] Single-pane: main view stays mounted with `hidden`; Back calls `onCloseRoom`
+- [x] WorkflowExecution owns RoomVisitState, applyRoomDeepLink, runId reset, focus restore via `document.getElementById(openerId)`
+- [x] NodeRunList button `id={roomOpenerId('legacy', 'log', row.id)}`
+- [x] Deleted `select-initial-node.ts` and its test
+- [x] Tests in LegacyGraphLogsPane.test.tsx and WorkflowExecution.test.tsx cover absence-by-default, split/single, focus restore, and deep-link lifecycle
+
+**Learnings**:
+- Do not call `applyRoomDeepLink` until the run query has resolved; empty rows consume the once-per-entry marker
+- Graph same-node re-click must ignore last-explicit so loop ×1 then graph-group still resolves canonical ×2
+- Radix tabs in happy-dom need pointerdown/mouseup, not only `.click()`
+- Destructure PascalCase components from a module namespace in `.test.tsx` (`workflowExecution.WorkflowExecution`) to satisfy naming-convention
 
 ---

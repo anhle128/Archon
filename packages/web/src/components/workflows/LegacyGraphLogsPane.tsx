@@ -5,6 +5,11 @@ import { useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import {
+  PercentResizablePanel,
+  ResizableHandle,
+  ResizablePanelGroup,
+} from '@/components/ui/resizable';
+import {
   getWorkflowNodeMessages,
   type AskAnswerBody,
   type ConversationResponse,
@@ -16,9 +21,10 @@ import {
   type WorkflowNodeStateResponse,
 } from '@/lib/api';
 import { readApprovalContext, type WebApprovalContext } from '@/lib/approval-context';
+import { chooseExecutionForNode, roomOpenerId } from '@/lib/execution-room-model';
+import { clampRoomRatio, roomPanelSizes } from '@/lib/room-split-layout';
 import type { WorkflowRunStatus } from '@/lib/types';
-
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { useContainerSplitMode, type ContainerSplitMode } from '@/lib/use-container-split-mode';
 
 import type { AskActionStateByRequest } from './ask-answer-controller';
 import { buildChatTimeline, type ChatTimelineEntry } from './build-chat-timeline';
@@ -28,10 +34,10 @@ import { ChatTimeline } from './ChatTimeline';
 import { LegacyNodeRoom } from './LegacyNodeRoom';
 import { NodeRunList } from './NodeRunList';
 import { resolveGraphRoomRow } from './resolve-graph-room-row';
-import { useStackedViewport } from './source-control/use-stacked-viewport';
 import { resolveRoomKind } from './resolve-room-kind';
 import { resolveTimelineRoomRow } from './resolve-timeline-room-row';
 import { RunChatComposer } from './RunChatComposer';
+import { useStackedViewport } from './source-control/use-stacked-viewport';
 
 export interface LegacyGraphLogsPaneProps {
   activeView: 'graph' | 'logs' | 'chat';
@@ -40,7 +46,13 @@ export interface LegacyGraphLogsPaneProps {
     onNodeClick: (nodeId: string) => void;
   }) => ReactNode;
   selectedNodeId: string | null;
-  onSelectNode: (nodeId: string | null) => void;
+  selectedLogRowId: string | null;
+  lastExplicitRowByNode?: Record<string, string>;
+  onOpenRoom: (rowId: string, nodeId: string, openerId: string | null) => void;
+  onCloseRoom: () => void;
+  roomRatio: number;
+  onRoomRatioChange: (ratio: number) => void;
+  splitMode?: ContainerSplitMode;
   runId: string;
   nodeStates: readonly WorkflowNodeStateResponse[];
   events: readonly WorkflowEventResponse[];
@@ -151,7 +163,13 @@ export function LegacyGraphLogsPane({
   activeView,
   renderGraph,
   selectedNodeId,
-  onSelectNode,
+  selectedLogRowId,
+  lastExplicitRowByNode = {},
+  onOpenRoom,
+  onCloseRoom,
+  roomRatio,
+  onRoomRatioChange,
+  splitMode: splitModeOverride,
   runId,
   nodeStates,
   events,
@@ -176,6 +194,9 @@ export function LegacyGraphLogsPane({
   onSubmitAsk,
 }: LegacyGraphLogsPaneProps): React.ReactElement {
   const stacked = useStackedViewport();
+  const paneRef = useRef<HTMLDivElement>(null);
+  const measuredMode = useContainerSplitMode(paneRef);
+  const mode = splitModeOverride ?? measuredMode;
   const visibleNodeStates = useMemo(
     () => synthesizeLegacyLogNodeStates({ nodeStates, events, runStatus, approval }),
     [approval, events, nodeStates, runStatus]
@@ -184,23 +205,28 @@ export function LegacyGraphLogsPane({
     () => buildLogRows(visibleNodeStates, events, nodeExecutions),
     [events, nodeExecutions, visibleNodeStates]
   );
-  const [selectedLogRowId, setSelectedLogRowId] = useState<string | null>(null);
   const [selectedTimelineEntryId, setSelectedTimelineEntryId] = useState<string | null>(null);
   const [chatDraft, setChatDraft] = useState('');
   const [chatSending, setChatSending] = useState(false);
   const [chatSendError, setChatSendError] = useState<string | null>(null);
   const sendGeneration = useRef(0);
-  const explicitSelectedRow = rows.find(row => row.id === selectedLogRowId) ?? null;
-  const selectedRow =
-    explicitSelectedRow !== null && explicitSelectedRow.nodeId === selectedNodeId
-      ? explicitSelectedRow
-      : resolveGraphRoomRow({
-          rows,
-          nodeId: selectedNodeId,
-          liveStatus: visibleNodeStates,
-        });
   const previousRunId = useRef(runId);
-  const previousSelectedNodeId = useRef(selectedNodeId);
+  const sizes = roomPanelSizes(roomRatio);
+  const explicitSelectedRow =
+    selectedLogRowId === null
+      ? null
+      : (rows.find(row => row.id === selectedLogRowId && row.nodeId === selectedNodeId) ?? null);
+  const selectedRow =
+    selectedNodeId === null
+      ? null
+      : explicitSelectedRow !== null
+        ? explicitSelectedRow
+        : resolveGraphRoomRow({
+            rows,
+            nodeId: selectedNodeId,
+            liveStatus: visibleNodeStates,
+          });
+  const roomOpen = selectedRow !== null;
 
   const parentMessagesQuery = useQuery({
     queryKey: ['runChatMessages', parentPlatformId],
@@ -248,14 +274,6 @@ export function LegacyGraphLogsPane({
     [approval, definitionNodes, events, parentMessagesQuery.data, visibleNodeStates]
   );
 
-  let selectedTimelineNodeId: string | null = null;
-  for (const entry of chatEntries) {
-    if (entry.kind === 'node_status' && entry.id === selectedTimelineEntryId) {
-      selectedTimelineNodeId = entry.nodeId;
-      break;
-    }
-  }
-
   const parentMessagesError = parentMessagesQuery.isError
     ? parentMessagesQuery.error instanceof Error
       ? parentMessagesQuery.error.message
@@ -263,43 +281,37 @@ export function LegacyGraphLogsPane({
     : null;
 
   useEffect(() => {
-    const runChanged = previousRunId.current !== runId;
-    const selectedRowRemoved = selectedLogRowId !== null && explicitSelectedRow === null;
+    if (previousRunId.current === runId) return;
     previousRunId.current = runId;
-    if (runChanged) {
-      sendGeneration.current += 1;
-      setChatDraft('');
-      setChatSending(false);
-      setChatSendError(null);
-    }
-    if (!runChanged && !selectedRowRemoved) return;
-    setSelectedLogRowId(null);
+    sendGeneration.current += 1;
+    setChatDraft('');
+    setChatSending(false);
+    setChatSendError(null);
     setSelectedTimelineEntryId(null);
-    onSelectNode(null);
-  }, [explicitSelectedRow, onSelectNode, runId, selectedLogRowId]);
+  }, [runId]);
 
   useEffect(() => {
-    const previous = previousSelectedNodeId.current;
-    previousSelectedNodeId.current = selectedNodeId;
-    if (previous === selectedNodeId) return;
-    if (explicitSelectedRow !== null && explicitSelectedRow.nodeId === previous) {
-      setSelectedLogRowId(null);
-    }
-    if (selectedTimelineNodeId === previous) {
-      setSelectedTimelineEntryId(null);
-    }
-  }, [explicitSelectedRow, selectedNodeId, selectedTimelineNodeId]);
+    if (selectedNodeId === null) setSelectedTimelineEntryId(null);
+  }, [selectedNodeId]);
 
   const handleGraphNodeClick = (nodeId: string): void => {
-    setSelectedLogRowId(null);
     setSelectedTimelineEntryId(null);
-    onSelectNode(nodeId);
+    const lastExplicit = selectedNodeId === nodeId ? null : (lastExplicitRowByNode[nodeId] ?? null);
+    const chosen = chooseExecutionForNode(rows, nodeId, lastExplicit);
+    const row =
+      chosen ??
+      resolveGraphRoomRow({
+        rows,
+        nodeId,
+        liveStatus: visibleNodeStates,
+      });
+    if (row === null) return;
+    onOpenRoom(row.id, nodeId, roomOpenerId('legacy', 'graph', nodeId));
   };
 
   const handleLogRowSelect = (row: LogRow): void => {
-    setSelectedLogRowId(row.id);
     setSelectedTimelineEntryId(null);
-    onSelectNode(row.nodeId);
+    onOpenRoom(row.id, row.nodeId, roomOpenerId('legacy', 'log', row.id));
   };
 
   const handleNodeStatusSelect = (
@@ -310,10 +322,8 @@ export function LegacyGraphLogsPane({
       entry,
       liveStatus: visibleNodeStates,
     });
-    const rowExists = rows.some(candidate => candidate.id === row.id);
-    setSelectedLogRowId(rowExists ? row.id : null);
     setSelectedTimelineEntryId(entry.id);
-    onSelectNode(row.nodeId);
+    onOpenRoom(row.id, row.nodeId, null);
   };
 
   const handleChatSubmit = (): void => {
@@ -377,8 +387,24 @@ export function LegacyGraphLogsPane({
       </div>
     );
 
+  const wrappedLeft = (
+    <div
+      id={mode === 'single' ? 'legacy-run-view' : undefined}
+      hidden={mode === 'single' && roomOpen}
+    >
+      {leftPane}
+    </div>
+  );
+
   const roomPane = (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+    <div
+      data-testid="legacy-node-room"
+      id={mode === 'single' ? 'legacy-run-room' : undefined}
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+    >
+      <button type="button" onClick={onCloseRoom}>
+        {mode === 'single' ? 'Back' : 'Close'}
+      </button>
       {roomHeader}
       <LegacyNodeRoom
         runId={runId}
@@ -406,22 +432,55 @@ export function LegacyGraphLogsPane({
     </div>
   );
 
+  const handleLayoutChanged = (layout: Record<string, number>): void => {
+    const roomSize = layout['legacy-run-room'];
+    if (typeof roomSize !== 'number') return;
+    onRoomRatioChange(clampRoomRatio(roomSize));
+  };
+
   return (
-    <ResizablePanelGroup
-      orientation={stacked ? 'vertical' : 'horizontal'}
-      className="min-h-0 flex-1"
-    >
-      <ResizablePanel defaultSize={stacked ? 45 : 67} minSize={stacked ? 28 : 48}>
-        {leftPane}
-      </ResizablePanel>
-      <ResizableHandle withHandle aria-label="Resize node room" />
-      <ResizablePanel
-        defaultSize={stacked ? 55 : 33}
-        minSize={stacked ? 32 : 22}
-        maxSize={stacked ? 72 : 52}
-      >
-        {roomPane}
-      </ResizablePanel>
-    </ResizablePanelGroup>
+    <div ref={paneRef} className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {mode === 'single' ? (
+        <>
+          {wrappedLeft}
+          {roomOpen ? roomPane : null}
+        </>
+      ) : (
+        <ResizablePanelGroup
+          orientation={stacked ? 'vertical' : 'horizontal'}
+          className="min-h-0 flex-1"
+          defaultLayout={
+            roomOpen
+              ? {
+                  'legacy-run-view': 100 - clampRoomRatio(roomRatio),
+                  'legacy-run-room': clampRoomRatio(roomRatio),
+                }
+              : { 'legacy-run-view': 100 }
+          }
+          onLayoutChanged={handleLayoutChanged}
+        >
+          <PercentResizablePanel
+            id="legacy-run-view"
+            defaultSize={roomOpen ? sizes.view.defaultSize : '100%'}
+            minSize={sizes.view.minSize}
+          >
+            {wrappedLeft}
+          </PercentResizablePanel>
+          {roomOpen ? (
+            <>
+              <ResizableHandle withHandle aria-label="Resize node room" />
+              <PercentResizablePanel
+                id="legacy-run-room"
+                defaultSize={sizes.room.defaultSize}
+                minSize={sizes.room.minSize}
+                maxSize={sizes.room.maxSize}
+              >
+                {roomPane}
+              </PercentResizablePanel>
+            </>
+          ) : null}
+        </ResizablePanelGroup>
+      )}
+    </div>
   );
 }

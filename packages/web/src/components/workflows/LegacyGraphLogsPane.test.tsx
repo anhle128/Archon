@@ -15,6 +15,7 @@ import type {
 } from '@/lib/api';
 import type { WorkflowRunStatus } from '@/lib/types';
 import type { Root } from 'react-dom/client';
+import type { LegacyGraphLogsPaneProps } from './LegacyGraphLogsPane';
 
 const react = await import('react');
 const reactQuery = await import('@tanstack/react-query');
@@ -375,10 +376,43 @@ describe('LegacyGraphLogsPane', () => {
     } & ParentConversationOverrides
   ): React.ReactElement {
     const [selectedNodeId, setSelectedNodeId] = react.useState<string | null>(null);
+    const [selectedLogRowId, setSelectedLogRowId] = react.useState<string | null>(null);
+    const [lastExplicitRowByNode, setLastExplicitRowByNode] = react.useState<
+      Record<string, string>
+    >({});
+    const skipRunReset = react.useRef(true);
+    const onSelectNodeRef = react.useRef(props.onSelectNode);
+    onSelectNodeRef.current = props.onSelectNode;
+    react.useEffect(() => {
+      if (skipRunReset.current) {
+        skipRunReset.current = false;
+        return;
+      }
+      setSelectedNodeId(null);
+      setSelectedLogRowId(null);
+      setLastExplicitRowByNode({});
+      onSelectNodeRef.current(null);
+    }, [props.runId]);
     return createElement(legacyGraphLogsPane.LegacyGraphLogsPane, {
       activeView: props.activeView ?? 'logs',
       renderGraph: defaultRenderGraph,
       selectedNodeId,
+      selectedLogRowId,
+      lastExplicitRowByNode,
+      splitMode: 'split',
+      roomRatio: 40,
+      onRoomRatioChange: (): void => undefined,
+      onOpenRoom: (rowId: string, nodeId: string): void => {
+        setSelectedNodeId(nodeId);
+        setSelectedLogRowId(rowId);
+        setLastExplicitRowByNode(previous => ({ ...previous, [nodeId]: rowId }));
+        props.onSelectNode(nodeId);
+      },
+      onCloseRoom: (): void => {
+        setSelectedNodeId(null);
+        setSelectedLogRowId(null);
+        props.onSelectNode(null);
+      },
       runId: props.runId,
       nodeStates: props.nodeStates,
       events: props.events,
@@ -394,10 +428,6 @@ describe('LegacyGraphLogsPane', () => {
           accepted: true,
           status: 'accepted',
         })),
-      onSelectNode: (nodeId: string | null): void => {
-        setSelectedNodeId(nodeId);
-        props.onSelectNode(nodeId);
-      },
       definitionNodes: props.definitionNodes,
       definitionPending: props.definitionPending,
       runStatus: props.runStatus,
@@ -496,6 +526,160 @@ describe('LegacyGraphLogsPane', () => {
     });
   }
 
+  function paneProps(overrides: {
+    selectedNodeId: string | null;
+    selectedLogRowId: string | null;
+    splitMode: 'split' | 'single';
+    onCloseRoom?: () => void;
+  }): LegacyGraphLogsPaneProps {
+    return {
+      activeView: 'logs',
+      renderGraph: defaultRenderGraph,
+      selectedNodeId: overrides.selectedNodeId,
+      selectedLogRowId: overrides.selectedLogRowId,
+      splitMode: overrides.splitMode,
+      lastExplicitRowByNode: {},
+      onOpenRoom: (): void => undefined,
+      onCloseRoom: overrides.onCloseRoom ?? ((): void => undefined),
+      roomRatio: 40,
+      onRoomRatioChange: (): void => undefined,
+      runId: 'run-1',
+      nodeStates: [REVIEW_STATE],
+      events: [REVIEW_STARTED],
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
+      parentPlatformId: 'parent-1',
+      loadParentMessages: async (): Promise<MessageResponse[]> => [],
+      loadParentConversation: async (): Promise<ConversationResponse> => PARENT_CONVERSATION,
+      sendParentMessage: async (): Promise<{ accepted: boolean; status: string }> => ({
+        accepted: true,
+        status: 'accepted',
+      }),
+      definitionNodes: [{ id: 'review', command: 'review' }],
+      definitionPending: false,
+      runStatus: 'running',
+      approval: null,
+      onApprove: async (): Promise<void> => undefined,
+      onReject: async (): Promise<void> => undefined,
+      pendingInteractions: [],
+      viewerIsStarter: true,
+      starterDisplayName: 'Avery',
+      actionStates: {},
+      onSubmitAsk: async (): Promise<void> => undefined,
+    };
+  }
+
+  test('opens a percentage room on demand and hides the main view in single mode', async () => {
+    const closes: number[] = [];
+    const onCloseRoom = (): void => {
+      closes.push(1);
+    };
+
+    await act(async () => {
+      root.render(
+        createElement(
+          reactQuery.QueryClientProvider,
+          { client: queryClient },
+          createElement(
+            legacyGraphLogsPane.LegacyGraphLogsPane,
+            paneProps({
+              selectedNodeId: null,
+              selectedLogRowId: null,
+              splitMode: 'split',
+              onCloseRoom,
+            })
+          )
+        )
+      );
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="legacy-node-room"]')).toBeNull();
+    expect(host.querySelector('[role="separator"]')).toBeNull();
+
+    await act(async () => {
+      root.render(
+        createElement(
+          reactQuery.QueryClientProvider,
+          { client: queryClient },
+          createElement(
+            legacyGraphLogsPane.LegacyGraphLogsPane,
+            paneProps({
+              selectedNodeId: 'review',
+              selectedLogRowId: 'start-review',
+              splitMode: 'split',
+              onCloseRoom,
+            })
+          )
+        )
+      );
+    });
+    await flush();
+    const viewPanel = host.querySelector('#legacy-run-view');
+    const roomPanel = host.querySelector('#legacy-run-room');
+    expect(viewPanel).not.toBeNull();
+    expect(roomPanel).not.toBeNull();
+    expect(host.querySelector('[data-testid="legacy-node-room"]')).not.toBeNull();
+    expect(host.querySelector('[role="separator"]')).not.toBeNull();
+    expect(
+      viewPanel?.getAttribute('data-panel-size') ?? viewPanel?.getAttribute('style') ?? ''
+    ).toMatch(/60/);
+    expect(
+      roomPanel?.getAttribute('data-panel-size') ?? roomPanel?.getAttribute('style') ?? ''
+    ).toMatch(/40/);
+
+    await act(async () => {
+      root.render(
+        createElement(
+          reactQuery.QueryClientProvider,
+          { client: queryClient },
+          createElement(
+            legacyGraphLogsPane.LegacyGraphLogsPane,
+            paneProps({
+              selectedNodeId: 'review',
+              selectedLogRowId: 'start-review',
+              splitMode: 'single',
+              onCloseRoom,
+            })
+          )
+        )
+      );
+    });
+    await flush();
+    const mainView = host.querySelector('#legacy-run-view');
+    expect(mainView).not.toBeNull();
+    expect((mainView as HTMLElement).hidden).toBe(true);
+    const back = Array.from(host.querySelectorAll('button')).find(candidate =>
+      (candidate.textContent ?? '').includes('Back')
+    );
+    if (back === undefined) throw new Error('missing Back button');
+    await act(async () => {
+      back.click();
+    });
+    expect(closes).toEqual([1]);
+
+    await act(async () => {
+      root.render(
+        createElement(
+          reactQuery.QueryClientProvider,
+          { client: queryClient },
+          createElement(
+            legacyGraphLogsPane.LegacyGraphLogsPane,
+            paneProps({
+              selectedNodeId: null,
+              selectedLogRowId: null,
+              splitMode: 'single',
+              onCloseRoom,
+            })
+          )
+        )
+      );
+    });
+    await flush();
+    const closedMain = host.querySelector('#legacy-run-view');
+    expect(closedMain).not.toBeNull();
+    expect((closedMain as HTMLElement).hidden).toBe(false);
+    expect(host.querySelector('[data-testid="legacy-node-room"]')).toBeNull();
+  });
+
   test('wires pre-selection copy, click-to-loader, and run-change reset', async () => {
     const pending = deferred<WorkflowNodeMessagesResponse>();
     const calls: [string, string][] = [];
@@ -524,7 +708,7 @@ describe('LegacyGraphLogsPane', () => {
     await flush();
 
     expect(host.textContent).toContain('Review');
-    expect(host.textContent).toContain('Select a node');
+    expect(host.querySelector('[data-testid="legacy-node-room"]')).toBeNull();
     expect(selected).toEqual([]);
     expect(calls).toEqual([]);
     expect(host.querySelectorAll('[role="region"]')).toHaveLength(0);
@@ -569,13 +753,15 @@ describe('LegacyGraphLogsPane', () => {
         onSelectNode,
       });
     });
-    await flushUntil(host, 'run-change reset', () =>
-      (host.textContent ?? '').includes('Select a node')
+    await flushUntil(
+      host,
+      'run-change reset',
+      () => host.querySelector('[data-testid="legacy-node-room"]') === null
     );
 
     expect(selected).toEqual(['review', null]);
     expect(host.querySelectorAll('[role="region"]')).toHaveLength(0);
-    expect(host.textContent).toContain('Select a node');
+    expect(host.querySelector('[data-testid="legacy-node-room"]')).toBeNull();
     expect(host.textContent).not.toContain('hello from review');
     expectNoAskHumanChrome(host);
   });
@@ -1433,8 +1619,10 @@ describe('LegacyGraphLogsPane', () => {
         },
       });
     });
-    await flushUntil(host, 'graph run-change reset', () =>
-      (host.textContent ?? '').includes('Select a node')
+    await flushUntil(
+      host,
+      'graph run-change reset',
+      () => host.querySelector('[data-testid="legacy-node-room"]') === null
     );
     expect(selected).toEqual(['setup', null]);
     expect(host.querySelectorAll('[role="region"]')).toHaveLength(0);

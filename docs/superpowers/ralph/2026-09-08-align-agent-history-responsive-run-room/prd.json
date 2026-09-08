@@ -140,8 +140,8 @@
         "US-006"
       ],
       "priority": 7,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/components/workflows/LegacyGraphLogsPane.tsx, LegacyGraphLogsPane.test.tsx, WorkflowExecution.tsx, WorkflowExecution.test.tsx, NodeRunList.tsx, NodeRunList.test.tsx; deleted packages/web/src/lib/select-initial-node.ts and select-initial-node.test.ts."
     },
     {
       "id": "US-008",
