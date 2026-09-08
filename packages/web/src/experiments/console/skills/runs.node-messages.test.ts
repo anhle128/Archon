@@ -115,6 +115,37 @@ describe('getRun inspect boundary', () => {
     expect(result.usage).toBeNull();
   });
 
+  test('maps parent_platform_id from GET run into parentPlatformId', async () => {
+    stubFetch(() =>
+      jsonResponse({
+        run: { ...detailRun('run/1'), parent_platform_id: 'web-parent-1' },
+        events: [],
+        nodeStates: [],
+        pending_interactions: [],
+        usage: null,
+        viewer_is_starter: false,
+        starter_display_name: null,
+      } satisfies RunDetailResponse)
+    );
+    const detail = await getRun('run/1');
+    expect(detail.parentPlatformId).toBe('web-parent-1');
+
+    fetchSpy?.mockRestore();
+    stubFetch(() =>
+      jsonResponse({
+        run: detailRun('run/1'),
+        events: [],
+        nodeStates: [],
+        pending_interactions: [],
+        usage: null,
+        viewer_is_starter: false,
+        starter_display_name: null,
+      } satisfies RunDetailResponse)
+    );
+    const missing = await getRun('run/1');
+    expect(missing.parentPlatformId).toBeNull();
+  });
+
   test('keeps pending interactions, viewer presentation, and string metadata error', async () => {
     const pending: components['schemas']['PendingInteraction'] = {
       id: 'pi-1',

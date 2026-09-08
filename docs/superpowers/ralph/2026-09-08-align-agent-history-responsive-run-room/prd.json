@@ -252,8 +252,8 @@
         "US-010"
       ],
       "priority": 12,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/web/src/experiments/console/skills/runs.ts, runs.node-messages.test.ts, conversations.ts, conversations.test.ts, store/keys.ts, components/ConsoleReplyComposer.tsx/.test.tsx, routes/RunDetailPage.tsx/.test.tsx."
     },
     {
       "id": "US-013",

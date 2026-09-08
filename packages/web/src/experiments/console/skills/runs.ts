@@ -84,6 +84,7 @@ export interface ConsoleRunDetail {
   starterDisplayName: string | null;
   runError: string | null;
   nodeExecutions?: NodeExecution[];
+  parentPlatformId: string | null;
 }
 
 export async function getRun(id: string): Promise<ConsoleRunDetail> {
@@ -97,6 +98,7 @@ export async function getRun(id: string): Promise<ConsoleRunDetail> {
     nodeStates: res.nodeStates,
     approval,
     usage: res.usage,
+    parentPlatformId: res.run.parent_platform_id ?? null,
     pendingInteractions: res.pending_interactions ?? [],
     // OpenAPI types this as boolean; === true still maps missing runtime values to false.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare -- US-001 locked mapping

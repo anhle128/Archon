@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### parent_platform_id is optional string, not null
+- **Where**: `packages/web/src/experiments/console/skills/runs.ts`, `runs.node-messages.test.ts`, `RunDetailPage.test.tsx`
+- **Pattern**: OpenAPI types `parent_platform_id` as `string | undefined`. Fixtures that `satisfies RunDetailResponse` cannot assign `null`. Omit the field for the missing case; `getRun` maps it with `?? null`.
+- **Example**: `parentPlatformId: res.run.parent_platform_id ?? null`
+
+### Invalidate parent-conversation keys in page tests
+- **Where**: `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx`
+- **Pattern**: `useEntity(K.parentConversation(...))` caches by `parent-conversation:`. `afterEach` must `invalidate('parent-conversation')` or a later run reuses the previous parent lookup.
+- **Example**: `invalidate('parent-conversation');`
+
 ### Log sections drain independently of the room
 - **Where**: `packages/web/src/experiments/console/components/inspect/ConsoleExecutionHistory.tsx`, `ConsoleInspectPane.tsx`
 - **Pattern**: Each `logEntries` section loads its own node messages. Room-only tests that expected `loadMessages` to stay empty while Log is mounted will see plan/loop fetches. Assert the room node was not fetched, or allow stream loads.
@@ -444,5 +454,34 @@
 - With `logEntries`, RunStream must not keep the merged conversation timeline; global "plan output" assertions belong only to the no-`logEntries` fallback
 - Log sections drain even when the selected room is a gate/child workflow; room-only empty-fetch assertions must ignore stream loads
 - Controlled Other is derived from draft values; typing a listed option selects that option (same as Legacy AskCard)
+
+---
+
+## 2026-09-09 — US-012: Add a safe console reply composer
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/skills/runs.ts` — `ConsoleRunDetail.parentPlatformId` from `parent_platform_id`
+- `packages/web/src/experiments/console/skills/runs.node-messages.test.ts` — maps `web-parent-1` and missing parent to `null`
+- `packages/web/src/experiments/console/skills/conversations.ts` — `getConversation(platformId, { signal })` GET `/api/conversations/:id`
+- `packages/web/src/experiments/console/skills/conversations.test.ts` — encoded URL, summary mapping, HttpError, AbortSignal, distinct `K.parentConversation` keys
+- `packages/web/src/experiments/console/store/keys.ts` — `K.parentConversation(platformId | null)` with encodeURIComponent
+- `packages/web/src/experiments/console/components/ConsoleReplyComposer.tsx` — `ReplyDestinationState`; Send only when ready; factual disabled copy
+- `packages/web/src/experiments/console/components/ConsoleReplyComposer.test.tsx` — loading/missing/error/non_web copy, trim+clear after fulfill, keep draft on reject
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — `useEntity` parent lookup, no fetch when null, `skill.sendMessage` only in ready, composer at page bottom
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` — no parent / non-web / web parent; send URL contains encoded parent id; no POST `/api/conversations`
+
+**Acceptance criteria verified**:
+- [x] `getRun` maps `parent_platform_id` into `ConsoleRunDetail.parentPlatformId`
+- [x] `getConversation` GET `/api/conversations/:id` with AbortSignal
+- [x] `K.parentConversation` distinct encoding for slash vs colon vs null
+- [x] ConsoleReplyComposer enables Send only for ready; factual disabled copy otherwise
+- [x] RunDetailPage validates `platformType === 'web'`, sends via `skill.sendMessage`, never creates a fallback conversation
+- [x] Tests in runs.node-messages, conversations, ConsoleReplyComposer, and RunDetailPage pass
+
+**Learnings**:
+- OpenAPI `parent_platform_id` is optional string, not `string | null`; assigning `null` in `satisfies RunDetailResponse` fails `tsc`
+- Creating a conversation is POST `/api/conversations`; sending is POST `/api/conversations/:id/message` — assert create by exact path, not prefix
+- Composer stays on the page under the inspect pane so room-open and room-closed both have it
 
 ---

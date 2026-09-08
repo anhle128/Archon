@@ -17,6 +17,10 @@ import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
 import { ConsoleInspectPane } from '../components/ConsoleInspectPane';
+import {
+  ConsoleReplyComposer,
+  type ReplyDestinationState,
+} from '../components/ConsoleReplyComposer';
 import { ConsoleAskChrome } from '../components/ask/ConsoleAskChrome';
 import {
   createAskAnswerController,
@@ -36,6 +40,7 @@ import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import { runMessageConversationId, type Run, type RunEnvOverlay } from '../primitives/run';
+import type { ConversationSummary } from '../primitives/conversation';
 import {
   applyRoomDeepLink,
   chooseExecutionForNode,
@@ -172,6 +177,13 @@ export function RunDetailPage(): ReactElement {
   const { data: detail, error: detailError } = useEntity<ConsoleRunDetail | null>(
     runId !== undefined ? K.run(runId) : 'noop:no-run-id',
     () => (runId !== undefined ? skill.getRun(runId) : Promise.resolve(null))
+  );
+
+  const parentPlatformId = detail?.parentPlatformId ?? null;
+  const parentConversation = useEntity<ConversationSummary | null>(
+    K.parentConversation(parentPlatformId),
+    () =>
+      parentPlatformId === null ? Promise.resolve(null) : skill.getConversation(parentPlatformId)
   );
 
   // Messages are tied to the run's conversation — and the /messages endpoint
@@ -620,6 +632,17 @@ export function RunDetailPage(): ReactElement {
             : { kind: 'node', rowId: selectedRow.id }
         );
 
+  const replyState: ReplyDestinationState =
+    parentPlatformId === null
+      ? { kind: 'missing' }
+      : parentConversation.error !== undefined
+        ? { kind: 'error' }
+        : parentConversation.loading
+          ? { kind: 'loading' }
+          : parentConversation.data?.platformType === 'web'
+            ? { kind: 'ready', parentPlatformId }
+            : { kind: 'non_web' };
+
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
       <section
@@ -709,6 +732,13 @@ export function RunDetailPage(): ReactElement {
           )}
         </div>
 
+        <ConsoleReplyComposer
+          state={replyState}
+          onSend={async (message: string): Promise<void> => {
+            if (replyState.kind !== 'ready') return;
+            await skill.sendMessage(replyState.parentPlatformId, message);
+          }}
+        />
         <RunActionBar run={run} />
       </section>
     </StreamContextProvider>

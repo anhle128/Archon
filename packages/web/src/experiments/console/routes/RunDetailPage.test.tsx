@@ -245,6 +245,8 @@ describe('RunDetailPage inspect selection', () => {
   let cwd = '';
   let workflow = '';
   let answerPosts: { path: string; body: unknown }[] = [];
+  let conversationCreates: string[] = [];
+  let messagePosts: { path: string; body: unknown }[] = [];
 
   beforeEach(() => {
     seq += 1;
@@ -253,6 +255,8 @@ describe('RunDetailPage inspect selection', () => {
     cwd = `/repo us010 ${String(seq)}`;
     workflow = `inspect-us010-${String(seq)}`;
     answerPosts = [];
+    conversationCreates = [];
+    messagePosts = [];
     win = installHappyDom();
     win.localStorage.clear();
     const el = win.document.createElement('div');
@@ -276,6 +280,7 @@ describe('RunDetailPage inspect selection', () => {
     invalidate('noop:no-conversation-id');
     invalidate('noop:no-project-id');
     invalidate('noop:no-run-id');
+    invalidate('parent-conversation');
     fetchSpy?.mockRestore();
     fetchSpy = undefined;
     win.localStorage.clear();
@@ -430,6 +435,9 @@ describe('RunDetailPage inspect selection', () => {
       pendingInteractions?: PendingInteraction[];
       viewerIsStarter?: boolean;
       starterDisplayName?: string | null;
+      parentPlatformId?: string | null;
+      parentPlatformType?: string;
+      parentConversationStatus?: number;
     } = {}
   ): void {
     const detailStatus = options.status ?? 'running';
@@ -460,7 +468,12 @@ describe('RunDetailPage inspect selection', () => {
         }
         return Promise.resolve(
           jsonResponse({
-            run: runPayload(detailStatus, options.metadata),
+            run: {
+              ...runPayload(detailStatus, options.metadata),
+              ...(options.parentPlatformId !== undefined && options.parentPlatformId !== null
+                ? { parent_platform_id: options.parentPlatformId }
+                : {}),
+            },
             events: options.events ?? eventsFor(runId),
             nodeStates: options.nodeStates ?? NODE_STATES,
             pending_interactions: options.pendingInteractions ?? [],
@@ -543,6 +556,35 @@ describe('RunDetailPage inspect selection', () => {
         if (typeof init.body !== 'string') throw new Error('Ask answer body must be JSON text');
         answerPosts.push({ path, body: JSON.parse(init.body) as unknown });
         return Promise.resolve(jsonResponse({ success: true, message: 'ok' }));
+      }
+      if (path === '/api/conversations' || pathNoQuery === '/api/conversations') {
+        conversationCreates.push(path);
+        return Promise.resolve(jsonResponse({ error: 'must not create conversations' }, 500));
+      }
+      if (pathNoQuery.startsWith('/api/conversations/')) {
+        const rest = pathNoQuery.slice('/api/conversations/'.length);
+        if (rest.endsWith('/message')) {
+          if (init?.method !== 'POST') throw new Error('conversation message must use POST');
+          messagePosts.push({
+            path,
+            body: typeof init.body === 'string' ? JSON.parse(init.body) : init.body,
+          });
+          return Promise.resolve(jsonResponse({ accepted: true, status: 'ok' }));
+        }
+        const status = options.parentConversationStatus ?? 200;
+        if (status !== 200) {
+          return Promise.resolve(jsonResponse({ error: 'conversation lookup failed' }, status));
+        }
+        const platformId = decodeURIComponent(rest);
+        return Promise.resolve(
+          jsonResponse({
+            id: 'db-parent',
+            platform_conversation_id: platformId,
+            platform_type: options.parentPlatformType ?? 'web',
+            title: 'Parent chat',
+            last_activity_at: CREATED_AT,
+          })
+        );
       }
       return Promise.resolve(jsonResponse({ error: `unmocked ${path}` }, 404));
     }) as typeof fetch);
@@ -1008,6 +1050,82 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.querySelector('[data-ask-draft-count]')?.getAttribute('data-ask-draft-count')).toBe(
       '1'
     );
+  });
+
+  test('sends replies only to an existing parent web conversation', async () => {
+    stubPageFetch();
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil('missing parent', () =>
+      (host.textContent ?? '').includes(
+        'Replies need a parent web conversation. This run has none.'
+      )
+    );
+    const missingSend = [...host.querySelectorAll('button')].find(button =>
+      (button.textContent ?? '').includes('Send')
+    );
+    expect((missingSend as unknown as HTMLButtonElement | undefined)?.disabled).toBe(true);
+    expect(conversationCreates).toEqual([]);
+
+    await act(async () => {
+      root.unmount();
+    });
+    invalidate('run');
+    invalidate('parent-conversation');
+    stubPageFetch({ parentPlatformId: 'cli-parent-1', parentPlatformType: 'cli' });
+    root = createRoot(host);
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil('non-web parent', () =>
+      (host.textContent ?? '').includes(
+        'Replies are available only for runs with a parent web conversation.'
+      )
+    );
+    const nonWebSend = [...host.querySelectorAll('button')].find(button =>
+      (button.textContent ?? '').includes('Send')
+    );
+    expect((nonWebSend as unknown as HTMLButtonElement | undefined)?.disabled).toBe(true);
+    expect(conversationCreates).toEqual([]);
+
+    await act(async () => {
+      root.unmount();
+    });
+    invalidate('run');
+    invalidate('parent-conversation');
+    stubPageFetch({ parentPlatformId: 'web/parent-1', parentPlatformType: 'web' });
+    root = createRoot(host);
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil('web parent', () => host.querySelector('textarea:not([disabled])') !== null);
+    const textarea = host.querySelector('textarea');
+    if (textarea === null) throw new Error('missing reply field');
+    const fiberKey = Object.keys(textarea).find(key => key.startsWith('__reactProps$'));
+    if (fiberKey === undefined) throw new Error('missing react props');
+    const onChange = (
+      textarea as unknown as Record<
+        string,
+        { onChange?: (event: { target: { value: string } }) => void }
+      >
+    )[fiberKey]?.onChange;
+    await act(async () => {
+      onChange?.({ target: { value: 'follow up' } });
+    });
+    await flush();
+    const webSend = [...host.querySelectorAll('button')].find(button =>
+      (button.textContent ?? '').includes('Send')
+    );
+    if (webSend === undefined) throw new Error('missing Send');
+    expect((webSend as unknown as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => {
+      (webSend as unknown as HTMLButtonElement).click();
+    });
+    await flushUntil('posted', () => messagePosts.length > 0);
+    expect(messagePosts[0]?.path).toContain('web%2Fparent-1');
+    expect(messagePosts[0]?.body).toEqual({ message: 'follow up' });
+    expect(conversationCreates).toEqual([]);
   });
 
   test('renders CAP-7 failure as error chrome without an awaiting pill', async () => {
