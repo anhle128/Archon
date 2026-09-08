@@ -10,6 +10,7 @@ import {
   candidateTree,
   checkPlaywright,
   COMMANDS,
+  freeze,
   gate,
   imageHash,
   manifestSchema,
@@ -27,7 +28,12 @@ import { registerBuiltinProviders } from '@archon/providers';
 
 const scratch: string[] = [];
 const verificationEnv = process.env;
-const bindingKeys = ['UI_VERIFY_AUTHORITY', 'UI_VERIFY_LOCK', 'UI_VERIFY_CHECKS'];
+const bindingKeys = [
+  'UI_VERIFY_AUTHORITY',
+  'UI_VERIFY_LOCK',
+  'UI_VERIFY_CHECKS',
+  'UI_VERIFY_REVIEW',
+];
 const savedBindings = Object.fromEntries(bindingKeys.map(key => [key, verificationEnv[key]]));
 afterEach(() => {
   for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true });
@@ -192,6 +198,119 @@ test('candidate includes staged and unstaged new files and dirty content without
   expect(() => candidateTree(root, baseline)).toThrow('Unapproved new candidate file');
 });
 
+test('candidate accepts JavaScript module fixtures without allowing module files elsewhere', () => {
+  const root = repo();
+  const fixture = 'e2e/fixtures/plannotator/e2e-plannotator.mjs';
+  put(root, fixture, 'export const fixture = true;');
+  const tree = candidateTree(root);
+  expect(git(root, 'show', `${tree}:${fixture}`)).toBe('export const fixture = true;');
+  for (const path of ['e2e/lib/extra.mjs', 'packages/providers/src/e2e-fake/extra.mjs']) {
+    put(root, path, 'export const unexpected = true;');
+    expect(() => candidateTree(root)).toThrow(`Unapproved new candidate file: ${path}`);
+    rmSync(join(root, path));
+  }
+});
+
+test('author can extend only existing fake-provider support before freeze; the gate locks test and CI infrastructure afterward', () => {
+  const root = repo();
+  const dir = temporary();
+  const providerFiles = [
+    'packages/providers/src/e2e-fake/provider.ts',
+    'packages/providers/src/e2e-fake/provider.test.ts',
+  ];
+  const ciFiles = ['.github/workflows/pr-e2e-verify.yml', '.github/workflows/test.yml'];
+  const protectedOwnerFiles = [
+    'migrations/000_combined.sql',
+    'packages/core/src/db/adapters/sqlite.ts',
+    'packages/core/src/db/bundled-schema.generated.ts',
+    'packages/web/src/experiments/console/console-isolation.test.ts',
+    'packages/server/src/routes/api.auth.test.ts',
+    'packages/server/src/routes/api.workflow-runs.test.ts',
+    'packages/core/src/operations/workflow-operations.test.ts',
+  ];
+  const frozenFiles = [...providerFiles, ...ciFiles, ...protectedOwnerFiles];
+  const forbiddenFiles = [
+    'packages/providers/src/claude/provider.ts',
+    'packages/providers/src/types.ts',
+    'packages/providers/src/e2e-fake/capabilities.ts',
+    'packages/web/src/view.ts',
+    ...ciFiles,
+  ];
+  for (const path of [...frozenFiles, ...forbiddenFiles]) put(root, path, '// original\n');
+  git(root, 'add', '.');
+  git(root, 'commit', '-qm', 'test: seed provider boundary');
+  const source = manifest();
+  source.criteria = (['console', 'legacy'] as const).flatMap(surface =>
+    [
+      [1440, 1000],
+      [1280, 900],
+      [390, 844],
+      [768, 1024],
+    ].map(([width, height]) => ({
+      ...source.criteria[0],
+      id: `${surface}-${width}`,
+      surface,
+      viewport: { width, height },
+      visual: {
+        source: 'docs/source.md',
+        actual: `${surface}-${width}-actual.png`,
+        reference: `${surface}-${width}-reference.png`,
+      },
+    }))
+  );
+  put(dir, 'manifest.json', source);
+  put(dir, 'author-notes.md', 'Contract fixture for the authoring-boundary unit test.');
+  put(dir, 'controller.mjs', '// frozen executable');
+  put(dir, 'sources/docs/source.md', 'The room starts closed.\n');
+  put(dir, 'authority.json', {
+    runId: 'test-run',
+    root,
+    head: git(root, 'rev-parse', 'HEAD'),
+    prRepo: 'a/b',
+    issueRepo: 'a/b',
+    files: { 'docs/source.md': digest(root, 'docs/source.md') },
+    artifacts: { 'sources/docs/source.md': digest(dir, 'sources/docs/source.md') },
+    controller: digest(dir, 'controller.mjs'),
+  });
+  verificationEnv.UI_VERIFY_AUTHORITY = JSON.stringify({
+    authorityDigest: digest(dir, 'authority.json'),
+    controllerDigest: digest(dir, 'controller.mjs'),
+  });
+  verificationEnv.UI_VERIFY_REVIEW = JSON.stringify({
+    complete: true,
+    missing: [],
+    sourcePaths: ['docs/source.md'],
+    criterionIds: source.criteria.map(row => row.id),
+  });
+  for (const path of forbiddenFiles) {
+    put(root, path, '// forbidden author change\n');
+    expect(() => freeze(root, dir)).toThrow(`Author changed a non-test file: ${path}`);
+    put(root, path, '// original\n');
+  }
+  for (const path of providerFiles) put(root, path, '// test-only scenario support\n');
+  freeze(root, dir);
+  const lock = JSON.parse(readFileSync(join(dir, 'lock.json'), 'utf8')) as {
+    files: Record<string, string>;
+  };
+  for (const path of frozenFiles) expect(lock.files[path]).toBe(digest(root, path));
+  expect(lock.files['packages/web/src/view.ts']).toBeUndefined();
+  verificationEnv.UI_VERIFY_LOCK = JSON.stringify({ lockDigest: digest(dir, 'lock.json') });
+  const directory = join(dir, 'rounds/round');
+  const current = { candidate: candidateTree(root), round: 'round', directory };
+  put(dir, 'current.json', current);
+  put(directory, 'checks.json', {});
+  verificationEnv.UI_VERIFY_CHECKS = JSON.stringify({
+    ...current,
+    checksDigest: digest(directory, 'checks.json'),
+  });
+  for (const path of frozenFiles) {
+    const original = readFileSync(join(root, path), 'utf8');
+    put(root, path, '// forbidden post-freeze change\n');
+    expect(gate(root, dir, true).findings).toContain(`Locked file changed: ${path}`);
+    put(root, path, original);
+  }
+});
+
 test('Playwright paths use config.rootDir; required skipped/missing/duplicate tests fail', () => {
   const root = '/test/repo';
   expect(checkPlaywright(report(root), manifest(), root)).toEqual([]);
@@ -299,11 +418,21 @@ test('review cannot pass incomplete criteria, stale candidates, missing anchors 
   }
 });
 
-test('real gate rejects changed authority/tests, stale candidates and missing images', () => {
+test('real gate rejects changed text or binary authority, tests, stale candidates and missing images', () => {
   const root = repo();
   const dir = temporary();
   const directory = join(dir, 'rounds/round');
   const source = manifest();
+  const referencePath = 'docs/reference.png';
+  const referenceBytes = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1EAAAAASUVORK5CYII=',
+    'base64'
+  );
+  writeFileSync(join(root, referencePath), referenceBytes);
+  git(root, 'add', referencePath);
+  git(root, 'commit', '-qm', 'test: pin binary reference');
+  mkdirSync(join(dir, 'sources/docs'), { recursive: true });
+  writeFileSync(join(dir, 'sources', referencePath), referenceBytes);
   const candidate = candidateTree(root);
   put(dir, 'manifest.json', source);
   put(dir, 'controller.mjs', '// frozen executable');
@@ -313,8 +442,11 @@ test('real gate rejects changed authority/tests, stale candidates and missing im
     head: git(root, 'rev-parse', 'HEAD'),
     prRepo: 'a/b',
     issueRepo: 'a/b',
-    files: { 'docs/source.md': digest(root, 'docs/source.md') },
-    artifacts: {},
+    files: {
+      'docs/source.md': digest(root, 'docs/source.md'),
+      [referencePath]: digest(root, referencePath),
+    },
+    artifacts: { [`sources/${referencePath}`]: digest(dir, `sources/${referencePath}`) },
     controller: digest(dir, 'controller.mjs'),
   });
   put(dir, 'lock.json', {
@@ -341,6 +473,17 @@ test('real gate rejects changed authority/tests, stale candidates and missing im
     checksDigest: digest(directory, 'checks.json'),
   });
   put(directory, 'review.json', review(candidate));
+  expect(gate(root, dir, true).passed).toBe(true);
+  const changedReference = Buffer.from(referenceBytes);
+  changedReference[changedReference.length - 1] ^= 1;
+  for (const [referenceRoot, path] of [
+    [root, referencePath],
+    [dir, `sources/${referencePath}`],
+  ]) {
+    writeFileSync(join(referenceRoot, path), changedReference);
+    expect(gate(root, dir, true).findings).toContain(`Locked file changed: ${path}`);
+    writeFileSync(join(referenceRoot, path), referenceBytes);
+  }
   expect(gate(root, dir, true).passed).toBe(true);
   const originalLock = readFileSync(join(dir, 'lock.json'), 'utf8');
   put(dir, 'lock.json', {});

@@ -3791,12 +3791,14 @@ nodes:
         model: 'claude-sonnet-5',
         depends_on: ['diagnose'],
       });
-      expect(nodes.get('verify')).toMatchObject({
-        provider: 'codex',
-        model: 'gpt-5.6-sol',
-        context: 'fresh',
-        depends_on: ['run-checks'],
-      });
+      for (const nodeId of ['plan-tests', 'audit-contract', 'diagnose', 'verify']) {
+        expect(nodes.get(nodeId)).toMatchObject({
+          provider: 'codex',
+          model: 'gpt-5.6-sol',
+          context: 'fresh',
+        });
+      }
+      expect(nodes.get('verify')?.depends_on).toEqual(['run-checks']);
       expect(nodes.get('gate')).toMatchObject({
         depends_on: ['acceptance'],
         route_loop: {

@@ -222,10 +222,18 @@ function criticalFiles(root: string): string[] {
     path =>
       path.startsWith('e2e/') ||
       path.startsWith('.archon/scripts/') ||
+      path.startsWith('.github/workflows/') ||
       path.startsWith('scripts/') ||
       path.startsWith('packages/providers/src/e2e-fake/') ||
       /\/src\/test\//.test(path) ||
       path === '.archon/workflows/pr-e2e-verify.yaml' ||
+      path === 'migrations/000_combined.sql' ||
+      path === 'packages/core/src/db/adapters/sqlite.ts' ||
+      path === 'packages/core/src/db/bundled-schema.generated.ts' ||
+      path === 'packages/web/src/experiments/console/console-isolation.test.ts' ||
+      path === 'packages/server/src/routes/api.auth.test.ts' ||
+      path === 'packages/server/src/routes/api.workflow-runs.test.ts' ||
+      path === 'packages/core/src/operations/workflow-operations.test.ts' ||
       /(^|\/)(package\.json|package-lock\.json|bun\.lockb?|yarn\.lock|pnpm-lock\.yaml|[^/]*\.config\.[^/]+|tsconfig[^/]*\.json|bunfig\.toml|\.gitignore|\.prettierignore|\.prettierrc[^/]*)$/.test(
         path
       )
@@ -234,7 +242,8 @@ function criticalFiles(root: string): string[] {
 function allowedNewFile(path: string): boolean {
   return (
     /^(packages\/[^/]+\/src\/|e2e\/(ui|lib|fixtures)\/|scripts\/|docs\/)/.test(path) &&
-    /\.(tsx?|jsx?|json|ya?ml|css|html|md|png|webp|svg)$/.test(path) &&
+    (/\.(tsx?|jsx?|json|ya?ml|css|html|md|png|webp|svg)$/.test(path) ||
+      (path.startsWith('e2e/fixtures/') && path.endsWith('.mjs'))) &&
     !/(^|\/)(node_modules|reports|test-results|dist)(\/|$)/.test(path)
   );
 }
@@ -412,7 +421,7 @@ function authority(root: string, dir: string): z.infer<typeof authoritySchema> {
   return value;
 }
 
-function freeze(root: string, dir: string): void {
+export function freeze(root: string, dir: string): void {
   const source = authority(root, dir);
   ensure(!existsSync(join(dir, 'lock.json')), 'Contract is already frozen');
   const manifest = manifestSchema.parse(readJson(join(dir, 'manifest.json')));
@@ -504,6 +513,9 @@ function freeze(root: string, dir: string): void {
     ensure(
       /^e2e\/(ui|lib|fixtures)\//.test(path) ||
         path === 'e2e/playwright.config.ts' ||
+        ((path === 'packages/providers/src/e2e-fake/provider.ts' ||
+          path === 'packages/providers/src/e2e-fake/provider.test.ts') &&
+          git(root, ['ls-tree', '--name-only', source.head, '--', path]) === path) ||
         manifest.unitTests.includes(path),
       `Author changed a non-test file: ${path}`
     );
