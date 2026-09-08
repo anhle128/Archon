@@ -49,6 +49,7 @@ development_status:
   5-3-open-the-same-node-room-from-the-graph-legacy: done
   5-4-open-the-node-room-from-the-chat-timeline-legacy: done
   5-5-inspect-a-run-as-nodes-on-command-center: done
+  5-6-align-agent-history-and-responsive-run-room: backlog
   epic-5-retrospective: optional
 
   epic-6: done
