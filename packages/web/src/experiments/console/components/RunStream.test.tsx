@@ -1,4 +1,4 @@
-import { act, createElement } from 'react';
+import { act, createElement, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -596,8 +596,7 @@ describe('RunStream selectable unmerged log rows', () => {
     expect(markup).toContain('Router #1');
     expect(markup).toContain('Router #2');
     expect(markup).toContain('Loop ×2');
-    expect(markup).toContain('plan output');
-    expect(markup).toContain('router output');
+    expect(markup).toContain('data-execution-row-id="plan-start"');
     expect(markup).toContain('completed');
     expect(markup).toContain('00:01');
     expect(markup).toContain('2t');
@@ -607,16 +606,16 @@ describe('RunStream selectable unmerged log rows', () => {
   test('filtering to one node hides other node rows and messages; All nodes restores them', () => {
     const filtered = renderStreamMarkup({ selectedNodeId: 'plan' });
     expect(dividerIds(filtered)).toEqual(['plan-start']);
-    expect(filtered).toContain('plan output');
+    expect(filtered).toContain('data-execution-row-id="plan-start"');
     expect(filtered).not.toContain('Loop ×1');
     expect(filtered).not.toContain('Router #1');
     expect(filtered).not.toContain('router output');
 
     const restored = renderStreamMarkup({ selectedNodeId: 'all' });
     expect(dividerIds(restored)).toHaveLength(5);
-    expect(restored).toContain('plan output');
-    expect(restored).toContain('router output');
     expect(restored).toContain('Loop ×2');
+    expect(restored).not.toContain('plan output');
+    expect(restored).not.toContain('router output');
   });
 
   test('cumulative node usage renders only on the showNodeUsage row', () => {
@@ -632,6 +631,42 @@ describe('RunStream selectable unmerged log rows', () => {
     expect(loopTwo).toContain('Loop ×2');
     expect(loopTwo).toContain('$1.25');
     expect(loopTwo).toContain('Show usage breakdown for this node');
+  });
+});
+
+describe('RunStream exact execution sections', () => {
+  test('renders one section per log entry with only that entry body', () => {
+    const fixture = fiveDividerFixture();
+    const markup = renderToStaticMarkup(
+      createElement(StreamContextProvider, {
+        value: { runStartedAt: RUN_STARTED },
+        children: createElement(RunStream, {
+          messages: fixture.messages,
+          events: fixture.runEvents,
+          showToolCalls: false,
+          showSystem: false,
+          selectedNodeId: 'all',
+          usage: fixture.usage,
+          logEntries: fixture.logEntries,
+          renderExecutionBody: (entry): ReactElement =>
+            createElement('div', { 'data-testid': `body-${entry.row.id}` }, entry.row.id),
+        }),
+      })
+    );
+    const ids = [...markup.matchAll(/data-execution-row-id="([^"]+)"/g)].map(
+      match => match[1] ?? ''
+    );
+    expect(ids).toEqual(['plan-start', 'loop-i1-start', 'route-1', 'route-2', 'loop-i2-start']);
+    const planStart = markup.indexOf('data-execution-row-id="plan-start"');
+    const loopStart = markup.indexOf('data-execution-row-id="loop-i1-start"');
+    const planSection = markup.slice(planStart, loopStart);
+    expect(planSection).toContain('data-testid="body-plan-start"');
+    expect(planSection).not.toContain('data-testid="body-loop-i1-start"');
+    expect(planSection).not.toContain('plan output');
+    expect(planSection).not.toContain('router output');
+    const loopSection = markup.slice(loopStart, markup.indexOf('data-execution-row-id="route-1"'));
+    expect(loopSection).toContain('data-testid="body-loop-i1-start"');
+    expect(loopSection).not.toContain('data-testid="body-plan-start"');
   });
 });
 

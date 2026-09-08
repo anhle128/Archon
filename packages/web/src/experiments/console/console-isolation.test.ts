@@ -106,6 +106,8 @@ describe('console NFR4 isolation', () => {
       'components/ConsoleNodeRoom.tsx',
       'components/inspect/ConsoleRoomHeader.tsx',
       'components/inspect/ConsoleAgentHistoryList.tsx',
+      'components/inspect/ConsoleExecutionHistory.tsx',
+      'components/inspect/execution-interactions.ts',
       'components/NodeDivider.tsx',
       'routes/RunDetailPage.tsx',
     ];

@@ -34,11 +34,13 @@ import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import { StreamContextProvider } from '../lib/stream-context';
 import type { AskActionStateByRequest } from './ask/ask-answer-controller';
+import type { AskDraft, AskDraftByRequest } from './ask/parse-ask-envelope';
 import { ArtifactPanel } from './ArtifactPanel';
 import { ConsoleNodeRoom } from './ConsoleNodeRoom';
 import { RunGraphPanel } from './RunGraphPanel';
 import { RunStream } from './RunStream';
 import type { ConsoleLogEntry } from './inspect/build-console-log-entries';
+import { ConsoleExecutionHistory } from './inspect/ConsoleExecutionHistory';
 import type { LogRow } from './inspect/build-log-rows';
 import type { ConsoleExecutionHeaderOption } from './inspect/ConsoleRoomHeader';
 import { isInspectRunLive } from './inspect/inspect-status';
@@ -96,6 +98,8 @@ export interface ConsoleInspectPaneProps {
   scopeKey?: string;
   initialScrollTop?: number;
   onScrollTopChange?: (scrollTop: number) => void;
+  askDrafts?: AskDraftByRequest;
+  onAskDraftChange?: (requestId: string, draft: AskDraft) => void;
 }
 
 function toExecutionRow(row: LogRow): ExecutionRow {
@@ -193,6 +197,8 @@ export function ConsoleInspectPane({
   scopeKey,
   initialScrollTop,
   onScrollTopChange,
+  askDrafts = {},
+  onAskDraftChange,
 }: ConsoleInspectPaneProps): ReactElement {
   const paneRef = useRef<HTMLDivElement>(null);
   const measuredMode = useContainerSplitMode(paneRef);
@@ -242,6 +248,28 @@ export function ConsoleInspectPane({
             onSelectLogRow={(rowId: string, nodeId: string): void => {
               onSelectNode(nodeId, rowId);
             }}
+            renderExecutionBody={(entry): ReactElement => (
+              <ConsoleExecutionHistory
+                entry={entry}
+                allEntries={logEntries}
+                run={run}
+                events={rawEvents}
+                isLive={isInspectRunLive(run.status)}
+                loadMessages={loadMessages}
+                loadMessage={loadMessage}
+                pendingInteractions={pendingInteractions}
+                nodeStates={nodeStates}
+                approval={approval}
+                showToolCalls={showToolCalls}
+                showSystem={showSystem}
+                viewerIsStarter={viewerIsStarter}
+                starterDisplayName={starterDisplayName}
+                actionStates={actionStates}
+                onSubmitAsk={onSubmitAsk}
+                askDrafts={askDrafts}
+                onAskDraftChange={onAskDraftChange}
+              />
+            )}
           />
         </StreamContextProvider>
         {logFooter}
@@ -300,6 +328,8 @@ export function ConsoleInspectPane({
           scopeKey={scopeKey}
           initialScrollTop={initialScrollTop}
           onScrollTopChange={onScrollTopChange}
+          askDrafts={askDrafts}
+          onAskDraftChange={onAskDraftChange}
         />
       </div>
     );

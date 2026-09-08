@@ -232,8 +232,8 @@
         "US-010"
       ],
       "priority": 11,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/web/src/experiments/console/components/inspect/execution-interactions.ts/.test.ts, ConsoleExecutionHistory.tsx/.test.tsx; RunStream.tsx/.test.tsx; ask/ConsoleAskCard.tsx/.test.tsx; ConsoleInspectPane.tsx/.test.tsx; ConsoleNodeRoom.tsx; routes/RunDetailPage.tsx/.test.tsx; console-isolation.test.ts."
     },
     {
       "id": "US-012",

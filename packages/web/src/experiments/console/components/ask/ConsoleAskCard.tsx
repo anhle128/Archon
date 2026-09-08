@@ -1,4 +1,6 @@
-import { useMemo, useRef, useState } from 'react';
+import { useRef } from 'react';
+
+import { askCardId } from '@/lib/execution-room-model';
 
 import type { AskAnswerBody, PendingInteraction } from '../../skills/runs';
 import { ensureUtc, formatDurationMs } from '../../lib/format';
@@ -22,8 +24,42 @@ export interface ConsoleAskCardProps {
   nowMs: number;
   /** Unique per mount context so stream and room copies never share a DOM id. */
   mountContext?: string;
+  draft: AskDraft;
+  onDraftChange: (next: AskDraft) => void;
   onSubmit: (body: Extract<AskAnswerBody, { answers: unknown }>) => void;
   onDecline: () => void;
+}
+
+export function replaceDraftValue(
+  draft: AskDraft,
+  questionId: string,
+  value: string | string[]
+): AskDraft {
+  return { ...draft, [questionId]: value };
+}
+
+function listedOptions(question: AskQuestion, value: string | string[] | undefined): string[] {
+  const items = Array.isArray(value) ? value : [];
+  return items.filter(item => question.options.includes(item));
+}
+
+function otherTextFromDraft(question: AskQuestion, value: string | string[] | undefined): string {
+  if (question.selection === 'single') {
+    return typeof value === 'string' && !question.options.includes(value) ? value : '';
+  }
+  if (!Array.isArray(value)) return '';
+  return value.find(item => !question.options.includes(item)) ?? '';
+}
+
+function isOtherOn(question: AskQuestion, value: string | string[] | undefined): boolean {
+  if (!question.allowOther) return false;
+  if (question.options.length === 0) return true;
+  if (question.selection === 'single') {
+    return typeof value === 'string' && !question.options.includes(value);
+  }
+  return (
+    otherTextFromDraft(question, value).length > 0 || (Array.isArray(value) && value.includes(''))
+  );
 }
 
 function elapsedWaitingMs(createdAt: string, nowMs: number): number {
@@ -113,14 +149,12 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
     autoFocus,
     nowMs,
     mountContext = 'default',
+    draft,
+    onDraftChange,
     onSubmit,
     onDecline,
   } = props;
 
-  const [listedSingle, setListedSingle] = useState<Record<string, string>>({});
-  const [listedMulti, setListedMulti] = useState<Record<string, string[]>>({});
-  const [otherSelected, setOtherSelected] = useState<Record<string, boolean>>({});
-  const [otherText, setOtherText] = useState<Record<string, string>>({});
   const declineDialogRef = useRef<HTMLDialogElement | null>(null);
 
   function openDeclineDialog(): void {
@@ -131,60 +165,56 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
     declineDialogRef.current?.close();
   }
 
-  const draft = useMemo((): AskDraft => {
-    const next: AskDraft = {};
-    for (const question of questions) {
-      if (question.selection === 'single') {
-        if (otherSelected[question.id]) {
-          next[question.id] = otherText[question.id] ?? '';
-        } else if (listedSingle[question.id] !== undefined) {
-          next[question.id] = listedSingle[question.id];
-        }
-        continue;
-      }
-      const selected = listedMulti[question.id] ?? [];
-      if (otherSelected[question.id]) {
-        next[question.id] = [...selected, otherText[question.id] ?? ''];
-      } else {
-        next[question.id] = selected;
-      }
-    }
-    return next;
-  }, [listedMulti, listedSingle, otherSelected, otherText, questions]);
-
   const draftValid = isAskDraftValid(questions, draft);
   const isPending = presentation.viewState === 'pending';
   const lockAnswers = !isPending || !viewerIsStarter;
   const showActions = isPending && viewerIsStarter;
   const waitingLabel = `Waiting for ${starterDisplayName ?? 'the run starter'} to answer`;
 
-  function selectSingle(questionId: string, option: string): void {
-    setOtherSelected(current => ({ ...current, [questionId]: false }));
-    setListedSingle(current => ({ ...current, [questionId]: option }));
+  function selectSingle(question: AskQuestion, option: string): void {
+    onDraftChange(replaceDraftValue(draft, question.id, option));
   }
 
-  function selectSingleOther(questionId: string): void {
-    setOtherSelected(current => ({ ...current, [questionId]: true }));
+  function selectSingleOther(question: AskQuestion): void {
+    onDraftChange(
+      replaceDraftValue(draft, question.id, otherTextFromDraft(question, draft[question.id]))
+    );
   }
 
-  function toggleMulti(questionId: string, option: string, checked: boolean): void {
-    setListedMulti(current => {
-      const existing = current[questionId] ?? [];
-      const next = checked
-        ? existing.includes(option)
-          ? existing
-          : [...existing, option]
-        : existing.filter(item => item !== option);
-      return { ...current, [questionId]: next };
-    });
+  function toggleMulti(question: AskQuestion, option: string, checked: boolean): void {
+    const extra = otherTextFromDraft(question, draft[question.id]);
+    const listed = listedOptions(question, draft[question.id]);
+    const nextListed = checked
+      ? listed.includes(option)
+        ? listed
+        : [...listed, option]
+      : listed.filter(item => item !== option);
+    const keepOther = isOtherOn(question, draft[question.id]);
+    const next = keepOther ? [...nextListed, extra] : nextListed;
+    onDraftChange(replaceDraftValue(draft, question.id, next));
   }
 
-  function setQuestionOtherSelected(questionId: string, selected: boolean): void {
-    setOtherSelected(current => ({ ...current, [questionId]: selected }));
+  function setQuestionOtherSelected(question: AskQuestion, selected: boolean): void {
+    const listed = listedOptions(question, draft[question.id]);
+    if (selected) {
+      onDraftChange(
+        replaceDraftValue(draft, question.id, [
+          ...listed,
+          otherTextFromDraft(question, draft[question.id]),
+        ])
+      );
+      return;
+    }
+    onDraftChange(replaceDraftValue(draft, question.id, listed));
   }
 
-  function setQuestionOtherText(questionId: string, value: string): void {
-    setOtherText(current => ({ ...current, [questionId]: value }));
+  function setQuestionOtherText(question: AskQuestion, value: string): void {
+    if (question.selection === 'single') {
+      onDraftChange(replaceDraftValue(draft, question.id, value));
+      return;
+    }
+    const listed = listedOptions(question, draft[question.id]);
+    onDraftChange(replaceDraftValue(draft, question.id, [...listed, value]));
   }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>): void {
@@ -197,6 +227,8 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
 
   return (
     <form
+      id={askCardId(interaction.tool_use_id)}
+      tabIndex={-1}
       aria-label={`question from agent, ${String(questions.length)} questions`}
       onSubmit={handleSubmit}
     >
@@ -225,7 +257,9 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
           ))}
           <fieldset disabled={lockAnswers} className="min-w-0 space-y-4 border-0 p-0">
             {questions.map((question, questionIndex) => {
-              const isOtherOn = otherSelected[question.id] ?? false;
+              const value = draft[question.id];
+              const otherOn = isOtherOn(question, value);
+              const listed = listedOptions(question, value);
               return (
                 <fieldset key={question.id} className="min-w-0 space-y-2 border-0 p-0">
                   <legend className="text-sm font-medium text-text-primary">
@@ -245,10 +279,10 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                             type="radio"
                             name={`${mountContext}:${interaction.id}:${question.id}`}
                             value={option}
-                            checked={!isOtherOn && listedSingle[question.id] === option}
+                            checked={!otherOn && value === option}
                             autoFocus={focusFirst}
                             onChange={(): void => {
-                              selectSingle(question.id, option);
+                              selectSingle(question, option);
                             }}
                           />
                           <span>{option}</span>
@@ -265,10 +299,10 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                           type="checkbox"
                           name={`${mountContext}:${interaction.id}:${question.id}`}
                           value={option}
-                          checked={(listedMulti[question.id] ?? []).includes(option)}
+                          checked={listed.includes(option)}
                           autoFocus={focusFirst}
                           onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
-                            toggleMulti(question.id, option, event.target.checked);
+                            toggleMulti(question, option, event.target.checked);
                           }}
                         />
                         <span>{option}</span>
@@ -282,27 +316,27 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                           type={question.selection === 'single' ? 'radio' : 'checkbox'}
                           name={`${mountContext}:${interaction.id}:${question.id}`}
                           value="__other__"
-                          checked={isOtherOn}
+                          checked={otherOn}
                           autoFocus={
                             autoFocus && questionIndex === 0 && question.options.length === 0
                           }
                           onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                             if (question.selection === 'single') {
-                              selectSingleOther(question.id);
+                              selectSingleOther(question);
                               return;
                             }
-                            setQuestionOtherSelected(question.id, event.target.checked);
+                            setQuestionOtherSelected(question, event.target.checked);
                           }}
                         />
                         <span>Other</span>
                       </label>
-                      {isOtherOn ? (
+                      {otherOn ? (
                         <textarea
                           aria-label={`Other answer for ${question.prompt}`}
                           aria-required="true"
-                          value={otherText[question.id] ?? ''}
+                          value={otherTextFromDraft(question, value)}
                           onChange={(event: React.ChangeEvent<HTMLTextAreaElement>): void => {
-                            setQuestionOtherText(question.id, event.target.value);
+                            setQuestionOtherText(question, event.target.value);
                           }}
                         />
                       ) : null}

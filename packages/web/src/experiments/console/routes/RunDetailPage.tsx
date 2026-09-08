@@ -695,6 +695,10 @@ export function RunDetailPage(): ReactElement {
                 onScrollTopChange={(scrollTop: number): void => {
                   setRoom(previous => rememberRoomScroll(previous, transcriptScopeKey, scrollTop));
                 }}
+                askDrafts={askDrafts}
+                onAskDraftChange={(requestId: string, draft): void => {
+                  setAskDrafts(previous => ({ ...previous, [requestId]: draft }));
+                }}
               />
             </>
           ) : (

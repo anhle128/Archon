@@ -622,7 +622,9 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.textContent).toContain('Review plan in Plannotator');
     expect(host.textContent).toContain('Review session document');
     expect(host.querySelector('a[href="https://plannotator.example/review"]')).not.toBeNull();
-    expect(host.textContent).not.toContain(REVIEW_TEXT);
+    expect(host.querySelector('[aria-label="review room"]')?.textContent).not.toContain(
+      REVIEW_TEXT
+    );
     expect(host.textContent).toContain('Waiting for approval');
     expect(host.textContent).not.toContain('Awaiting input (');
   });
@@ -968,6 +970,44 @@ describe('RunDetailPage inspect selection', () => {
       () => host.querySelector('[aria-label="review room"] form') !== null
     );
     expect(host.querySelector('[aria-label="approve room"] form')).toBeNull();
+  });
+
+  test('shares Ask drafts between the log section and room', async () => {
+    stubPageFetch({
+      pendingInteractions: [ask()],
+      viewerIsStarter: true,
+      starterDisplayName: 'Avery',
+    });
+    await act(async () => {
+      renderPage('?node=review');
+    });
+    await flushUntil(
+      'shared ask',
+      () => host.querySelectorAll('form[id="run-ask-card-tool-1"]').length >= 2
+    );
+    expect(host.querySelector('[data-ask-draft-count]')?.getAttribute('data-ask-draft-count')).toBe(
+      '0'
+    );
+    const section = host.querySelector('#console-run-view');
+    const room = host.querySelector('[aria-label="review room"]');
+    expect(section).not.toBeNull();
+    expect(room).not.toBeNull();
+    const logChoice = section?.querySelector('input[type="radio"][value="Ship"]');
+    if (!(logChoice instanceof HTMLInputElement)) throw new Error('missing log Ship');
+    await act(async () => {
+      logChoice.click();
+    });
+    await flush();
+    const logShip = section?.querySelector('input[type="radio"][value="Ship"]');
+    const roomShip = room?.querySelector('input[type="radio"][value="Ship"]');
+    if (!(logShip instanceof HTMLInputElement) || !(roomShip instanceof HTMLInputElement)) {
+      throw new Error('missing shared radios');
+    }
+    expect(logShip.checked).toBe(true);
+    expect(roomShip.checked).toBe(true);
+    expect(host.querySelector('[data-ask-draft-count]')?.getAttribute('data-ask-draft-count')).toBe(
+      '1'
+    );
   });
 
   test('renders CAP-7 failure as error chrome without an awaiting pill', async () => {

@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### Log sections drain independently of the room
+- **Where**: `packages/web/src/experiments/console/components/inspect/ConsoleExecutionHistory.tsx`, `ConsoleInspectPane.tsx`
+- **Pattern**: Each `logEntries` section loads its own node messages. Room-only tests that expected `loadMessages` to stay empty while Log is mounted will see plan/loop fetches. Assert the room node was not fetched, or allow stream loads.
+- **Example**: `expect(calls.every(([, nodeId]) => nodeId !== 'child')).toBe(true)`
+
+### ConsoleAskCard is parent-owned
+- **Where**: `packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx`, `ConsoleAskCard.test.tsx`
+- **Pattern**: Drafts are `draft`/`onDraftChange` like Legacy AskCard. Action tests must re-render from parent state (stateful harness). Other+listed-option text becomes the listed option because Other is derived from the draft value.
+- **Example**: `onDraftChange(replaceDraftValue(draft, question.id, option))`
+
 ### Console node-message fetch stubs must ignore paging query
 - **Where**: `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` (`stubPageFetch`)
 - **Pattern**: `drainNodeMessages` requests `/messages?afterSeq=0&limit=100`. Exact pathname equality misses the call. Compare `path.split('?')[0]` for node-message routes, but keep the full query for `/api/workflows?cwd=`.
@@ -401,5 +411,38 @@
 - Deep-link `openerId` is null in the shared reducer; attach the log opener after apply
 - StrReplace on large `.test.tsx` files can truncate; patch with a full in-memory replace
 - `useContainerSplitMode` starts as `split` then may flip to `single` when the pane width is 0 in happy-dom; pane tests should pass `splitMode`
+
+---
+
+## 2026-09-08 — US-011: Render one console log section per exact execution
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/inspect/execution-interactions.ts` — `interactionsForExecution` exact occurrence/attempt, unscoped latest+limitation, approval node id
+- `packages/web/src/experiments/console/components/inspect/execution-interactions.test.ts` — scoped Ask, mismatched attempt, unscoped Ask/approval, no first-entry Map
+- `packages/web/src/experiments/console/components/inspect/ConsoleExecutionHistory.tsx` — drain `entry.row.selection` limit 100 + AbortSignal, 1s live poll, ConsoleAgentHistoryList, scoped Ask, approval gate
+- `packages/web/src/experiments/console/components/inspect/ConsoleExecutionHistory.test.tsx` — occurrence B options, Ask after history, limitation, Tool/System, page-two Retry
+- `packages/web/src/experiments/console/components/RunStream.tsx` — one `<section data-execution-row-id>` per log entry; optional `renderExecutionBody`; merged timeline only without `logEntries`
+- `packages/web/src/experiments/console/components/RunStream.test.tsx` — section order, own body only, no duplicated global messages
+- `packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx` — controlled `draft`/`onDraftChange`, `id={askCardId(...)}`, `tabIndex={-1}`
+- `packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx` — copied draft on change
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx` — `renderExecutionBody` + shared drafts
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx` — Ask cards consume parent drafts
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — owns `AskDraftByRequest`, shares room/log, reset on runId
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` — shared drafts between log section and room
+- `packages/web/src/experiments/console/console-isolation.test.ts` — allowlist ConsoleExecutionHistory
+
+**Acceptance criteria verified**:
+- [x] `interactionsForExecution` matches Ask to exact occurrence_id and attempt_id; unscoped items on latest entry with `scopeLimitation`
+- [x] ConsoleExecutionHistory loads `entry.row.selection` with limit 100 and AbortSignal, polls live 1s, renders ConsoleAgentHistoryList and scoped Ask cards
+- [x] RunStream renders one semantic `<section data-execution-row-id={entry.row.id}>` per log entry with NodeDivider + body, no shared bodies
+- [x] ConsoleAskCard is controlled with `draft`/`onDraftChange`, root `id={askCardId(tool_use_id)}` and `tabIndex={-1}`
+- [x] RunDetailPage owns AskDraftByRequest, shares drafts between room and execution sections, resets on runId change
+- [x] Tests in execution-interactions, ConsoleExecutionHistory, RunStream, ConsoleAskCard, and RunDetailPage pass (55 tests across 5 files)
+
+**Learnings**:
+- With `logEntries`, RunStream must not keep the merged conversation timeline; global "plan output" assertions belong only to the no-`logEntries` fallback
+- Log sections drain even when the selected room is a gate/child workflow; room-only empty-fetch assertions must ignore stream loads
+- Controlled Other is derived from draft values; typing a listed option selects that option (same as Legacy AskCard)
 
 ---

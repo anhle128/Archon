@@ -35,7 +35,7 @@ import { ApprovalPanel } from './ApprovalPanel';
 import { ConsoleAskCard, ConsoleInvalidAskCard } from './ask/ConsoleAskCard';
 import type { AskActionStateByRequest } from './ask/ask-answer-controller';
 import { resolveAskCardPresentation } from './ask/ask-card-presentation';
-import { parseAskEnvelope } from './ask/parse-ask-envelope';
+import { parseAskEnvelope, type AskDraft, type AskDraftByRequest } from './ask/parse-ask-envelope';
 import { selectVisibleNodeAskInteractions } from './ask/select-visible-node-ask-interactions';
 import type { LogRow } from './inspect/build-log-rows';
 import { ConsoleAgentHistoryList } from './inspect/ConsoleAgentHistoryList';
@@ -93,6 +93,8 @@ export interface ConsoleNodeRoomProps {
   scopeKey?: string;
   initialScrollTop?: number;
   onScrollTopChange?: (scrollTop: number) => void;
+  askDrafts?: AskDraftByRequest;
+  onAskDraftChange?: (requestId: string, draft: AskDraft) => void;
 }
 
 const ROUTE_FIELDS = [
@@ -456,6 +458,8 @@ export function ConsoleNodeRoom({
   scopeKey,
   initialScrollTop,
   onScrollTopChange,
+  askDrafts = {},
+  onAskDraftChange,
 }: ConsoleNodeRoomProps): ReactElement {
   const resolution =
     nodeId === null ? null : resolveRoomKind(nodeId, definitionNodes, events, approval);
@@ -666,6 +670,10 @@ export function ConsoleNodeRoom({
         autoFocus={interaction.id === firstActionableId}
         nowMs={nowMs}
         mountContext="room"
+        draft={askDrafts[requestId] ?? {}}
+        onDraftChange={(next): void => {
+          onAskDraftChange?.(requestId, next);
+        }}
         onSubmit={(body): void => {
           void onSubmitAsk(requestId, body);
         }}
