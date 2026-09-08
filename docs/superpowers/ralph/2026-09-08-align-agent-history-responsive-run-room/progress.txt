@@ -1,0 +1,118 @@
+## Codebase Patterns
+
+### Live AbortSignal must be read through a helper
+- **Where**: `packages/web/src/lib/node-message-pages.ts` (`isAborted`)
+- **Pattern**: `args.signal?.aborted === true` narrows the live `aborted` flag for the rest of the function, so a later loop check is a TS2367. Read it in a helper so each call is independent.
+- **Example**: `function isAborted(signal: AbortSignal | undefined): boolean { return signal?.aborted === true; }`
+
+### Call-signature loader types
+- **Where**: `packages/web/src/lib/node-message-pages.ts` (`NodeMessageLoader`)
+- **Pattern**: ESLint `@typescript-eslint/prefer-function-type` rejects `interface { (...): T }`. Use `export type Fn = (...) => T`.
+- **Example**: `export type NodeMessageLoader = (runId: string, nodeId: string, options: {...}) => Promise<NodeMessagePage>;`
+
+### AbortSignal stays off URLSearchParams
+- **Where**: `packages/web/src/lib/api.ts`, `packages/web/src/experiments/console/skills/runs.ts`
+- **Pattern**: Destructure `signal` out of list-query options, then pass `{ signal }` only when it is defined. Putting `AbortSignal` into `URLSearchParams` serializes junk and fails the abort tests.
+- **Example**: `const { signal, ...queryFields } = options ?? {}; return fetchJSON(url, signal === undefined ? undefined : { signal });`
+
+### NodeMessage wire mapper must switch on kind
+- **Where**: `packages/server/src/routes/api.ts` (`toWorkflowNodeMessageResponse`)
+- **Pattern**: `z.infer<typeof workflowNodeMessageResponseSchema>` is a discriminated union. Returning a shared object with `kind: row.kind` fails `tsc`. Branch on `row.kind === 'tool' | 'text'` and keep `createdAt` camelCase, assigning `created_at: createdAt`.
+- **Example**: `if (row.kind === 'tool') { return { kind: row.kind, payload, created_at: createdAt, ... }; }`
+
+### truncateToolOutput marker can lengthen tiny overages
+- **Where**: `packages/server/src/adapters/web/truncate.ts`
+- **Pattern**: A 1-char over-cap string becomes longer after truncation because of the KB marker. Cursor tests that assert a shorter list output must use a large overage (`MAX_TOOL_OUTPUT_CHARS + 200_000`). Truncation metadata is response-only — never written back.
+- **Example**: `const fullOutput = 'x'.repeat(MAX_TOOL_OUTPUT_CHARS + 200_000);`
+
+### PanelPercent template literals
+- **Where**: `packages/web/src/lib/room-split-layout.ts`
+- **Pattern**: Build `PanelPercent` with `` `${value}%` `` when `value` is already a `number`. `` `${String(value)}%` `` infers as `` `${string}%` `` and fails `tsc`.
+- **Example**: `function percent(value: number): PanelPercent { return \`${value}%\`; }`
+
+### Console happy-dom component tests
+- **Where**: `packages/web/src/experiments/console/primitives/console-resizable.test.tsx`, `packages/web/src/experiments/console/components/NodeDivider.test.tsx`
+- **Pattern**: Use `installHappyDom` / `restoreHappyDom`. Keep PascalCase components on the module namespace (`consoleResizable.ConsolePanel`) because destructured PascalCase locals fail `@typescript-eslint/naming-convention`. Wrap renders in `await act(async () => { ... })` — `await act(() => { ... })` trips `await-thenable` and `no-confusing-void-expression`.
+- **Example**: `createElement(consoleResizable.ConsolePanel, { defaultSize: '60%' }, 'view')`
+
+### Console isolation vs shared layout helpers
+- **Where**: `packages/web/src/experiments/console/console-isolation.test.ts`, `eslint.config.mjs`
+- **Pattern**: Console production files may import `@/lib/*` except `@/lib/api`. Do not import `@/components/ui/resizable`. `**/*.test.ts` is ESLint-ignored; `**/*.test.tsx` is not. `packages/web/src/components/ui/**` is ESLint-ignored (shadcn).
+
+---
+
+## 2026-09-08 — US-001: Lock the percentage split contract
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/room-split-layout.ts` — percentage-only split policy, clamp, per-surface localStorage
+- `packages/web/src/lib/room-split-layout.test.ts` — boundary strings and surface isolation
+- `packages/web/src/components/ui/resizable.tsx` — `PercentResizablePanel` with `PanelPercent` size props; `ResizablePanel` unchanged
+- `packages/web/src/experiments/console/primitives/console-resizable.tsx` — Console wrappers importing `Group`/`Panel`/`Separator` directly
+- `packages/web/src/experiments/console/primitives/console-resizable.test.tsx` — happy-dom percent panels + `role=separator`
+
+**Acceptance criteria verified**:
+- [x] `room-split-layout.ts` exports `PanelPercent`, `RoomSurface`, `ROOM_SPLIT`, `clampRoomRatio`, `roomPanelSizes`, `readRoomRatio`, and `writeRoomRatio`
+- [x] `roomPanelSizes` returns view/room objects containing percentage strings derived from clamped `roomRatio`
+- [x] `readRoomRatio`/`writeRoomRatio` persist under `archon.run-room.ratio.legacy` and `archon.run-room.ratio.console`, clamp, and fall back to 40
+- [x] `PercentResizablePanel` uses `PanelPercent | undefined` size props; generic `ResizablePanel` unchanged
+- [x] Console wrappers import `react-resizable-panels` directly, not `@/components/ui/resizable`
+- [x] `bun test src/lib/room-split-layout.test.ts` passes
+- [x] `NODE_ENV=development bun test src/experiments/console/primitives/console-resizable.test.tsx` passes (percent panels + `role=separator`)
+
+**Learnings**:
+- Plan's `` `${String(value)}%` `` fails `PanelPercent` inference; use the number directly in the template
+- react-resizable-panels v4 already treats numeric sizes as pixels; the typed wrappers are the contract that keeps run rooms on `%`
+- `bun --filter @archon/web type-check` is the type gate; ESLint ignores shadcn `components/ui`
+
+---
+
+## 2026-09-08 — US-002: Make node-message transport lossless and abortable
+
+**Status**: PASSED
+**Files changed**:
+- `packages/server/src/routes/api.ts` — `toWorkflowNodeMessageResponse` preserves metadata in compatibility mode and marks cursor-list truncation without writing it back
+- `packages/server/src/routes/api.workflow-runs.test.ts` — compatibility metadata + cursor truncation/detail assertions
+- `packages/web/src/lib/api.ts` — `getWorkflowNodeMessages`/`getWorkflowNodeMessage` forward `AbortSignal` and encode path segments
+- `packages/web/src/lib/get-workflow-node-messages.test.ts` — query, signal, and encoded detail URL tests
+- `packages/web/src/experiments/console/skills/runs.ts` — `getNodeMessages`/`getNodeMessage`; `listNodeMessages` remains an alias
+- `packages/web/src/experiments/console/skills/runs.node-messages.test.ts` — signal forwarding and encoded detail URL tests
+
+**Acceptance criteria verified**:
+- [x] Compatibility no-query mode returns `{ messages }` with row metadata and no paging keys
+- [x] Cursor mode marks truncated tool output with `truncated: true` and `output_state: 'truncated'` without writing that metadata back
+- [x] Detail route returns full stored message output unchanged
+- [x] Legacy `getWorkflowNodeMessages` / `getWorkflowNodeMessage` forward `AbortSignal` without putting it in query params
+- [x] Console `getNodeMessages` / `getNodeMessage` forward `AbortSignal` through `requestJson`
+- [x] Path parameters in detail URLs are encoded with `encodeURIComponent`
+- [x] Server tests in `api.workflow-runs.test.ts` and client tests in `get-workflow-node-messages.test.ts` and `runs.node-messages.test.ts` pass
+
+**Learnings**:
+- `truncateToolOutput` appends a marker, so a 1-char over-cap payload can get longer; use a large overage when asserting shorter list output
+- Discriminated `WorkflowNodeMessage` responses need per-kind returns, not a shared `kind: row.kind` object
+- Existing Console callers use `listNodeMessages`; keep it as an alias of `getNodeMessages` so RunDetailPage does not need this story's file list
+
+---
+
+## 2026-09-08 — US-003: Build the shared cursor-page state machine
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/node-message-pages.ts` — scope keys, page/failure reducers, and `drainNodeMessages` driver
+- `packages/web/src/lib/node-message-pages.test.ts` — paging, watermark, obsolete scopes, retry retention, abort, and occurrence/limit driver tests
+
+**Acceptance criteria verified**:
+- [x] Exports `nodeMessageScopeKey`, `createNodeMessageState`, `reduceNodeMessagePage`, `reduceNodeMessageFailure`, and `drainNodeMessages`
+- [x] `nodeMessageScopeKey` includes runId, nodeId, and selection (`rowId` for `kind: 'node'`; occurrence/attempt for scoped keys)
+- [x] `reduceNodeMessagePage` deduplicates by seq, sorts ascending, updates afterSeq, and completes only when `hasMore` is false and `afterSeq >= highWatermark`
+- [x] Obsolete scope pages and failures are discarded (same state reference)
+- [x] `reduceNodeMessageFailure` retains rows, records the error string, and keeps `complete: false`
+- [x] `drainNodeMessages` loops with `limit: 100`, passes occurrence/attempt from selection, forwards AbortSignal, notifies `onState`, and does not convert AbortError into a retry error
+- [x] `bun test src/lib/node-message-pages.test.ts` passes (13 tests)
+
+**Learnings**:
+- Compatibility pages (no `hasMore`/`nextCursor`/`highWatermark`) treat the missing watermark as current `afterSeq` so one page completes
+- Empty nonterminal pages that do not advance the cursor must error; otherwise drain loops forever
+- TypeScript narrows live `AbortSignal.aborted` after an `=== true` check; read it through `isAborted()`
+
+---
