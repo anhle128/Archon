@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### Compose text and tool projectors
+- **Where**: `packages/web/src/lib/agent-history.ts` (`buildAgentHistory`)
+- **Pattern**: Call `projectToolTranscript(projectTextTranscript(rows))` instead of reimplementing delta/snapshot folding or call/result pairing.
+- **Example**: `const projected = projectToolTranscript(projectTextTranscript(input.rows));`
+
+### Tool outcome/exit_code live outside generated OpenAPI metadata
+- **Where**: `packages/web/src/lib/agent-history.ts` (`extraToolFields`)
+- **Pattern**: `WorkflowNodeMessage` metadata in `api.generated.d.ts` omits `outcome` and `exit_code` even though `nodeTranscriptMetadataSchema` has them. Read those fields through `asRecord(row.metadata)`.
+- **Example**: `const record = asRecord(row?.metadata); recordedExitCode(record.exit_code);`
+
 ### Live AbortSignal must be read through a helper
 - **Where**: `packages/web/src/lib/node-message-pages.ts` (`isAborted`)
 - **Pattern**: `args.signal?.aborted === true` narrows the live `aborted` flag for the rest of the function, so a later loop check is a TS2367. Read it in a helper so each call is independent.
@@ -116,3 +126,27 @@
 - TypeScript narrows live `AbortSignal.aborted` after an `=== true` check; read it through `isAborted()`
 
 ---
+
+## 2026-09-08 — US-004: Project recorded rows into agent history
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/lib/agent-history.ts` — `AgentHistoryItem` union, `buildAgentHistory`, `toolContext`, `toolRuntime`
+- `packages/web/src/lib/agent-history.test.ts` — interleaved projection, truncation, duration join, allowlisted context
+
+**Acceptance criteria verified**:
+- [x] Exports `AgentHistoryItem`, `buildAgentHistory`, `toolContext`, and `toolRuntime`
+- [x] Assistant text is projected via `projectTextTranscript` without duplicating deltas or snapshot text
+- [x] Tool call/result rows are paired via `projectToolTranscript`; seq comes from the call row; `toolUseId` comes from the tool payload id
+- [x] `toolContext` returns full trimmed `cmd`/`path`/`file_path`/`query`/`url` values and ignores other fields
+- [x] Outcome is only `running`/`succeeded`/`failed`/`unknown`; `canLoadFullOutput` is true for `truncated: true` or `output_state === 'truncated'`
+- [x] `durationMs` joins only when exactly one `tool_completed` event matches nodeId, `data.tool_call_id`, and a finite nonnegative `data.duration_ms`
+- [x] Status rows become secondary `lifecycle` items
+- [x] `bun test src/lib/agent-history.test.ts` passes (6 tests)
+
+**Learnings**:
+- Unmatched result cards are `unknown` unless recorded error/failed/nonzero exit says otherwise — do not parse output prose
+- Generated `WorkflowNodeMessage` metadata is missing `outcome`/`exit_code`; read them from the runtime object
+
+---
+
