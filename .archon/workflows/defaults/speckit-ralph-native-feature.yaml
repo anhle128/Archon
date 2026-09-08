@@ -633,12 +633,12 @@ nodes:
         jq -e '[.userStories[].tasks[]? | select(.passes==false)] | length == 0' "$RLN_PRD" >/dev/null 2>&1
     depends_on:
       - ralph-native-preflight
+    effort: high
+    provider: grok
+    model: grok-4.5
     # effort: xhigh
-    # provider: omp
-    # model: xai-oauth/grok-4.5
-    effort: xhigh
-    provider: codex
-    model: gpt-5.6-terra
+    # provider: codex
+    # model: gpt-5.6-terra
 
   - id: ralph-sync-back
     prompt: |
