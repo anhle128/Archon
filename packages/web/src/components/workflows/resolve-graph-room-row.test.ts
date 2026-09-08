@@ -128,6 +128,7 @@ describe('resolveGraphRoomRow', () => {
       order: 0,
       sourceIndex: 0,
       selection: { kind: 'node' },
+      unknownScope: true,
     });
   });
 
@@ -146,6 +147,7 @@ describe('resolveGraphRoomRow', () => {
       order: 0,
       sourceIndex: 0,
       selection: { kind: 'node' },
+      unknownScope: true,
     });
   });
 
@@ -164,6 +166,7 @@ describe('resolveGraphRoomRow', () => {
       order: 0,
       sourceIndex: 0,
       selection: { kind: 'node' },
+      unknownScope: true,
     });
   });
 });
