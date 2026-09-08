@@ -1,4 +1,10 @@
-import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import {
+  expect,
+  type Browser,
+  type BrowserContext,
+  type Page,
+  type Request,
+} from '@playwright/test';
 
 import { E2E_STARTER_WEB_USER, E2E_TEAMMATE_WEB_USER, HITL_ASK_NODE } from './archon-runtime';
 
@@ -50,6 +56,56 @@ export async function listNodeMessages(
     messages?: { kind: string; payload: Record<string, unknown> }[];
   };
   return body.messages ?? [];
+}
+
+export interface NodeMessageRequest {
+  afterSeq: string | null;
+  limit: string | null;
+  occurrenceId: string | null;
+  attemptId: string | null;
+}
+
+export function observeNodeMessagePages(
+  page: Page,
+  runId: string,
+  nodeId: string
+): { records: NodeMessageRequest[]; dispose: () => void } {
+  const records: NodeMessageRequest[] = [];
+  const pathname =
+    '/api/workflows/runs/' +
+    encodeURIComponent(runId) +
+    '/nodes/' +
+    encodeURIComponent(nodeId) +
+    '/messages';
+  const listener = (request: Request): void => {
+    const url = new URL(request.url());
+    if (url.pathname !== pathname) return;
+    records.push({
+      afterSeq: url.searchParams.get('afterSeq'),
+      limit: url.searchParams.get('limit'),
+      occurrenceId: url.searchParams.get('occurrenceId'),
+      attemptId: url.searchParams.get('attemptId'),
+    });
+  };
+  page.on('request', listener);
+  return {
+    records,
+    dispose: (): void => {
+      page.off('request', listener);
+    },
+  };
+}
+
+export async function declineAskViaApi(
+  page: Page,
+  runId: string,
+  requestId: string
+): Promise<number> {
+  const res = await page.request.post(
+    `/api/workflows/runs/${encodeURIComponent(runId)}/ask/${encodeURIComponent(requestId)}/answer`,
+    { data: { decline: true } }
+  );
+  return res.status();
 }
 
 export async function getRunDetail(
@@ -108,7 +164,7 @@ export async function createIdentityContext(
 }
 
 export async function submitAskYes(page: Page): Promise<void> {
-  await expect(page.getByRole('button', { name: /Awaiting input/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Awaiting input', exact: true })).toBeVisible();
   await page.getByRole('radio', { name: 'yes' }).first().check();
   await page.getByRole('button', { name: 'Submit' }).first().click();
 }

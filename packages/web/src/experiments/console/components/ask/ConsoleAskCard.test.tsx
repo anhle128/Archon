@@ -650,14 +650,14 @@ describe('AskCard actions', () => {
             askCard,
             cardProps({
               autoFocus: true,
-              interaction: interaction({ id: 'ask-focus-1' }),
+              interaction: interaction({ id: 'ask-focus-1', tool_use_id: 'tool-focus-1' }),
             })
           ),
           createElement(
             askCard,
             cardProps({
               autoFocus: false,
-              interaction: interaction({ id: 'ask-focus-2' }),
+              interaction: interaction({ id: 'ask-focus-2', tool_use_id: 'tool-focus-2' }),
             })
           )
         )
@@ -665,11 +665,11 @@ describe('AskCard actions', () => {
     });
     await flush();
 
-    const first = host.querySelector('input[id="default:ask-focus-1:q1:Ship"]');
-    const second = host.querySelector('input[id="default:ask-focus-2:q1:Ship"]');
+    const first = host.querySelector('#run-ask-card-tool-focus-1');
+    const second = host.querySelector('#run-ask-card-tool-focus-2');
     expect(first).not.toBeNull();
     expect(second).not.toBeNull();
     const activeId = (win.document.activeElement as { id?: string } | null)?.id;
-    expect(activeId).toBe('default:ask-focus-1:q1:Ship');
+    expect(activeId).toBe('run-ask-card-tool-focus-1');
   });
 });

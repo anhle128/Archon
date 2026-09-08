@@ -43,6 +43,7 @@ import { runMessageConversationId, type Run, type RunEnvOverlay } from '../primi
 import type { ConversationSummary } from '../primitives/conversation';
 import {
   applyRoomDeepLink,
+  askCardId,
   chooseExecutionForNode,
   closeRoom,
   openRoom,
@@ -79,6 +80,34 @@ const TOGGLE_KEYS = {
   view: 'archon.console.detailView',
   node: 'archon.console.runNodeFilter',
 } as const;
+
+function focusAskCard(requestId: string): void {
+  let attempts = 0;
+  const focusAsk = (): void => {
+    const card = document.getElementById(askCardId(requestId));
+    if (card !== null) {
+      card.focus();
+      if (document.activeElement === card) return;
+    }
+    if (attempts < 30) {
+      attempts += 1;
+      requestAnimationFrame(focusAsk);
+    }
+  };
+  requestAnimationFrame(focusAsk);
+}
+
+function pendingAskRequestId(
+  pending: ConsoleRunDetail['pendingInteractions'],
+  nodeId: string
+): string | undefined {
+  return pending.find(
+    interaction =>
+      interaction.kind === 'ask' &&
+      interaction.status === 'pending' &&
+      interaction.node_id === nodeId
+  )?.tool_use_id;
+}
 
 function readToggle(key: string, defaultOn: boolean): boolean {
   try {
@@ -662,6 +691,8 @@ export function RunDetailPage(): ReactElement {
             });
             if (nodeId === null) return;
             onInspectSelect(nodeId, undefined, null);
+            const requestId = pendingAskRequestId(detail.pendingInteractions, nodeId);
+            if (requestId !== undefined) focusAskCard(requestId);
           }}
         />
         <ConsoleAskChrome
@@ -674,6 +705,8 @@ export function RunDetailPage(): ReactElement {
           }}
           onSelectAwaitingNode={(nodeId: string): void => {
             onInspectSelect(nodeId, undefined, null);
+            const requestId = pendingAskRequestId(detail.pendingInteractions, nodeId);
+            if (requestId !== undefined) focusAskCard(requestId);
           }}
         />
 

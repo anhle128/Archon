@@ -143,6 +143,41 @@ On both legacy `WorkflowExecution` and `/console`, an operator can inspect a liv
 **Implementation notes:** AD-3 transcript table; AD-4 `packages/web/src/lib/run-graph/`; AD-7 GET messages + one `projectLatestEffectiveNodeStates` (legacy stops rebuilding from events); GET run may return `pending_interactions: []` so the embed shape exists — **do not render cards from it in this epic**. Console isolation except `run-graph`; each surface owns its shell.
 **Party decision (A+):** Epic 5 ships inspect-only chrome. No Ask card, no placeholder slot, no awaiting/"waiting on you" tone. The agent room is an extensible chronological timeline of `text` / `tool` / `status` items so Epic 6 can insert a card at the tool invocation. Do not write an Epic 5 story for an AskCard placeholder. FR3 Ask-card slice and UX-DR5/6/8 stay Epic 6.
 
+#### Story 5.6: Align agent history and the responsive run room
+
+As a run-detail operator,
+I want execution-scoped agent history in an open-on-demand percentage run room that stays usable on narrow containers,
+So that Story 5.6 matches the approved HITL run-view contract on both Legacy and Console.
+
+**Issue:** [Align Agent History and Responsive Run Room](https://github.com/anhle128/Archon/issues/147)
+**Brainstorm:** `plans/reports/brainstorm-260908-1653-workflow-run-hitl-ui-gap.md`
+**Plan:** `docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md`
+
+**Acceptance Criteria:**
+
+1. Both Legacy and Console open with the room absent and the primary work area using the released width.
+2. Clicking a Log execution or graph node opens the room and gives it the stored percentage of the available work area.
+3. Closing the room removes its panel and divider, returns the width to the main view, and restores focus to the opener when that opener still exists.
+4. On a single-pane container, opening the room keeps the main view mounted but hidden, and Back restores the exact Log or Graph state.
+5. A valid `?node=` deep link opens the required node exactly once per query-value entry and does not reopen after a manual close until the query leaves and re-enters that value.
+6. Changing the run id resets room selection, explicit-execution memory, saved room scroll positions, Ask drafts, and the deep-link application marker.
+7. A graph-node click restores the last explicit execution for that node, then prefers awaiting, then running, then the latest execution.
+8. The room header identifies the selected execution with node label, iteration or attempt context, status, run-relative start time, duration when recorded, and provider/model only from the matching selected execution event.
+9. Completed executions open at the top, active executions open at the bottom in follow mode, scrolling up disables follow mode, and Jump to latest re-enables it.
+10. Node-message paging drains all pages through the scoped high-water mark, polls a live scope without overlapping requests, deduplicates by `seq`, ignores late responses from an obsolete scope, aborts obsolete requests, and retains already loaded rows if a later page fails.
+11. Assistant text is projected in sequence order without duplicated deltas or snapshots.
+12. Every tool invocation is one structured card with tool name, full allowlisted context, initially expanded Input and Output, inline outcome and duration, honest pending, missing, failed, interrupted, and truncated states, and a detail link only when the list response marks the output truncated.
+13. Ask cards and approval gates appear at their actual execution position when execution scope is recorded, and an explicit limitation appears for legacy unscoped data.
+14. The same pending Ask request uses one controlled draft whether rendered in the room or in the main execution section, and answered or declined requests remain as compact read-only records.
+15. Console Log renders one section per `ConsoleLogEntry` and never assigns repeated executions by node id alone.
+16. Console Reply sends only to an existing parent conversation whose recorded `platform_type` is `web`, and it never creates a fallback conversation.
+17. The Awaiting-input action opens the matching execution and focuses its Ask card, while run tabs, graph selection, graph pan and zoom, and existing operational controls remain usable.
+18. A 120-tool-call fixture proves that the UI itself requests more than one cursor page and renders every distinct recorded call.
+19. The acceptance report records actual behavior at 1440 by 1000, 1024 by 900, 768 by 900, and 390 by 844 for both surfaces, and labels every mismatch as a concrete deviation.
+20. Legacy Chat, Source Control, and Terminal remain available, including timeline-only Chat with a disabled composer when no parent conversation exists.
+21. Console Artifacts remains in the main pane while the selected room stays docked.
+22. `bun run validate` and the focused Playwright HITL suite pass.
+
 ### Epic 6: Answer an agent mid-turn
 
 On both surfaces, the run starter sees warning "awaiting input," answers or declines a structured Ask card inline in the agent room, and the node continues with that payload. Teammates can watch but not submit. Concurrent asks work without a second scheduler. A Codex (etc.) run that names AskHuman in `allowed_tools` is rejected at start; one that does not still starts. Permission is envelope-only. Child-run Ask is answered on the child.

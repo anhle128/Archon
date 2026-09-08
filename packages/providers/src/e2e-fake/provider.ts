@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { z } from 'zod';
 
 import { createLogger } from '@archon/paths';
@@ -288,7 +290,7 @@ export class E2eFakeProvider implements IAgentProvider {
     );
     const scenario: E2eScenario =
       scenarioDirective === undefined ? {} : parseScenarioDirective(scenarioDirective);
-    const sessionId = resumeSessionId ?? `e2e-fake-${Date.now().toString(36)}`;
+    const sessionId = resumeSessionId ?? `e2e-fake-${randomUUID()}`;
     const resumed = resumeSessionId !== undefined ? true : undefined;
 
     await waitUnlessAborted(scenario.delayMs ?? 0, requestOptions?.abortSignal);

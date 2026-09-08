@@ -171,6 +171,22 @@ describe('E2eFakeProvider', () => {
     expect(seenSessionId).toMatch(/^e2e-fake-/);
   });
 
+  test('concurrent askHuman calls get distinct tool-use ids', async () => {
+    const prompt = '<<E2E_SCENARIO>>{"askHuman":true}<</E2E_SCENARIO>>';
+    const seen: string[] = [];
+    const tool = askTool(async (_input, context) => {
+      seen.push(context?.toolUseId ?? 'missing');
+      throw new AskHumanAwaitingError(context?.toolUseId ?? 'missing', 'ask-starter', 'run-1');
+    });
+    const results = await Promise.allSettled([
+      collect(provider.sendQuery(prompt, '/tmp', undefined, { nativeTools: [tool] })),
+      collect(provider.sendQuery(prompt, '/tmp', undefined, { nativeTools: [tool] })),
+    ]);
+    expect(results.every(result => result.status === 'rejected')).toBe(true);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).not.toBe(seen[1]);
+  });
+
   test('consumes resumeInteractions and does not call AskHuman', async () => {
     const prompt = '<<E2E_SCENARIO>>{"askHuman":true}<</E2E_SCENARIO>>';
     let handlerCalls = 0;

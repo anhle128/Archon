@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { askCardId } from '@/lib/execution-room-model';
 
@@ -155,7 +155,13 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
     onDecline,
   } = props;
 
+  const formRef = useRef<HTMLFormElement | null>(null);
   const declineDialogRef = useRef<HTMLDialogElement | null>(null);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    formRef.current?.focus();
+  }, [autoFocus]);
 
   function openDeclineDialog(): void {
     declineDialogRef.current?.showModal();
@@ -227,6 +233,7 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
 
   return (
     <form
+      ref={formRef}
       id={askCardId(interaction.tool_use_id)}
       tabIndex={-1}
       aria-label={`question from agent, ${String(questions.length)} questions`}
@@ -256,7 +263,7 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
             </p>
           ))}
           <fieldset disabled={lockAnswers} className="min-w-0 space-y-4 border-0 p-0">
-            {questions.map((question, questionIndex) => {
+            {questions.map(question => {
               const value = draft[question.id];
               const otherOn = isOtherOn(question, value);
               const listed = listedOptions(question, value);
@@ -265,9 +272,8 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                   <legend className="text-sm font-medium text-text-primary">
                     {question.prompt}
                   </legend>
-                  {question.options.map((option, optionIndex) => {
+                  {question.options.map(option => {
                     const controlId = `${mountContext}:${interaction.id}:${question.id}:${option}`;
-                    const focusFirst = autoFocus && questionIndex === 0 && optionIndex === 0;
                     if (question.selection === 'single') {
                       return (
                         <label
@@ -280,7 +286,6 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                             name={`${mountContext}:${interaction.id}:${question.id}`}
                             value={option}
                             checked={!otherOn && value === option}
-                            autoFocus={focusFirst}
                             onChange={(): void => {
                               selectSingle(question, option);
                             }}
@@ -300,7 +305,6 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                           name={`${mountContext}:${interaction.id}:${question.id}`}
                           value={option}
                           checked={listed.includes(option)}
-                          autoFocus={focusFirst}
                           onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                             toggleMulti(question, option, event.target.checked);
                           }}
@@ -317,9 +321,6 @@ export function ConsoleAskCard(props: ConsoleAskCardProps): React.ReactElement {
                           name={`${mountContext}:${interaction.id}:${question.id}`}
                           value="__other__"
                           checked={otherOn}
-                          autoFocus={
-                            autoFocus && questionIndex === 0 && question.options.length === 0
-                          }
                           onChange={(event: React.ChangeEvent<HTMLInputElement>): void => {
                             if (question.selection === 'single') {
                               selectSingleOther(question);

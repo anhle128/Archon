@@ -22,11 +22,20 @@ const HITL_LONG_WORKFLOW_FIXTURE = join(
   'workflows',
   'e2e-hitl-long-history.yaml'
 );
+const HITL_TWO_ASKS_WORKFLOW_FIXTURE = join(
+  HERE,
+  '..',
+  '..',
+  'fixtures',
+  'workflows',
+  'e2e-hitl-two-asks.yaml'
+);
 
 /** Name of the seeded workflow whose single AI node runs on the fake provider. */
 export const E2E_WORKFLOW_NAME = 'e2e-usage-record';
 export const E2E_HITL_WORKFLOW_NAME = 'e2e-hitl-run';
 export const E2E_HITL_LONG_WORKFLOW_NAME = 'e2e-hitl-long-history';
+export const E2E_HITL_TWO_ASKS_WORKFLOW_NAME = 'e2e-hitl-two-asks';
 export const E2E_STARTER_WEB_USER = 'e2e-hitl-starter';
 export const E2E_TEAMMATE_WEB_USER = 'e2e-hitl-teammate';
 export const E2E_CLI_USER = 'e2e-hitl-cli';
@@ -35,6 +44,8 @@ export const HITL_INSPECT_NODE = 'inspect-file';
 export const HITL_LOOP_NODE = 'inspect-twice';
 export const HITL_ASK_NODE = 'ask-starter';
 export const HITL_LONG_NODE = 'long-history';
+export const HITL_ASK_ANSWER_NODE = 'ask-answer';
+export const HITL_ASK_DECLINE_NODE = 'ask-decline';
 
 /**
  * The one model the seeded config prices. A usage entry for
@@ -92,6 +103,8 @@ export interface ArchonRuntime {
   runHitlWorkflow(): Promise<CliRunResult>;
   /** Run the multi-page HITL history fixture through the existing CLI runner. */
   runHitlLongHistoryWorkflow(): Promise<CliRunResult>;
+  /** Run two parallel AskHuman nodes so answered and declined records coexist. */
+  runHitlTwoAsksWorkflow(): Promise<CliRunResult>;
   /**
    * Start the HITL fixture without waiting for CLI exit. `runId` resolves as
    * soon as the run row exists. Use only while work is still running.
@@ -254,6 +267,10 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
     join(home, 'workflows', `${E2E_HITL_LONG_WORKFLOW_NAME}.yaml`),
     readFileSync(HITL_LONG_WORKFLOW_FIXTURE)
   );
+  writeFileSync(
+    join(home, 'workflows', `${E2E_HITL_TWO_ASKS_WORKFLOW_NAME}.yaml`),
+    readFileSync(HITL_TWO_ASKS_WORKFLOW_FIXTURE)
+  );
 
   writeFileSync(
     join(home, 'config.yaml'),
@@ -354,6 +371,17 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
       'workflow',
       'run',
       E2E_HITL_LONG_WORKFLOW_NAME,
+      '--folder',
+      '--json',
+    ]);
+  };
+
+  const runHitlTwoAsksWorkflow = async (): Promise<CliRunResult> => {
+    return runCli([
+      CLI_ENTRY,
+      'workflow',
+      'run',
+      E2E_HITL_TWO_ASKS_WORKFLOW_NAME,
       '--folder',
       '--json',
     ]);
@@ -541,6 +569,7 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
     runWorkflow,
     runHitlWorkflow,
     runHitlLongHistoryWorkflow,
+    runHitlTwoAsksWorkflow,
     startHitlWorkflow,
     resumeWorkflow,
     runHitlWorkflowViaWeb,
