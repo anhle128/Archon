@@ -30,7 +30,9 @@ import { clampRoomRatio, roomPanelSizes } from '@/lib/room-split-layout';
 import type { WorkflowRunStatus } from '@/lib/types';
 import { useContainerSplitMode, type ContainerSplitMode } from '@/lib/use-container-split-mode';
 
+import { AskCard, InvalidAskCard } from './AskCard';
 import type { AskActionStateByRequest } from './ask-answer-controller';
+import { resolveAskCardPresentation } from './ask-card-presentation';
 import { buildChatTimeline, type ChatTimelineEntry } from './build-chat-timeline';
 
 import { buildLogRows, type LogRow } from './build-log-rows';
@@ -41,6 +43,7 @@ import type { ExecutionHeaderOption } from './NodeRoomHeader';
 import { resolveGraphRoomRow } from './resolve-graph-room-row';
 import { resolveRoomKind } from './resolve-room-kind';
 import { resolveTimelineRoomRow } from './resolve-timeline-room-row';
+import { parseAskEnvelope, type AskDraft, type AskDraftByRequest } from './parse-ask-envelope';
 import { RunChatComposer } from './RunChatComposer';
 import { useStackedViewport } from './source-control/use-stacked-viewport';
 
@@ -89,6 +92,8 @@ export interface LegacyGraphLogsPaneProps {
   scopeKey?: string;
   initialScrollTop?: number;
   onScrollTopChange?: (scrollTop: number) => void;
+  askDrafts?: AskDraftByRequest;
+  onAskDraftChange?: (requestId: string, draft: AskDraft) => void;
 }
 
 export function runChatMessagesRefetchInterval(status: WorkflowRunStatus): 3000 | false {
@@ -209,6 +214,8 @@ export function LegacyGraphLogsPane({
   scopeKey,
   initialScrollTop,
   onScrollTopChange,
+  askDrafts,
+  onAskDraftChange,
 }: LegacyGraphLogsPaneProps): React.ReactElement {
   const stacked = useStackedViewport();
   const paneRef = useRef<HTMLDivElement>(null);
@@ -269,7 +276,7 @@ export function LegacyGraphLogsPane({
 
   const composerDisabledReason =
     parentPlatformId === null
-      ? 'Conversation unavailable.'
+      ? 'This run has no parent conversation, so replies cannot be delivered.'
       : parentConversationQuery.fetchStatus === 'fetching' &&
           parentConversationQuery.data === undefined
         ? 'Loading conversation…'
@@ -287,8 +294,19 @@ export function LegacyGraphLogsPane({
         nodeStates: visibleNodeStates,
         resolveNodeType: (nodeId: string) =>
           resolveRoomKind(nodeId, definitionNodes, events, approval).nodeType,
+        rows,
+        pendingInteractions,
+        approval,
       }),
-    [approval, definitionNodes, events, parentMessagesQuery.data, visibleNodeStates]
+    [
+      approval,
+      definitionNodes,
+      events,
+      parentMessagesQuery.data,
+      pendingInteractions,
+      rows,
+      visibleNodeStates,
+    ]
   );
 
   const parentMessagesError = parentMessagesQuery.isError
@@ -391,6 +409,54 @@ export function LegacyGraphLogsPane({
               parentMessagesQuery.data === undefined
             }
             error={parentMessagesError}
+            renderAsk={(entry): React.ReactNode => {
+              const questions = parseAskEnvelope(entry.interaction.envelope);
+              if (questions === null) {
+                const row = rows.find(candidate => candidate.id === entry.rowId);
+                return (
+                  <InvalidAskCard
+                    interaction={entry.interaction}
+                    agentDisplayName={row?.label ?? entry.interaction.node_id}
+                    nodeId={entry.interaction.node_id}
+                  />
+                );
+              }
+              const requestId = entry.interaction.tool_use_id;
+              const row = rows.find(candidate => candidate.id === entry.rowId);
+              return (
+                <AskCard
+                  interaction={entry.interaction}
+                  questions={questions}
+                  presentation={resolveAskCardPresentation({
+                    interaction: entry.interaction,
+                    action: actionStates[requestId],
+                    nodeStatus: visibleNodeStates.find(
+                      state => state.nodeId === entry.interaction.node_id
+                    )?.status,
+                    nodeError: visibleNodeStates.find(
+                      state => state.nodeId === entry.interaction.node_id
+                    )?.error,
+                  })}
+                  viewerIsStarter={viewerIsStarter}
+                  starterDisplayName={starterDisplayName}
+                  agentDisplayName={row?.label ?? entry.interaction.node_id}
+                  nodeId={entry.interaction.node_id}
+                  autoFocus={false}
+                  nowMs={Date.now()}
+                  mountContext="chat"
+                  draft={askDrafts?.[requestId] ?? {}}
+                  onDraftChange={(next): void => {
+                    onAskDraftChange?.(requestId, next);
+                  }}
+                  onSubmit={(body): void => {
+                    void onSubmitAsk(requestId, body);
+                  }}
+                  onDecline={(): void => {
+                    void onSubmitAsk(requestId, { decline: true });
+                  }}
+                />
+              );
+            }}
           />
         </div>
         <RunChatComposer
@@ -451,6 +517,8 @@ export function LegacyGraphLogsPane({
         scopeKey={scopeKey}
         initialScrollTop={initialScrollTop}
         onScrollTopChange={onScrollTopChange}
+        askDrafts={askDrafts}
+        onAskDraftChange={onAskDraftChange}
       />
       {roomFooter}
     </div>

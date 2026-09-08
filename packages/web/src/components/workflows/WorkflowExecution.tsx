@@ -43,12 +43,14 @@ import {
   chooseExecutionForNode,
   closeRoom,
   openRoom,
+  askCardId,
   rememberRoomScroll,
   resetRoomVisit,
   roomOpenerId,
   type RoomVisitState,
 } from '@/lib/execution-room-model';
 import { nodeMessageScopeKey, type NodeMessageSelection } from '@/lib/node-message-pages';
+import type { AskDraft, AskDraftByRequest } from './parse-ask-envelope';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { readRoomRatio, writeRoomRatio } from '@/lib/room-split-layout';
 import { settleRunningDagNodesForTerminalStatus } from '@/lib/workflow-utils';
@@ -384,6 +386,10 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const fetchedCodebaseIdRef = useRef<string | null>(null);
   const [askActionStates, setAskActionStates] =
     useState<AskActionStateByRequest>(emptyAskActionStates);
+  const [askDrafts, setAskDrafts] = useState<AskDraftByRequest>({});
+  const updateAskDraft = useCallback((requestId: string, draft: AskDraft): void => {
+    setAskDrafts(current => ({ ...current, [requestId]: draft }));
+  }, []);
   const selectedDagNode = room.selection?.nodeId ?? null;
   const queryNode = searchParams.get('node');
 
@@ -396,6 +402,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     setNodeScrollTrigger(0);
     fetchedCodebaseIdRef.current = null;
     setAskActionStates(emptyAskActionStates());
+    setAskDrafts({});
   }, [runId]);
 
   const setAskActionState = useCallback((requestId: string, state: AskActionState): void => {
@@ -1020,6 +1027,8 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           scopeKey={transcriptScopeKey}
           initialScrollTop={initialScrollTop}
           onScrollTopChange={handleScrollTopChange}
+          askDrafts={askDrafts}
+          onAskDraftChange={updateAskDraft}
         />
       );
     }
@@ -1068,10 +1077,35 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             pendingInteractions={queryData?.pendingInteractions ?? []}
             nodeStates={queryData?.nodeStates ?? []}
             runError={queryData?.runError ?? null}
-            onSelectAwaitingNode={handleNodeClick}
-            onRequestGraphView={(): void => {
-              setActiveView('graph');
+            onSelectAwaitingNode={(nodeId): void => {
+              handleNodeClick(nodeId);
+              const pending = (queryData?.pendingInteractions ?? []).find(
+                interaction =>
+                  interaction.kind === 'ask' &&
+                  interaction.status === 'pending' &&
+                  interaction.node_id === nodeId
+              );
+              const requestId = pending?.tool_use_id;
+              if (requestId === undefined) return;
+              let attempts = 0;
+              const focusAsk = (): void => {
+                const card = document.getElementById(askCardId(requestId));
+                if (card === null) {
+                  if (attempts < 30) {
+                    attempts += 1;
+                    requestAnimationFrame(focusAsk);
+                  }
+                  return;
+                }
+                card.focus();
+                const control = card.querySelector(
+                  'input:not([disabled]), textarea:not([disabled]), button:not([disabled])'
+                );
+                if (control instanceof HTMLElement) control.focus();
+              };
+              requestAnimationFrame(focusAsk);
             }}
+            onRequestGraphView={(): void => undefined}
           />
         </div>
         <div className="flex items-center gap-2 ml-auto shrink-0">

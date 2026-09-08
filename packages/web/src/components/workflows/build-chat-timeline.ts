@@ -1,7 +1,13 @@
-import type { MessageResponse, WorkflowEventResponse, WorkflowNodeStateResponse } from '@/lib/api';
+import type {
+  MessageResponse,
+  PendingInteraction,
+  WorkflowEventResponse,
+  WorkflowNodeStateResponse,
+} from '@/lib/api';
+import { readApprovalContext } from '@/lib/approval-context';
 import { ensureUtc } from '@/lib/format';
 
-import type { LogRowSelection } from './build-log-rows';
+import type { LogRow, LogRowSelection } from './build-log-rows';
 import type { NodeBodyKind } from './resolve-room-kind';
 
 export type ChatTimelineNodeStatus = Exclude<WorkflowNodeStateResponse['status'], 'awaiting'>;
@@ -23,6 +29,22 @@ export type ChatTimelineEntry =
       status: ChatTimelineNodeStatus;
       detail: string;
       selection: LogRowSelection;
+    }
+  | {
+      kind: 'ask';
+      id: string;
+      createdAt: string;
+      interaction: PendingInteraction;
+      rowId: string;
+      scopeLimitation: string | null;
+    }
+  | {
+      kind: 'gate';
+      id: string;
+      createdAt: string;
+      nodeId: string;
+      rowId: string;
+      scopeLimitation: string | null;
     };
 
 interface IndexedEntry {
@@ -117,11 +139,58 @@ function decorateLabel(baseLabel: string, selection: LogRowSelection): string {
   return baseLabel;
 }
 
+export const UNSCOPED_INTERACTION_LIMITATION =
+  'Execution scope was not recorded for this interaction.';
+
+function rowMatchesScope(
+  row: LogRow,
+  scope: NonNullable<PendingInteraction['execution_scope']>
+): boolean {
+  return (
+    row.selection.kind === 'occurrence' &&
+    scope.occurrence_id === row.selection.occurrenceId &&
+    scope.attempt_id === row.selection.attemptId
+  );
+}
+
+function latestRowForNode(rows: readonly LogRow[], nodeId: string): LogRow | null {
+  const matching = rows.filter(row => row.nodeId === nodeId);
+  if (matching.length === 0) return null;
+  return matching.reduce((best, row) => (row.order >= best.order ? row : best));
+}
+
+function assignInteractionRow(
+  nodeId: string,
+  scope: PendingInteraction['execution_scope'] | undefined,
+  rows: readonly LogRow[]
+): { row: LogRow; limitation: string | null } | null {
+  if (scope !== undefined && scope !== null) {
+    const exact = rows.find(row => row.nodeId === nodeId && rowMatchesScope(row, scope));
+    return exact === undefined ? null : { row: exact, limitation: null };
+  }
+  const latest = latestRowForNode(rows, nodeId);
+  if (latest === null) return null;
+  return { row: latest, limitation: UNSCOPED_INTERACTION_LIMITATION };
+}
+
+function nodeStatusEntriesForNode(
+  entries: readonly ChatTimelineEntry[],
+  nodeId: string
+): Extract<ChatTimelineEntry, { kind: 'node_status' }>[] {
+  return entries.filter(
+    (entry): entry is Extract<ChatTimelineEntry, { kind: 'node_status' }> =>
+      entry.kind === 'node_status' && entry.nodeId === nodeId
+  );
+}
+
 export function buildChatTimeline(input: {
   messages: readonly MessageResponse[];
   events: readonly WorkflowEventResponse[];
   nodeStates: readonly WorkflowNodeStateResponse[];
   resolveNodeType: (nodeId: string) => NodeBodyKind;
+  rows?: readonly LogRow[];
+  pendingInteractions?: readonly PendingInteraction[];
+  approval?: unknown;
 }): ChatTimelineEntry[] {
   const namesById = new Map<string, string>();
   for (const state of input.nodeStates) {
@@ -178,5 +247,82 @@ export function buildChatTimeline(input: {
     return left.encounterIndex - right.encounterIndex;
   });
 
-  return indexed.map(item => item.entry);
+  const base = indexed.map(item => item.entry);
+  const rows = input.rows ?? [];
+  const placements: { row: LogRow; entry: ChatTimelineEntry }[] = [];
+
+  for (const interaction of input.pendingInteractions ?? []) {
+    if (interaction.kind !== 'ask') continue;
+    const assigned = assignInteractionRow(interaction.node_id, interaction.execution_scope, rows);
+    if (assigned === null) continue;
+    placements.push({
+      row: assigned.row,
+      entry: {
+        kind: 'ask',
+        id: interaction.id,
+        createdAt: interaction.created_at,
+        interaction,
+        rowId: assigned.row.id,
+        scopeLimitation: assigned.limitation,
+      },
+    });
+  }
+
+  const approval = readApprovalContext(input.approval);
+  if (
+    approval !== null &&
+    (approval.type === undefined ||
+      approval.type === 'approval' ||
+      approval.type === 'plannotator_gate')
+  ) {
+    const assigned = assignInteractionRow(approval.nodeId, undefined, rows);
+    if (assigned !== null) {
+      placements.push({
+        row: assigned.row,
+        entry: {
+          kind: 'gate',
+          id: `gate:${approval.nodeId}:${assigned.row.id}`,
+          createdAt: base[base.length - 1]?.createdAt ?? approval.message,
+          nodeId: approval.nodeId,
+          rowId: assigned.row.id,
+          scopeLimitation: assigned.limitation,
+        },
+      });
+    }
+  }
+
+  if (placements.length === 0) return base;
+
+  const rowsByNode = new Map<string, LogRow[]>();
+  for (const row of [...rows].sort((left, right) => left.order - right.order)) {
+    const list = rowsByNode.get(row.nodeId) ?? [];
+    list.push(row);
+    rowsByNode.set(row.nodeId, list);
+  }
+  const anchorByRowId = new Map<string, string>();
+  for (const [nodeId, nodeRows] of rowsByNode) {
+    const statuses = nodeStatusEntriesForNode(base, nodeId);
+    for (const [index, row] of nodeRows.entries()) {
+      const anchor = statuses[index] ?? statuses[statuses.length - 1];
+      if (anchor !== undefined) anchorByRowId.set(row.id, anchor.id);
+    }
+  }
+
+  const inserted = new Set<string>();
+  const result: ChatTimelineEntry[] = [];
+  for (const entry of base) {
+    result.push(entry);
+    if (entry.kind !== 'node_status') continue;
+    for (const placement of placements) {
+      if (inserted.has(placement.entry.id)) continue;
+      if (anchorByRowId.get(placement.row.id) !== entry.id) continue;
+      result.push(placement.entry);
+      inserted.add(placement.entry.id);
+    }
+  }
+  for (const placement of placements) {
+    if (inserted.has(placement.entry.id)) continue;
+    result.push(placement.entry);
+  }
+  return result;
 }

@@ -185,8 +185,8 @@
         "US-008"
       ],
       "priority": 9,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/components/workflows/AskCard.tsx, AskCard.test.tsx, parse-ask-envelope.ts, build-chat-timeline.ts, build-chat-timeline.test.ts, ChatTimeline.tsx, ChatTimeline.test.tsx, source-control/dag-run-tabs.tsx, dag-run-tabs.test.tsx, RunChatComposer.test.tsx, WorkflowExecution.tsx, WorkflowExecution.test.tsx, LegacyGraphLogsPane.tsx, LegacyNodeRoom.tsx, NodeTranscriptPane.tsx."
     },
     {
       "id": "US-010",

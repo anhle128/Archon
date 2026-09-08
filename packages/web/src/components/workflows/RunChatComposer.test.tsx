@@ -62,4 +62,12 @@ describe('RunChatComposer', () => {
     expect(markup).toContain('<textarea');
     expect(markup.indexOf('disabled=""')).toBeGreaterThan(markup.indexOf('type="submit"'));
   });
+
+  test('shows the factual disabled copy when the run has no parent conversation', () => {
+    const reason = 'This run has no parent conversation, so replies cannot be delivered.';
+    const markup = renderComposer({ disabledReason: reason, value: '' });
+    expect(markup.split('disabled=""')).toHaveLength(3);
+    expect(markup).toContain(`placeholder="${reason}"`);
+    expect(markup).toContain(`title="${reason}"`);
+  });
 });

@@ -22,13 +22,16 @@ describe('DagRunTabs', () => {
     expect(html.indexOf('Source Control')).toBeLessThan(html.indexOf('Terminal'));
   });
 
-  test('keeps Source Control when optional Chat is absent', () => {
+  test('keeps Chat visible when parentPlatformId is null', () => {
     const html = render(null);
     expect(html).toContain('Graph');
     expect(html).toContain('Logs');
-    expect(html).not.toContain('Chat');
+    expect(html).toContain('Chat');
     expect(html).toContain('Source Control');
     expect(html).toContain('Terminal');
+    expect(html.indexOf('Graph')).toBeLessThan(html.indexOf('Logs'));
+    expect(html.indexOf('Logs')).toBeLessThan(html.indexOf('Chat'));
+    expect(html.indexOf('Chat')).toBeLessThan(html.indexOf('Source Control'));
     expect(html.indexOf('Source Control')).toBeLessThan(html.indexOf('Terminal'));
   });
 });

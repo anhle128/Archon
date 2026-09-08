@@ -1,5 +1,20 @@
 ## Codebase Patterns
 
+### Chat AskCard still needs node status for presentation
+- **Where**: `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` (`renderAsk`)
+- **Pattern**: `resolveAskCardPresentation` requires `nodeStatus` and `nodeError`. Chat-timeline Ask cards must look them up from `visibleNodeStates` by `interaction.node_id`.
+- **Example**: `nodeStatus: visibleNodeStates.find(s => s.nodeId === entry.interaction.node_id)?.status`
+
+### AskDraft types live next to the parser
+- **Where**: `packages/web/src/components/workflows/parse-ask-envelope.ts`, `WorkflowExecution.tsx`
+- **Pattern**: `AskDraft` / `AskDraftByRequest` are exported from `parse-ask-envelope.ts` (re-exported by AskCard). Import the types from the parser in WorkflowExecution to avoid a circular import.
+- **Example**: `import type { AskDraft, AskDraftByRequest } from './parse-ask-envelope';`
+
+### Awaiting-input must not switch tabs
+- **Where**: `packages/web/src/components/workflows/WorkflowExecution.tsx` (`WorkflowAskChrome`)
+- **Pattern**: `WorkflowAskChrome` still calls `onRequestGraphView()` then `onSelectAwaitingNode`. Parent sets `onRequestGraphView` to a no-op so Awaiting input opens the room without leaving Chat, then rAF-retries `#run-ask-card-{id}`.
+- **Example**: `onRequestGraphView={(): void => undefined}`
+
 ### Happy-dom querySelector instanceof intersections
 - **Where**: `packages/web/src/components/workflows/NodeRoomHeader.test.tsx`, `NodeTranscriptPane.test.tsx`
 - **Pattern**: `host` is lib.dom `Element`; `instanceof win.HTMLElement` / `HTMLSelectElement` intersects to `never` because `ELEMENT_NODE` conflicts. Null-check, then `as unknown as HTMLElement`.
@@ -301,5 +316,41 @@
 - Same-scope loader swap (tests) needs `complete: false` on effect start or a completed page never refetches
 - Happy-dom `instanceof win.HTMLElement` against lib.dom `Element` is `never`; cast through `unknown`
 - Header offset uses `+${formatDurationMs(1500)}` → `+1.5s`
+
+---
+
+## 2026-09-08 — US-009: Share legacy Ask drafts across room and chat
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/AskCard.tsx` — controlled `draft`/`onDraftChange`; root `id={askCardId(...)}` `tabIndex={-1}`
+- `packages/web/src/components/workflows/AskCard.test.tsx` — supplied-draft render, onDraftChange copies, existing submit body
+- `packages/web/src/components/workflows/parse-ask-envelope.ts` — export `AskDraftByRequest`
+- `packages/web/src/components/workflows/build-chat-timeline.ts` — `ask`/`gate` entries on exact occurrence+attempt or latest node + `scopeLimitation`
+- `packages/web/src/components/workflows/build-chat-timeline.test.ts` — scoped Ask on second execution; unscoped Ask/gate on latest
+- `packages/web/src/components/workflows/ChatTimeline.tsx` — `renderAsk`/`renderGate` slots and limitation copy
+- `packages/web/src/components/workflows/ChatTimeline.test.tsx` — limitation slots
+- `packages/web/src/components/workflows/source-control/dag-run-tabs.tsx` — Chat tab always rendered
+- `packages/web/src/components/workflows/source-control/dag-run-tabs.test.tsx` — Chat visible when `parentPlatformId` is null
+- `packages/web/src/components/workflows/RunChatComposer.test.tsx` — no-parent disabled copy
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — `askDrafts` keyed by `tool_use_id`, reset on `runId`, Awaiting-input focus
+- `packages/web/src/components/workflows/WorkflowExecution.test.tsx` — shared drafts, runId reset, Awaiting input
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` — shared drafts, Chat AskCard, no-parent composer reason, skip conversation fetch
+- `packages/web/src/components/workflows/LegacyNodeRoom.tsx` / `NodeTranscriptPane.tsx` — pass shared drafts into room AskCard
+
+**Acceptance criteria verified**:
+- [x] AskCard is controlled (`draft`, `onDraftChange`) with `id={askCardId(interaction.tool_use_id)}` and `tabIndex={-1}`
+- [x] `build-chat-timeline.ts` maps Ask/gates to exact `execution_scope` or latest node execution + `scopeLimitation`
+- [x] WorkflowExecution owns `askDrafts` keyed by `tool_use_id`, shares room + Chat, resets on `runId`
+- [x] Chat tab always visible even if `parentPlatformId` is null
+- [x] Disabled composer copy: `This run has no parent conversation, so replies cannot be delivered.`
+- [x] Tests in AskCard, build-chat-timeline, ChatTimeline, dag-run-tabs, RunChatComposer, WorkflowExecution pass (119 tests across 8 files)
+
+**Learnings**:
+- `resolveAskCardPresentation` requires `nodeStatus`/`nodeError`; Chat Ask cards must look them up from `visibleNodeStates`
+- ChatTimeline limitation copy only appears when `renderAsk`/`renderGate` are passed through the test helper
+- `WorkflowAskChrome` still calls `onRequestGraphView()`; parent no-ops it so Awaiting input does not switch tabs
+- Duplicate AskCard DOM ids: both room and Chat use `askCardId(tool_use_id)` so `getElementById` finds the first match
+- Conversation fetch already gated on `parentPlatformId !== null`; composer disabledReason is the visibility contract
 
 ---

@@ -25,6 +25,8 @@ export interface ChatTimelineProps {
   onSelectNodeStatus: (entry: Extract<ChatTimelineEntry, { kind: 'node_status' }>) => void;
   loading: boolean;
   error: string | null;
+  renderAsk?: (entry: Extract<ChatTimelineEntry, { kind: 'ask' }>) => React.ReactNode;
+  renderGate?: (entry: Extract<ChatTimelineEntry, { kind: 'gate' }>) => React.ReactNode;
 }
 
 const TYPE_ICONS: Record<NodeBodyKind, LucideIcon> = {
@@ -50,7 +52,8 @@ const STATUS_COLORS: Record<ChatTimelineNodeStatus, string> = {
 };
 
 export function ChatTimeline(props: ChatTimelineProps): React.ReactElement {
-  const { entries, selectedEntryId, onSelectNodeStatus, loading, error } = props;
+  const { entries, selectedEntryId, onSelectNodeStatus, loading, error, renderAsk, renderGate } =
+    props;
   const empty = entries.length === 0;
 
   return (
@@ -68,6 +71,28 @@ export function ChatTimeline(props: ChatTimelineProps): React.ReactElement {
               className="ml-auto max-w-[80%] rounded-lg bg-accent/20 px-3 py-2 text-sm text-text-primary whitespace-pre-wrap"
             >
               {entry.content}
+            </div>
+          );
+        }
+        if (entry.kind === 'ask') {
+          return (
+            <div key={`ask:${entry.id}`} className="space-y-2">
+              {entry.scopeLimitation !== null ? (
+                <p className="text-xs text-warning">{entry.scopeLimitation}</p>
+              ) : null}
+              {renderAsk?.(entry)}
+            </div>
+          );
+        }
+        if (entry.kind === 'gate') {
+          return (
+            <div key={`gate:${entry.id}`} className="space-y-2">
+              {entry.scopeLimitation !== null ? (
+                <p className="text-xs text-warning">{entry.scopeLimitation}</p>
+              ) : null}
+              {renderGate?.(entry) ?? (
+                <p className="text-sm text-text-secondary">Waiting for approval</p>
+              )}
             </div>
           );
         }

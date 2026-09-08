@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import type { MessageResponse, WorkflowEventResponse, WorkflowNodeStateResponse } from '@/lib/api';
+import type {
+  MessageResponse,
+  PendingInteraction,
+  WorkflowEventResponse,
+  WorkflowNodeStateResponse,
+} from '@/lib/api';
 
 import { buildChatTimeline, type ChatTimelineEntry } from './build-chat-timeline';
+import type { LogRow } from './build-log-rows';
 import type { NodeBodyKind } from './resolve-room-kind';
 
 const message = (overrides: Partial<MessageResponse> = {}): MessageResponse => ({
@@ -375,5 +381,115 @@ describe('buildChatTimeline', () => {
     expect(statuses.includes('awaiting')).toBe(false);
     expect(details.some(detail => detail.includes('awaiting'))).toBe(false);
     expect(entries.map(entry => entry.id)).toEqual(['message-1', 'started', 'gate']);
+  });
+});
+
+const OCC_1 = '11111111-1111-4111-8111-111111111111';
+const OCC_2 = '22222222-2222-4222-8222-222222222222';
+const ATTEMPT_1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ATTEMPT_2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const UNSCOPED_LIMITATION = 'Execution scope was not recorded for this interaction.';
+
+function occurrenceRow(id: string, occurrenceId: string, attemptId: string, order: number): LogRow {
+  return {
+    id,
+    nodeId: 'review',
+    label: 'Review',
+    status: 'completed',
+    order,
+    sourceIndex: order,
+    selection: { kind: 'occurrence', occurrenceId, attemptId },
+  };
+}
+
+function pendingAsk(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
+  return {
+    id: 'ask-1',
+    workflow_run_id: 'run-1',
+    node_id: 'review',
+    tool_use_id: 'tool-ask',
+    kind: 'ask',
+    status: 'pending',
+    envelope: {},
+    answer: null,
+    provider_session_id: 'sess-1',
+    created_at: '2026-09-06T00:00:02.000Z',
+    resolved_at: null,
+    resolved_by: null,
+    ...overrides,
+  };
+}
+
+describe('buildChatTimeline Ask and gate placement', () => {
+  const first = occurrenceRow('row-1', OCC_1, ATTEMPT_1, 0);
+  const second = occurrenceRow('row-2', OCC_2, ATTEMPT_2, 1);
+  const startFirst = event({
+    id: 'start-1',
+    created_at: '2026-09-06T00:00:01.000Z',
+  });
+  const startSecond = event({
+    id: 'start-2',
+    created_at: '2026-09-06T00:00:02.000Z',
+  });
+
+  test('places a scoped Ask after only the matching occurrence', () => {
+    const entries = build({
+      events: [startFirst, startSecond],
+      rows: [first, second],
+      pendingInteractions: [
+        pendingAsk({
+          execution_scope: { occurrence_id: OCC_2, attempt_id: ATTEMPT_2 },
+        }),
+      ],
+    });
+    const kinds = entries.map(entry => entry.kind);
+    expect(kinds.filter(kind => kind === 'ask')).toEqual(['ask']);
+    const ask = entries.find(entry => entry.kind === 'ask');
+    if (ask === undefined || ask.kind !== 'ask') throw new Error('missing ask');
+    expect(ask.rowId).toBe('row-2');
+    expect(ask.scopeLimitation).toBeNull();
+    expect(entries.indexOf(ask)).toBeGreaterThan(
+      entries.findIndex(entry => entry.kind === 'node_status' && entry.id === 'start-2')
+    );
+    expect(entries.some(entry => entry.kind === 'ask' && entry.rowId === 'row-1')).toBe(false);
+  });
+
+  test('places an unscoped Ask after the latest execution with a limitation', () => {
+    const entries = build({
+      events: [startFirst, startSecond],
+      rows: [first, second],
+      pendingInteractions: [pendingAsk()],
+    });
+    const ask = entries.find(entry => entry.kind === 'ask');
+    if (ask === undefined || ask.kind !== 'ask') throw new Error('missing ask');
+    expect(ask.rowId).toBe('row-2');
+    expect(ask.scopeLimitation).toBe(UNSCOPED_LIMITATION);
+    expect(entries.filter(entry => entry.kind === 'ask')).toHaveLength(1);
+  });
+
+  test('places an unscoped approval gate after the greatest-order row', () => {
+    const entries = build({
+      events: [startFirst, startSecond],
+      rows: [first, second],
+      approval: { nodeId: 'review', message: 'Approve the change', type: 'approval' },
+    });
+    const gate = entries.find(entry => entry.kind === 'gate');
+    if (gate === undefined || gate.kind !== 'gate') throw new Error('missing gate');
+    expect(gate.rowId).toBe('row-2');
+    expect(gate.nodeId).toBe('review');
+    expect(gate.scopeLimitation).toBe(UNSCOPED_LIMITATION);
+    expect(entries.filter(entry => entry.kind === 'gate')).toHaveLength(1);
+  });
+
+  test('keeps ordinary user and node-status ordering unchanged', () => {
+    const entries = build({
+      messages: [message()],
+      events: [event({ created_at: message().created_at })],
+      rows: [first],
+    });
+    expect(entries.map(entry => [entry.kind, entry.id])).toEqual([
+      ['user', 'message-1'],
+      ['node_status', 'event-1'],
+    ]);
   });
 });

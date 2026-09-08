@@ -819,4 +819,192 @@ describe('WorkflowExecution room visit', () => {
     expect(host.querySelector('[data-testid="legacy-node-room"]')).toBeNull();
     expect(host.querySelector('[aria-current="true"]')).toBeNull();
   });
+
+  function askRunDetail(runId: string): Awaited<ReturnType<typeof getWorkflowRun>> {
+    const base = visitRunDetail(runId);
+    return {
+      ...base,
+      run: {
+        ...base.run,
+        status: 'paused',
+        parent_platform_id: 'parent-1',
+      },
+      nodeStates: base.nodeStates.map(state =>
+        state.nodeId === 'review' ? { ...state, status: 'awaiting' } : state
+      ),
+      pending_interactions: [
+        {
+          id: 'ask-1',
+          workflow_run_id: runId,
+          node_id: 'review',
+          tool_use_id: 'tool-ask',
+          kind: 'ask',
+          status: 'pending',
+          envelope: {
+            questions: [
+              {
+                id: 'q1',
+                prompt: 'Notes',
+                selection: 'single',
+                options: [],
+                allowOther: true,
+              },
+            ],
+          },
+          answer: null,
+          provider_session_id: 'sess-1',
+          created_at: CREATED_AT,
+          resolved_at: null,
+          resolved_by: null,
+        },
+      ],
+    };
+  }
+
+  function mockAskFetch(): void {
+    fetchSpy.mockRestore();
+    fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(((input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      if (path === '/api/workflows/runs/run-1' || path === '/api/workflows/runs/run-2') {
+        const runId = path.endsWith('run-2') ? 'run-2' : 'run-1';
+        return Promise.resolve(jsonResponse(askRunDetail(runId)));
+      }
+      if (path === '/api/workflows/demo') {
+        return Promise.resolve(jsonResponse(visitWorkflowDefinition()));
+      }
+      if (path.includes('/nodes/') && path.endsWith('/messages')) {
+        return Promise.resolve(jsonResponse({ messages: [], hasMore: false, highWatermark: 0 }));
+      }
+      if (path === '/api/conversations/parent-1') {
+        return Promise.resolve(
+          jsonResponse({
+            id: 'parent-1',
+            platform_type: 'web',
+            platform_conversation_id: 'web-1',
+            codebase_id: null,
+            cwd: null,
+            isolation_env_id: null,
+            ai_assistant_type: 'claude',
+            title: 'parent',
+            hidden: false,
+            deleted_at: null,
+            created_at: CREATED_AT,
+            updated_at: CREATED_AT,
+          })
+        );
+      }
+      if (path === '/api/conversations/parent-1/messages') {
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (path.includes('/ask/') && path.endsWith('/answer')) {
+        return Promise.resolve(jsonResponse({ accepted: true, status: 'ok' }));
+      }
+      return Promise.resolve(jsonResponse({ error: `unmocked ${path}` }, 404));
+    }) as typeof fetch);
+  }
+
+  function reactOnChange(
+    node: Element
+  ): ((event: { target: { value: string } }) => void) | undefined {
+    const key = Object.keys(node).find(candidate => candidate.startsWith('__reactProps$'));
+    if (key === undefined) return undefined;
+    const props = (
+      node as unknown as Record<
+        string,
+        { onChange?: (event: { target: { value: string } }) => void }
+      >
+    )[key];
+    return props?.onChange;
+  }
+
+  test('shares Ask drafts between the room and Chat and resets them on run change', async () => {
+    mockAskFetch();
+    await renderVisit();
+    await clickTab('Logs');
+    await flushUntil('log rows', () => (host.textContent ?? '').includes('Review'));
+    await clickNamed('Review');
+    await flushUntil('ask in room', () =>
+      (host.querySelector('[data-testid="legacy-node-room"]')?.textContent ?? '').includes('Notes')
+    );
+
+    const roomCard = host.querySelector('[data-testid="legacy-node-room"] #run-ask-card-tool-ask');
+    const roomField = roomCard?.querySelector('textarea');
+    if (roomField === null || roomField === undefined) throw new Error('missing room textarea');
+    await act(async () => {
+      reactOnChange(roomField)?.({ target: { value: 'shared-from-room' } });
+    });
+    await flush();
+    expect((roomField as unknown as HTMLTextAreaElement).value).toBe('shared-from-room');
+
+    await clickTab('Chat');
+    await flushUntil(
+      'chat ask',
+      () =>
+        (host.textContent ?? '').includes('ask-slot') || (host.textContent ?? '').includes('Notes')
+    );
+    const chatCard = Array.from(host.querySelectorAll('#run-ask-card-tool-ask')).find(
+      card => !card.closest('[data-testid="legacy-node-room"]')
+    );
+    const chatField = chatCard?.querySelector('textarea');
+    if (chatField === null || chatField === undefined) throw new Error('missing chat textarea');
+    expect((chatField as unknown as HTMLTextAreaElement).value).toBe('shared-from-room');
+
+    await act(async () => {
+      reactOnChange(chatField)?.({ target: { value: 'shared-from-chat' } });
+    });
+    await flush();
+    expect((roomField as unknown as HTMLTextAreaElement).value).toBe('shared-from-chat');
+    expect((chatField as unknown as HTMLTextAreaElement).value).toBe('shared-from-chat');
+
+    await clickNamed('switch-run');
+    await flushUntil('run switched', () => (host.textContent ?? '').includes('demo'));
+    const fields = Array.from(host.querySelectorAll('#run-ask-card-tool-ask textarea'));
+    for (const field of fields) {
+      expect((field as unknown as HTMLTextAreaElement).value).toBe('');
+    }
+  });
+
+  test('Awaiting input opens the matching Ask without changing the main view', async () => {
+    mockAskFetch();
+    await renderVisit();
+    const graphTab = Array.from(host.querySelectorAll('[role="tab"]')).find(
+      tab => (tab.textContent ?? '').trim() === 'Graph'
+    );
+    expect(
+      graphTab?.getAttribute('aria-selected') ?? graphTab?.getAttribute('data-state')
+    ).not.toBe('false');
+    await clickNamed('Awaiting input');
+    await flushUntil(
+      'opened from chrome',
+      () =>
+        host.querySelector('[data-testid="legacy-node-room"] #run-ask-card-tool-ask textarea') !==
+        null
+    );
+    expect(host.querySelector('[data-testid="legacy-node-room"]')?.textContent ?? '').toContain(
+      'Notes'
+    );
+    for (let i = 0; i < 8; i += 1) {
+      await flushFrames();
+    }
+    const stillGraph = Array.from(host.querySelectorAll('[role="tab"]')).find(
+      tab => (tab.textContent ?? '').trim() === 'Graph'
+    );
+    expect(
+      stillGraph?.getAttribute('data-state') === 'active' ||
+        stillGraph?.getAttribute('aria-selected') === 'true'
+    ).toBe(true);
+    const active = win.document.activeElement as { tagName?: string; id?: string } | null;
+    const focusedAsk =
+      active?.id === 'run-ask-card-tool-ask' ||
+      ((active as { closest?: (selector: string) => Element | null } | null)?.closest?.(
+        '#run-ask-card-tool-ask'
+      ) !== null &&
+        (active as { closest?: (selector: string) => Element | null }).closest !== undefined);
+    expect(
+      active?.tagName === 'TEXTAREA' ||
+        active?.tagName === 'INPUT' ||
+        active?.id === 'run-ask-card-tool-ask' ||
+        focusedAsk
+    ).toBe(true);
+  });
 });

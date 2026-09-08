@@ -30,7 +30,7 @@ import { resolveAskCardPresentation } from './ask-card-presentation';
 import type { LogRow } from './build-log-rows';
 import { selectVisibleNodeAskInteractions } from './merge-agent-room-items';
 import { NodeRoom, selectNodeRoomMessages } from './NodeRoom';
-import { parseAskEnvelope } from './parse-ask-envelope';
+import { parseAskEnvelope, type AskDraft, type AskDraftByRequest } from './parse-ask-envelope';
 
 export function transcriptRefetchInterval(status: WorkflowRunStatus): 1000 | false {
   switch (status) {
@@ -79,6 +79,8 @@ export interface NodeTranscriptPaneProps {
   initialScrollTop?: number;
   onScrollTopChange?: (scrollTop: number) => void;
   loadMessage?: typeof getWorkflowNodeMessage;
+  askDrafts?: AskDraftByRequest;
+  onAskDraftChange?: (requestId: string, draft: AskDraft) => void;
 }
 
 function collectToolIds(messages: readonly WorkflowNodeMessageResponse[]): Set<string> {
@@ -107,6 +109,8 @@ export function NodeTranscriptPane({
   initialScrollTop,
   onScrollTopChange,
   loadMessage = getWorkflowNodeMessage,
+  askDrafts,
+  onAskDraftChange,
 }: NodeTranscriptPaneProps): React.ReactElement {
   const resolvedScopeKey =
     scopeKey ??
@@ -121,6 +125,8 @@ export function NodeTranscriptPane({
     createScrollFollow(row?.status ?? 'completed', initialScrollTop)
   );
   const [retryNonce, setRetryNonce] = useState(0);
+  const [localAskDrafts, setLocalAskDrafts] = useState<AskDraftByRequest>({});
+
   const pageStateRef = useRef(pageState);
   const scrollRef = useRef<HTMLDivElement>(null);
   const onScrollTopChangeRef = useRef(handleScrollTopChange);
@@ -292,6 +298,13 @@ export function NodeTranscriptPane({
       nodeStatus: nodeState?.status,
       nodeError: nodeState?.error,
     });
+    const updateDraft = (next: AskDraft): void => {
+      if (onAskDraftChange !== undefined) {
+        onAskDraftChange(requestId, next);
+        return;
+      }
+      setLocalAskDrafts(current => ({ ...current, [requestId]: next }));
+    };
     return (
       <AskCard
         key={interaction.id}
@@ -305,6 +318,8 @@ export function NodeTranscriptPane({
         autoFocus={interaction.id === firstActionableId}
         nowMs={nowMs}
         mountContext="room"
+        draft={(onAskDraftChange === undefined ? localAskDrafts : askDrafts)?.[requestId] ?? {}}
+        onDraftChange={updateDraft}
         onSubmit={(body): void => {
           void onSubmitAsk(requestId, body);
         }}

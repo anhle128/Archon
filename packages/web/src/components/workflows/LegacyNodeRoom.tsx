@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 import type { ExecutionHeaderModel } from '@/lib/execution-room-model';
 
 import type { AskActionStateByRequest } from './ask-answer-controller';
+import type { AskDraft, AskDraftByRequest } from './parse-ask-envelope';
 import { nodeStatusLabel } from './awaiting-chrome';
 import type { LogRow } from './build-log-rows';
 import { ChildWorkflowRoom } from './ChildWorkflowRoom';
@@ -56,6 +57,8 @@ export interface LegacyNodeRoomProps {
   scopeKey?: string;
   initialScrollTop?: number;
   onScrollTopChange?: (scrollTop: number) => void;
+  askDrafts?: AskDraftByRequest;
+  onAskDraftChange?: (requestId: string, draft: AskDraft) => void;
 }
 
 const TYPE_LABELS: Record<NodeBodyKind, string> = {
@@ -109,6 +112,8 @@ export function LegacyNodeRoom({
   scopeKey,
   initialScrollTop,
   onScrollTopChange,
+  askDrafts,
+  onAskDraftChange,
 }: LegacyNodeRoomProps): React.ReactElement {
   if (row === null) return <RoomPlaceholder>Select a node</RoomPlaceholder>;
 
@@ -169,6 +174,8 @@ export function LegacyNodeRoom({
             scopeKey={scopeKey}
             initialScrollTop={initialScrollTop}
             onScrollTopChange={onScrollTopChange}
+            askDrafts={askDrafts}
+            onAskDraftChange={onAskDraftChange}
           />
         );
         break;
