@@ -1,0 +1,59 @@
+{
+  "commit": "981c7b39f",
+  "console": {
+    "before": {
+      "x": 980,
+      "y": 94,
+      "width": 460,
+      "height": 906
+    },
+    "after": {
+      "x": 980,
+      "y": 94,
+      "width": 460,
+      "height": 906
+    },
+    "text": "inspect-file\n\ninspect-file\n\ncompleted\n\nClose\n\nstarted\n\n[e2e-fake] tool pass\n\nRead\nsuccess\nINPUT\n{\n  \"path\": \"HITL_TOOL_INPUT.txt\"\n}\nOUTPUT\nHITL_TOOL_OUTPUT_VISIBLE\n\ncompleted",
+    "closedText": "Select a node\n\nClose\nSelect a node"
+  },
+  "legacy": {
+    "panels": [
+      {
+        "box": {
+          "x": 0,
+          "y": 147,
+          "width": 1387.03125,
+          "height": 853,
+          "top": 147,
+          "right": 1387.03125,
+          "bottom": 1000,
+          "left": 0
+        },
+        "style": "min-height: 0px; max-height: 100%; height: auto; min-width: 0px; max-width: 100%; width: auto; border: 0px; padding: 0px; margin: 0px; display: flex; flex: 96.389 1 0px; overflow: visible;"
+      },
+      {
+        "box": {
+          "x": 1388.03125,
+          "y": 147,
+          "width": 51.96875,
+          "height": 853,
+          "top": 147,
+          "right": 1440,
+          "bottom": 1000,
+          "left": 1388.03125
+        },
+        "style": "min-height: 0px; max-height: 100%; height: auto; min-width: 0px; max-width: 100%; width: auto; border: 0px; padding: 0px; margin: 0px; display: flex; flex: 3.611 1 0px; overflow: visible;"
+      }
+    ]
+  },
+  "mockup": {
+    "mockText": "PROMPT\nspecify\ncompleted\n✕\nstarted 0:01 · 2s\nASSISTANT\nReading the issue + origin context, spawning sub-agents for the harness contract.\nRead\nharness API contract\nOUTPUT\ndocs/harness-api.md — 214 lines\nWrite\nspecs/014-attach-first-writer/spec.md\nOUTPUT\nspec written (FR-001…FR-014)",
+    "mockPanel": {
+      "x": 980,
+      "y": 120,
+      "width": 460,
+      "height": 826
+    }
+  },
+  "errors": []
+}
