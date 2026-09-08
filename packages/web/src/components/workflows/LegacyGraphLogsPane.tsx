@@ -21,7 +21,11 @@ import {
   type WorkflowNodeStateResponse,
 } from '@/lib/api';
 import { readApprovalContext, type WebApprovalContext } from '@/lib/approval-context';
-import { chooseExecutionForNode, roomOpenerId } from '@/lib/execution-room-model';
+import {
+  chooseExecutionForNode,
+  roomOpenerId,
+  type ExecutionHeaderModel,
+} from '@/lib/execution-room-model';
 import { clampRoomRatio, roomPanelSizes } from '@/lib/room-split-layout';
 import type { WorkflowRunStatus } from '@/lib/types';
 import { useContainerSplitMode, type ContainerSplitMode } from '@/lib/use-container-split-mode';
@@ -33,6 +37,7 @@ import { buildLogRows, type LogRow } from './build-log-rows';
 import { ChatTimeline } from './ChatTimeline';
 import { LegacyNodeRoom } from './LegacyNodeRoom';
 import { NodeRunList } from './NodeRunList';
+import type { ExecutionHeaderOption } from './NodeRoomHeader';
 import { resolveGraphRoomRow } from './resolve-graph-room-row';
 import { resolveRoomKind } from './resolve-room-kind';
 import { resolveTimelineRoomRow } from './resolve-timeline-room-row';
@@ -78,6 +83,12 @@ export interface LegacyGraphLogsPaneProps {
   starterDisplayName: string | null;
   actionStates: AskActionStateByRequest;
   onSubmitAsk: (requestId: string, body: AskAnswerBody) => Promise<void>;
+  headerModel?: ExecutionHeaderModel;
+  headerOptions?: readonly ExecutionHeaderOption[];
+  onSelectExecution?: (rowId: string) => void;
+  scopeKey?: string;
+  initialScrollTop?: number;
+  onScrollTopChange?: (scrollTop: number) => void;
 }
 
 export function runChatMessagesRefetchInterval(status: WorkflowRunStatus): 3000 | false {
@@ -192,6 +203,12 @@ export function LegacyGraphLogsPane({
   starterDisplayName,
   actionStates,
   onSubmitAsk,
+  headerModel,
+  headerOptions,
+  onSelectExecution,
+  scopeKey,
+  initialScrollTop,
+  onScrollTopChange,
 }: LegacyGraphLogsPaneProps): React.ReactElement {
   const stacked = useStackedViewport();
   const paneRef = useRef<HTMLDivElement>(null);
@@ -427,6 +444,13 @@ export function LegacyGraphLogsPane({
             ? undefined
             : visibleNodeStates.find(state => state.nodeId === selectedRow.nodeId)
         }
+        headerModel={headerModel}
+        headerOptions={headerOptions}
+        onSelectRow={onSelectExecution}
+        onClose={onCloseRoom}
+        scopeKey={scopeKey}
+        initialScrollTop={initialScrollTop}
+        onScrollTopChange={onScrollTopChange}
       />
       {roomFooter}
     </div>

@@ -1,5 +1,15 @@
 ## Codebase Patterns
 
+### Happy-dom querySelector instanceof intersections
+- **Where**: `packages/web/src/components/workflows/NodeRoomHeader.test.tsx`, `NodeTranscriptPane.test.tsx`
+- **Pattern**: `host` is lib.dom `Element`; `instanceof win.HTMLElement` / `HTMLSelectElement` intersects to `never` because `ELEMENT_NODE` conflicts. Null-check, then `as unknown as HTMLElement`.
+- **Example**: `const el = node as unknown as HTMLElement;`
+
+### Drain restart must clear complete
+- **Where**: `packages/web/src/components/workflows/NodeTranscriptPane.tsx`
+- **Pattern**: `drainNodeMessages` uses `loader` + `state` (not `load`/`initialState`). Live poll and same-scope loader changes must pass `{ ...state, complete: false }` or a completed compatibility page never refetches.
+- **Example**: `void runDrain({ ...next, complete: false });`
+
 ### Wait for run query data before applyRoomDeepLink
 - **Where**: `packages/web/src/components/workflows/WorkflowExecution.tsx`
 - **Pattern**: `applyRoomDeepLink` marks `appliedDeepLinkNode` even when no row matches. Calling it while `queryData` is undefined (empty rows) consumes the deep-link and the room never opens after rows load. Skip the effect until `queryData` is defined.
@@ -260,5 +270,36 @@
 - Graph same-node re-click must ignore last-explicit so loop ×1 then graph-group still resolves canonical ×2
 - Radix tabs in happy-dom need pointerdown/mouseup, not only `.click()`
 - Destructure PascalCase components from a module namespace in `.test.tsx` (`workflowExecution.WorkflowExecution`) to satisfy naming-convention
+
+---
+
+## 2026-09-08 — US-008: Render complete legacy execution history
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/components/workflows/NodeRoomHeader.tsx` — sticky execution header (label, select, status, offset, provider/model, Close)
+- `packages/web/src/components/workflows/NodeRoomHeader.test.tsx` — iteration chrome + omitted null fields
+- `packages/web/src/components/workflows/RoomIncompleteNotice.tsx` — Failed to load node transcript + Retry
+- `packages/web/src/components/workflows/NodeTranscriptPane.tsx` — drainNodeMessages cursor paging, 1s live poll, abort, scroll restore
+- `packages/web/src/components/workflows/NodeTranscriptPane.test.tsx` — abort, retry-from-cursor, poll, scroll, unmount
+- `packages/web/src/components/workflows/NodeRoom.tsx` — Assistant/Tool/Lifecycle history, details open I/O, View full output, unknown-scope notice
+- `packages/web/src/components/workflows/NodeRoom.test.tsx` — history cards, unknown-scope copy, Retry + Ask slots
+- `packages/web/src/components/workflows/LegacyNodeRoom.tsx` — optional NodeRoomHeader + transcript scroll props
+- `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` — pass header/scroll into LegacyNodeRoom
+- `packages/web/src/components/workflows/WorkflowExecution.tsx` — buildExecutionHeader, execution select, rememberRoomScroll
+
+**Acceptance criteria verified**:
+- [x] NodeRoomHeader sticky header with nodeLabel, executionLabel, execution select, status, start offset, provider/model, Close
+- [x] RoomIncompleteNotice renders error and Retry after a partial cursor failure
+- [x] NodeTranscriptPane drains with drainNodeMessages, polls live runs every 1s, stops when terminal, aborts on scope change/unmount, persists scrollTop
+- [x] NodeRoom renders AssistantHistory, ToolHistory, LifecycleHistory; tool cards have details open Input/Output, outcome/duration, data-tool-id, View full output via getWorkflowNodeMessage
+- [x] unknownScope notice: Execution scope was not recorded; this history may include other executions of the same node.
+- [x] Tests in NodeRoomHeader.test.tsx, NodeTranscriptPane.test.tsx, and NodeRoom.test.tsx pass
+
+**Learnings**:
+- drainNodeMessages API is `loader`/`state`, not the plan's `load`/`initialState`; poll with `complete: false`
+- Same-scope loader swap (tests) needs `complete: false` on effect start or a completed page never refetches
+- Happy-dom `instanceof win.HTMLElement` against lib.dom `Element` is `never`; cast through `unknown`
+- Header offset uses `+${formatDurationMs(1500)}` → `+1.5s`
 
 ---

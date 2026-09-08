@@ -1,32 +1,37 @@
 /**
- * Inspect-only node transcript room: slice a node's messages for the selected
- * run row and render text, tool calls, and lifecycle notes.
+ * Inspect-only node transcript room: render projected agent history for the
+ * selected execution. Cursor paging and Ask placement stay in NodeTranscriptPane.
  */
-import { Fragment } from 'react';
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 
-import type { WorkflowNodeMessageResponse } from '@/lib/api';
+import type { AgentHistoryItem } from '@/lib/agent-history';
+import { getWorkflowNodeMessage, type WorkflowNodeMessageResponse } from '@/lib/api';
+import { formatDurationMs } from '@/lib/format';
+import { formatToolIo } from '@/lib/pair-tool-transcript';
 import { cn } from '@/lib/utils';
-import { formatToolIo, projectToolTranscript } from '@/lib/pair-tool-transcript';
-import { projectTextTranscript } from '@/lib/project-text-transcript';
 
 import type { LogRowSelection } from './build-log-rows';
+import { RoomIncompleteNotice } from './RoomIncompleteNotice';
 
 export interface NodeRoomProps {
   nodeId: string | null;
-  selection: LogRowSelection | null;
-  messages: readonly WorkflowNodeMessageResponse[] | undefined;
+  items: readonly AgentHistoryItem[];
+  unknownScope: boolean;
+  runId: string;
   isPending: boolean;
-  error: unknown;
+  error: string | null;
   onRetry: () => void;
-  renderAfterMessage?: (message: WorkflowNodeMessageResponse) => React.ReactNode;
+  loadMessage?: typeof getWorkflowNodeMessage;
+  renderAfterItem?: (item: AgentHistoryItem) => React.ReactNode;
   renderAtEnd?: React.ReactNode;
 }
 
-type StatusMessage = Extract<WorkflowNodeMessageResponse, { kind: 'status' }>;
+const UNKNOWN_SCOPE_NOTICE =
+  'Execution scope was not recorded; this history may include other executions of the same node.';
 
 const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 const REHYPE_PLUGINS = [rehypeHighlight];
@@ -82,17 +87,11 @@ const MARKDOWN_COMPONENTS = {
   ),
 };
 
-function assertNever(value: never): never {
-  void value;
-  throw new Error('Unsupported workflow node message kind');
-}
-
 export function selectNodeRoomMessages(
   messages: readonly WorkflowNodeMessageResponse[],
   selection: LogRowSelection
 ): WorkflowNodeMessageResponse[] {
   const ordered = [...messages].sort((a, b) => a.seq - b.seq);
-  // occurrence-scoped: server already filtered by occurrence_id/attempt_id
   if (selection.kind === 'occurrence' || selection.kind === 'node') return ordered;
   if (selection.kind !== 'loop_iteration') return ordered;
   const detail = String(selection.iteration);
@@ -147,191 +146,202 @@ export function RoomRegion({
   );
 }
 
-function toolOutcomeLabel(input: {
-  pending: boolean;
-  outcome?: 'success' | 'error' | 'interrupted' | 'unknown';
-  exitCode?: number;
-  truncated?: boolean;
-  outputState?: 'full' | 'truncated' | 'missing' | 'unknown';
-}): string | null {
-  if (input.pending) return 'pending';
-  const parts: string[] = [];
-  if (input.outcome !== undefined) parts.push(input.outcome);
-  if (input.exitCode !== undefined) parts.push(`exit ${String(input.exitCode)}`);
-  if (input.truncated === true || input.outputState === 'truncated') parts.push('truncated');
-  if (input.outputState === 'missing') parts.push('missing output');
-  if (parts.length === 0) return null;
-  return parts.join(' · ');
+function AssistantHistory({
+  item,
+}: {
+  item: Extract<AgentHistoryItem, { kind: 'assistant' }>;
+}): React.ReactElement {
+  return (
+    <div
+      className="chat-markdown max-w-none text-sm text-text-primary"
+      style={{ overflowWrap: 'anywhere' }}
+    >
+      <div className="mb-1 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
+        ASSISTANT
+      </div>
+      <ReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
+        components={MARKDOWN_COMPONENTS}
+      >
+        {item.text}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
-function ToolTranscriptCard({
-  name,
-  input,
-  output,
-  pending,
-  outcome,
-  exitCode,
-  truncated,
-  outputState,
+function LifecycleHistory({
+  item,
 }: {
-  name: string;
-  input: unknown;
-  output: unknown;
-  pending: boolean;
-  outcome?: 'success' | 'error' | 'interrupted' | 'unknown';
-  exitCode?: number;
-  truncated?: boolean;
-  outputState?: 'full' | 'truncated' | 'missing' | 'unknown';
+  item: Extract<AgentHistoryItem, { kind: 'lifecycle' }>;
 }): React.ReactElement {
-  const outcomeLabel = toolOutcomeLabel({ pending, outcome, exitCode, truncated, outputState });
   return (
-    <div className="ptool rounded-[var(--radius)] border border-border bg-surface-inset px-2.5 py-2">
-      <div className="flex items-baseline gap-2">
-        <span className="text-[11.5px] font-bold text-accent-bright">{name}</span>
-        {outcomeLabel !== null ? (
-          <span className="text-[11px] text-text-secondary">{outcomeLabel}</span>
+    <p className="text-xs text-text-secondary">
+      {item.state}
+      {item.detail !== null && item.detail.length > 0 ? ` ${item.detail}` : ''}
+    </p>
+  );
+}
+
+function toolOutcomeLabel(item: Extract<AgentHistoryItem, { kind: 'tool' }>): string {
+  if (item.outcome === 'running') return 'pending';
+  if (item.outcome === 'unknown') return 'missing-call';
+  return item.outcome;
+}
+
+function ToolHistory({
+  item,
+  runId,
+  nodeId,
+  loadMessage,
+}: {
+  item: Extract<AgentHistoryItem, { kind: 'tool' }>;
+  runId: string;
+  nodeId: string;
+  loadMessage: typeof getWorkflowNodeMessage;
+}): React.ReactElement {
+  const [fullOutput, setFullOutput] = useState<unknown>(undefined);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const displayedOutput = fullOutput === undefined ? item.output : fullOutput;
+
+  const loadFull = (): void => {
+    setLoading(true);
+    setLoadError(null);
+    void loadMessage(runId, nodeId, item.messageId)
+      .then((message): void => {
+        const output = message.kind === 'tool' ? message.payload.output : undefined;
+        setFullOutput(output);
+        setLoading(false);
+      })
+      .catch((error: unknown): void => {
+        setLoadError(error instanceof Error ? error.message : 'Failed to load full output');
+        setLoading(false);
+      });
+  };
+
+  return (
+    <div
+      data-tool-id={item.toolUseId}
+      className="ptool rounded-[var(--radius)] bg-surface-inset px-2.5 py-2"
+      style={{ border: 'var(--rv-tool-card-border)', overflowWrap: 'anywhere' }}
+    >
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="text-[11.5px] font-bold text-accent-bright">{item.name}</span>
+        <span className="text-[11px] text-text-secondary">{toolOutcomeLabel(item)}</span>
+        {item.durationMs !== null ? (
+          <span className="text-[11px] text-text-secondary">
+            {formatDurationMs(item.durationMs)}
+          </span>
         ) : null}
       </div>
-      {input !== undefined ? (
-        <div className="mt-1.5">
-          <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
-            Input
-          </div>
-          <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
-            {formatToolIo(input)}
-          </pre>
+      {item.context.map(entry => (
+        <div key={entry.label} className="mt-0.5 text-[11px] text-text-secondary">
+          {entry.label}: {entry.value}
         </div>
+      ))}
+      <details open className="mt-1.5">
+        <summary className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
+          Input
+        </summary>
+        <pre className="m-0 overflow-x-auto whitespace-pre-wrap font-mono text-[11px] text-text-secondary">
+          {formatToolIo(item.input)}
+        </pre>
+      </details>
+      <details open className="mt-1.5">
+        <summary className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
+          Output
+        </summary>
+        <pre className="m-0 overflow-x-auto whitespace-pre-wrap font-mono text-[11px] text-text-secondary">
+          {formatToolIo(displayedOutput)}
+        </pre>
+      </details>
+      {item.canLoadFullOutput ? (
+        <button
+          type="button"
+          className="mt-1.5 text-xs text-primary hover:text-accent-bright"
+          disabled={loading}
+          onClick={loadFull}
+        >
+          View full output
+        </button>
       ) : null}
-      {output !== undefined ? (
-        <div className="mt-1.5">
-          <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
-            Output
-          </div>
-          <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
-            {formatToolIo(output)}
-          </pre>
+      {loadError !== null ? (
+        <div className="mt-1.5 text-[11px] text-error">
+          <span>{loadError}</span>
+          <button
+            type="button"
+            className="ml-2 text-xs text-primary hover:text-accent-bright"
+            onClick={loadFull}
+          >
+            Retry
+          </button>
         </div>
-      ) : pending ? (
-        <div className="mt-1.5 text-[11px] text-text-secondary">Output unavailable</div>
       ) : null}
     </div>
   );
 }
 
-function StatusTranscriptItem({ message }: { message: StatusMessage }): React.ReactElement {
-  const { state, detail } = message.payload;
-  return (
-    <p className="text-xs text-text-secondary">
-      {state}
-      {detail ? ` ${detail}` : ''}
-    </p>
-  );
-}
-
-function renderTranscriptItem(message: WorkflowNodeMessageResponse): React.ReactElement {
-  switch (message.kind) {
-    case 'text':
-      return (
-        <div className="chat-markdown max-w-none text-sm text-text-primary">
-          <ReactMarkdown
-            remarkPlugins={REMARK_PLUGINS}
-            rehypePlugins={REHYPE_PLUGINS}
-            components={MARKDOWN_COMPONENTS}
-          >
-            {message.payload.text}
-          </ReactMarkdown>
-        </div>
-      );
-    case 'tool':
-      return (
-        <ToolTranscriptCard
-          name={message.payload.name}
-          input={message.payload.input}
-          output={message.payload.output}
-          pending={message.payload.output === undefined}
-        />
-      );
-    case 'status':
-      return <StatusTranscriptItem message={message} />;
-    default:
-      return assertNever(message);
-  }
-}
-
 export function NodeRoom({
   nodeId,
-  selection,
-  messages,
+  items,
+  unknownScope,
+  runId,
   isPending,
   error,
   onRetry,
-  renderAfterMessage,
+  loadMessage = getWorkflowNodeMessage,
+  renderAfterItem,
   renderAtEnd,
 }: NodeRoomProps): React.ReactElement {
-  if (nodeId === null || selection === null) {
+  if (nodeId === null) {
     return <RoomPlaceholder>Select a node</RoomPlaceholder>;
   }
 
   let body: React.ReactNode;
-  if (isPending) {
+  if (isPending && items.length === 0 && error === null) {
     body = <RoomPlaceholder>Loading node transcript</RoomPlaceholder>;
-  } else if (error) {
+  } else if (items.length === 0 && error !== null) {
     body = (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-text-secondary">
-        <p>Failed to load node transcript</p>
-        <button
-          type="button"
-          className="text-xs text-primary hover:text-accent-bright transition-colors"
-          onClick={(): void => {
-            onRetry();
-          }}
-        >
-          Retry
-        </button>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <RoomIncompleteNotice error={error} onRetry={onRetry} />
         {renderAtEnd}
       </div>
     );
+  } else if (items.length === 0) {
+    body = renderAtEnd ?? <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>;
   } else {
-    const ordered = selectNodeRoomMessages(messages ?? [], selection);
-    if (ordered.length === 0) {
-      body = renderAtEnd ?? <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>;
-    } else {
-      const projected = projectToolTranscript(projectTextTranscript(ordered));
-      body = (
-        <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
-          {projected.map((item): React.ReactElement => {
-            if (item.kind === 'tool-card') {
-              return (
-                <Fragment key={item.id}>
-                  <div>
-                    <ToolTranscriptCard
-                      name={item.name}
-                      input={item.input}
-                      output={item.output}
-                      pending={item.pending}
-                      outcome={item.outcome}
-                      exitCode={item.exitCode}
-                      truncated={item.truncated}
-                      outputState={item.outputState}
-                    />
-                  </div>
-                  {item.messages.map(message => (
-                    <Fragment key={`after-${message.id}`}>{renderAfterMessage?.(message)}</Fragment>
-                  ))}
-                </Fragment>
-              );
-            }
+    body = (
+      <div className="flex min-h-0 flex-1 flex-col gap-3 p-3" style={{ overflowWrap: 'anywhere' }}>
+        {unknownScope ? <p className="text-xs text-warning">{UNKNOWN_SCOPE_NOTICE}</p> : null}
+        {items.map(item => {
+          if (item.kind === 'assistant') {
             return (
-              <Fragment key={item.message.id}>
-                <div>{renderTranscriptItem(item.message)}</div>
-                {renderAfterMessage?.(item.message)}
-              </Fragment>
+              <div key={item.id}>
+                <AssistantHistory item={item} />
+                {renderAfterItem?.(item)}
+              </div>
             );
-          })}
-          {renderAtEnd}
-        </div>
-      );
-    }
+          }
+          if (item.kind === 'tool') {
+            return (
+              <div key={item.id}>
+                <ToolHistory item={item} runId={runId} nodeId={nodeId} loadMessage={loadMessage} />
+                {renderAfterItem?.(item)}
+              </div>
+            );
+          }
+          return (
+            <div key={item.id}>
+              <LifecycleHistory item={item} />
+              {renderAfterItem?.(item)}
+            </div>
+          );
+        })}
+        {error !== null ? <RoomIncompleteNotice error={error} onRetry={onRetry} /> : null}
+        {renderAtEnd}
+      </div>
+    );
   }
 
   return <RoomRegion nodeId={nodeId}>{body}</RoomRegion>;

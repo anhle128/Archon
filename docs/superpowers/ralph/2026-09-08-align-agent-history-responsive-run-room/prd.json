@@ -164,8 +164,8 @@
         "US-007"
       ],
       "priority": 8,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/src/components/workflows/NodeRoomHeader.tsx, NodeRoomHeader.test.tsx, RoomIncompleteNotice.tsx, NodeTranscriptPane.tsx, NodeTranscriptPane.test.tsx, NodeRoom.tsx, NodeRoom.test.tsx, LegacyNodeRoom.tsx, LegacyGraphLogsPane.tsx, WorkflowExecution.tsx."
     },
     {
       "id": "US-009",

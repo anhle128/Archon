@@ -9,12 +9,15 @@ import { getWorkflowNodeMessages } from '@/lib/api';
 import type { WorkflowRunStatus } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
+import type { ExecutionHeaderModel } from '@/lib/execution-room-model';
+
 import type { AskActionStateByRequest } from './ask-answer-controller';
 import { nodeStatusLabel } from './awaiting-chrome';
 import type { LogRow } from './build-log-rows';
 import { ChildWorkflowRoom } from './ChildWorkflowRoom';
 import { GateRoom } from './GateRoom';
 import { LoopGroupRoom } from './LoopGroupRoom';
+import { NodeRoomHeader, type ExecutionHeaderOption } from './NodeRoomHeader';
 import { NodeTranscriptPane } from './NodeTranscriptPane';
 import { RoomPlaceholder, RoomRegion } from './NodeRoom';
 import { RouteControllerRoom } from './RouteControllerRoom';
@@ -46,6 +49,13 @@ export interface LegacyNodeRoomProps {
   actionStates: AskActionStateByRequest;
   onSubmitAsk: (requestId: string, body: AskAnswerBody) => Promise<void>;
   nodeState: WorkflowNodeStateResponse | undefined;
+  headerModel?: ExecutionHeaderModel;
+  headerOptions?: readonly ExecutionHeaderOption[];
+  onSelectRow?: (rowId: string) => void;
+  onClose?: () => void;
+  scopeKey?: string;
+  initialScrollTop?: number;
+  onScrollTopChange?: (scrollTop: number) => void;
 }
 
 const TYPE_LABELS: Record<NodeBodyKind, string> = {
@@ -92,6 +102,13 @@ export function LegacyNodeRoom({
   actionStates,
   onSubmitAsk,
   nodeState,
+  headerModel,
+  headerOptions,
+  onSelectRow,
+  onClose,
+  scopeKey,
+  initialScrollTop,
+  onScrollTopChange,
 }: LegacyNodeRoomProps): React.ReactElement {
   if (row === null) return <RoomPlaceholder>Select a node</RoomPlaceholder>;
 
@@ -102,17 +119,28 @@ export function LegacyNodeRoom({
     resolution.kind === 'agent' &&
     resolution.nodeType === 'unknown';
 
-  const header = (
-    <div className="flex items-center gap-2 border-b border-border px-4 py-2">
-      <h2 className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">{row.label}</h2>
-      <span className="rounded bg-surface-elevated px-2 py-0.5 text-xs text-text-secondary">
-        {waitingForDefinition ? 'Loading' : TYPE_LABELS[resolution.nodeType]}
-      </span>
-      <span className={cn('rounded-full px-2 py-0.5 text-xs', STATUS_COLORS[row.status])}>
-        {nodeStatusLabel(row.status)}
-      </span>
-    </div>
-  );
+  const header =
+    headerModel !== undefined && onSelectRow !== undefined && onClose !== undefined ? (
+      <NodeRoomHeader
+        model={headerModel}
+        options={headerOptions ?? []}
+        selectedRowId={row.id}
+        onSelectRow={onSelectRow}
+        onClose={onClose}
+      />
+    ) : (
+      <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+        <h2 className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+          {row.label}
+        </h2>
+        <span className="rounded bg-surface-elevated px-2 py-0.5 text-xs text-text-secondary">
+          {waitingForDefinition ? 'Loading' : TYPE_LABELS[resolution.nodeType]}
+        </span>
+        <span className={cn('rounded-full px-2 py-0.5 text-xs', STATUS_COLORS[row.status])}>
+          {nodeStatusLabel(row.status)}
+        </span>
+      </div>
+    );
 
   let body: React.ReactElement;
 
@@ -137,6 +165,10 @@ export function LegacyNodeRoom({
             actionStates={actionStates}
             nodeState={nodeState}
             onSubmitAsk={onSubmitAsk}
+            events={events}
+            scopeKey={scopeKey}
+            initialScrollTop={initialScrollTop}
+            onScrollTopChange={onScrollTopChange}
           />
         );
         break;

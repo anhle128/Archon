@@ -39,13 +39,16 @@ import {
 } from '@/lib/api';
 import {
   applyRoomDeepLink,
+  buildExecutionHeader,
   chooseExecutionForNode,
   closeRoom,
   openRoom,
+  rememberRoomScroll,
   resetRoomVisit,
   roomOpenerId,
   type RoomVisitState,
 } from '@/lib/execution-room-model';
+import { nodeMessageScopeKey, type NodeMessageSelection } from '@/lib/node-message-pages';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
 import { readRoomRatio, writeRoomRatio } from '@/lib/room-split-layout';
 import { settleRunningDagNodesForTerminalStatus } from '@/lib/workflow-utils';
@@ -343,6 +346,23 @@ function StatusBadge({ status }: { status: string }): React.ReactElement {
       {status}
     </span>
   );
+}
+
+function nodeMessageSelectionFromRow(row: {
+  id: string;
+  selection: import('./build-log-rows').LogRowSelection;
+}): NodeMessageSelection {
+  if (row.selection.kind === 'occurrence') {
+    const selection: NodeMessageSelection = {
+      kind: 'occurrence',
+      occurrenceId: row.selection.occurrenceId,
+    };
+    if (row.selection.attemptId !== undefined) {
+      selection.attemptId = row.selection.attemptId;
+    }
+    return selection;
+  }
+  return { kind: 'node', rowId: row.id };
 }
 
 export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.ReactElement {
@@ -718,6 +738,62 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     });
   }, [room.selection?.openerId]);
 
+  const selectedExecutionRow =
+    executionRows.find(candidate => candidate.id === room.selection?.rowId) ?? null;
+  const runStartedAtIso = workflow === null ? '' : new Date(workflow.startedAt).toISOString();
+  const headerModel =
+    selectedExecutionRow === null
+      ? undefined
+      : buildExecutionHeader({
+          row: selectedExecutionRow,
+          events: queryData?.events ?? [],
+          runStartedAt: runStartedAtIso,
+        });
+  const headerOptions =
+    selectedExecutionRow === null
+      ? []
+      : executionRows
+          .filter(candidate => candidate.nodeId === selectedExecutionRow.nodeId)
+          .map(candidate => ({
+            rowId: candidate.id,
+            label: buildExecutionHeader({
+              row: candidate,
+              events: queryData?.events ?? [],
+              runStartedAt: runStartedAtIso,
+            }).executionLabel,
+          }));
+  const handleSelectExecution = useCallback(
+    (rowId: string): void => {
+      const next = executionRows.find(candidate => candidate.id === rowId);
+      if (next === undefined) return;
+      setRoom(previous =>
+        openRoom(previous, {
+          nodeId: next.nodeId,
+          rowId: next.id,
+          openerId: previous.selection?.openerId ?? null,
+        })
+      );
+    },
+    [executionRows]
+  );
+  const transcriptScopeKey =
+    selectedExecutionRow === null
+      ? undefined
+      : nodeMessageScopeKey(
+          runId,
+          selectedExecutionRow.nodeId,
+          nodeMessageSelectionFromRow(selectedExecutionRow)
+        );
+  const initialScrollTop =
+    transcriptScopeKey === undefined ? undefined : room.scrollTopByScope[transcriptScopeKey];
+  const handleScrollTopChange = useCallback(
+    (scrollTop: number): void => {
+      if (transcriptScopeKey === undefined) return;
+      setRoom(previous => rememberRoomScroll(previous, transcriptScopeKey, scrollTop));
+    },
+    [transcriptScopeKey]
+  );
+
   const handleRoomRatioChange = useCallback((value: number): void => {
     writeRoomRatio('legacy', value, window.localStorage);
     setRoomRatio(value);
@@ -938,6 +1014,12 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           starterDisplayName={queryData?.starterDisplayName ?? null}
           actionStates={askActionStates}
           onSubmitAsk={askController.submit}
+          headerModel={headerModel}
+          headerOptions={headerOptions}
+          onSelectExecution={handleSelectExecution}
+          scopeKey={transcriptScopeKey}
+          initialScrollTop={initialScrollTop}
+          onScrollTopChange={handleScrollTopChange}
         />
       );
     }
