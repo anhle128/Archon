@@ -1,5 +1,20 @@
 ## Codebase Patterns
 
+### Console node-message fetch stubs must ignore paging query
+- **Where**: `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` (`stubPageFetch`)
+- **Pattern**: `drainNodeMessages` requests `/messages?afterSeq=0&limit=100`. Exact pathname equality misses the call. Compare `path.split('?')[0]` for node-message routes, but keep the full query for `/api/workflows?cwd=`.
+- **Example**: `const pathNoQuery = path.split('?')[0] ?? path;`
+
+### applyRoomDeepLink leaves openerId null
+- **Where**: `packages/web/src/experiments/console/routes/RunDetailPage.tsx`
+- **Pattern**: Shared `applyRoomDeepLink` sets `openerId: null`. Console maps that to `roomOpenerId('console', 'log', rowId)` after apply so Close restores the NodeDivider button.
+- **Example**: `openerId: roomOpenerId('console', 'log', next.selection.rowId)`
+
+### Artifacts is a ConsoleInspectPane view
+- **Where**: `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx`
+- **Pattern**: Do not unmount the inspect pane for Artifacts. Render `ArtifactPanel` as `mainPane` and keep the room docked. `view: 'log' | 'graph' | 'artifacts'`.
+- **Example**: `view === 'artifacts' ? <ArtifactPanel runId={run.id} /> : ...`
+
 ### Chat AskCard still needs node status for presentation
 - **Where**: `packages/web/src/components/workflows/LegacyGraphLogsPane.tsx` (`renderAsk`)
 - **Pattern**: `resolveAskCardPresentation` requires `nodeStatus` and `nodeError`. Chat-timeline Ask cards must look them up from `visibleNodeStates` by `interaction.node_id`.
@@ -352,5 +367,39 @@
 - `WorkflowAskChrome` still calls `onRequestGraphView()`; parent no-ops it so Awaiting input does not switch tabs
 - Duplicate AskCard DOM ids: both room and Chat use `askCardId(tool_use_id)` so `getElementById` finds the first match
 - Conversation fetch already gated on `parentPlatformId !== null`; composer disabledReason is the visibility contract
+
+---
+
+## 2026-09-08 — US-010: Integrate the console room and shared history renderer
+
+**Status**: PASSED
+**Files changed**:
+- `packages/web/src/experiments/console/components/inspect/ConsoleRoomHeader.tsx` — sticky Console execution header (select, status, offset, provider/model, Close/Back)
+- `packages/web/src/experiments/console/components/inspect/ConsoleRoomHeader.test.tsx` — iteration fields, omitted nulls, Back label
+- `packages/web/src/experiments/console/components/inspect/ConsoleAgentHistoryList.tsx` — assistant/tool/lifecycle, `data-tool-id`, Tool/System filters, full output
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.tsx` — ConsolePanelGroup 60/40, single-mode `hidden`, Artifacts as main pane
+- `packages/web/src/experiments/console/components/ConsoleInspectPane.test.tsx` — unselected/no separator, single Back, Artifacts keeps room
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx` — drainNodeMessages + 1s live poll, ConsoleRoomHeader, ConsoleAgentHistoryList, scroll follow
+- `packages/web/src/experiments/console/components/ConsoleNodeRoom.test.tsx` — history cards, toggles, timeout poll
+- `packages/web/src/experiments/console/components/NodeDivider.tsx` — `id={roomOpenerId('console', 'log', rowId)}` on identity button
+- `packages/web/src/experiments/console/routes/RunDetailPage.tsx` — RoomVisitState, applyRoomDeepLink, ratio persist, no default room
+- `packages/web/src/experiments/console/routes/RunDetailPage.test.tsx` — ordinary visit, deep-link once, focus restore, Artifacts docked
+- `packages/web/src/experiments/console/console-isolation.test.ts` — approved `@/lib` room modules
+- `packages/web/src/experiments/console/components/ask/parse-ask-envelope.ts` — export `AskDraftByRequest`
+
+**Acceptance criteria verified**:
+- [x] ConsoleInspectPane uses ConsolePanelGroup/Panel/Separator, default 60/40, persist `archon.run-room.ratio.console`
+- [x] Single mode keeps main pane mounted with `hidden`; Back closes; Artifacts keeps room docked
+- [x] ConsoleRoomHeader is Console-owned sticky header with execution select, no Legacy imports
+- [x] ConsoleAgentHistoryList renders assistant/tool/lifecycle, `data-tool-id`, Tool/System toggles, getNodeMessage full output
+- [x] RunDetailPage owns RoomVisitState, applyRoomDeepLink, runId reset, focus restore via `roomOpenerId('console', 'log', rowId)`
+- [x] console-isolation.test.ts still forbids Legacy/React Query/`@/lib/api` and allowlists shared room lib modules
+- [x] Tests in ConsoleInspectPane, ConsoleRoomHeader, ConsoleNodeRoom, NodeDivider, RunDetailPage pass (52 tests across 6 files)
+
+**Learnings**:
+- `drainNodeMessages` adds `?afterSeq=0&limit=100`; fetch stubs that equal the bare messages path 404
+- Deep-link `openerId` is null in the shared reducer; attach the log opener after apply
+- StrReplace on large `.test.tsx` files can truncate; patch with a full in-memory replace
+- `useContainerSplitMode` starts as `split` then may flip to `single` when the pane width is 0 in happy-dom; pane tests should pass `splitMode`
 
 ---

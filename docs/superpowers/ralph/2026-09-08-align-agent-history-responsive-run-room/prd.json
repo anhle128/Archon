@@ -210,8 +210,8 @@
         "US-006"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/web/src/experiments/console/components/inspect/ConsoleRoomHeader.tsx, ConsoleRoomHeader.test.tsx, ConsoleAgentHistoryList.tsx; ConsoleInspectPane.tsx/.test.tsx; ConsoleNodeRoom.tsx/.test.tsx; NodeDivider.tsx/.test.tsx; routes/RunDetailPage.tsx/.test.tsx; console-isolation.test.ts; ask/parse-ask-envelope.ts."
     },
     {
       "id": "US-011",

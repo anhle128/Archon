@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { act, createElement, Fragment, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
 import { toRun, type Run } from '../primitives/run';
@@ -16,6 +16,7 @@ import type {
 } from '../skills/runs';
 import type { DagNode } from '../skills/workflows';
 import { invalidate } from '../store/cache';
+import { roomOpenerId } from '@/lib/execution-room-model';
 import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
 import { hasRunEnvOverlayUi, RunDetailPage } from './RunDetailPage';
 
@@ -203,6 +204,34 @@ function nodeState(
 function SearchProbe(): ReactElement {
   const location = useLocation();
   return createElement('span', { 'data-testid': 'location-search' }, location.search);
+}
+
+function QueryControls(): ReactElement {
+  const navigate = useNavigate();
+  return createElement(
+    Fragment,
+    null,
+    createElement(
+      'button',
+      {
+        type: 'button',
+        onClick: (): void => {
+          navigate({ search: '' });
+        },
+      },
+      'clear-node'
+    ),
+    createElement(
+      'button',
+      {
+        type: 'button',
+        onClick: (): void => {
+          navigate({ search: '?node=review' });
+        },
+      },
+      'set-review'
+    )
+  );
 }
 
 describe('RunDetailPage inspect selection', () => {
@@ -410,6 +439,7 @@ describe('RunDetailPage inspect selection', () => {
       init?: RequestInit
     ) => {
       const path = requestPath(input);
+      const pathNoQuery = path.split('?')[0] ?? path;
       if (path === `/api/codebases/${encodeURIComponent(projectId)}`) {
         return Promise.resolve(
           jsonResponse({
@@ -464,7 +494,7 @@ describe('RunDetailPage inspect selection', () => {
         );
       }
       if (
-        path ===
+        pathNoQuery ===
         `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent('review')}/messages`
       ) {
         return Promise.resolve(
@@ -482,7 +512,7 @@ describe('RunDetailPage inspect selection', () => {
         );
       }
       if (
-        path ===
+        pathNoQuery ===
         `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent('build')}/messages`
       ) {
         return Promise.resolve(
@@ -535,6 +565,7 @@ describe('RunDetailPage inspect selection', () => {
               Fragment,
               null,
               createElement(SearchProbe),
+              createElement(QueryControls),
               createElement(RunDetailPage)
             ),
           })
@@ -596,14 +627,18 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.textContent).not.toContain('Awaiting input (');
   });
 
-  test('an invalid ?node= query falls back to the inspect-running node', async () => {
+  test('an invalid ?node= query does not open a room', async () => {
     stubPageFetch();
     await act(async () => {
       renderPage('?node=ghost');
     });
-    await flushUntil('build fallback', () => (host.textContent ?? '').includes(BUILD_TEXT));
-    expect(host.querySelector('[aria-label="build room"]')).not.toBeNull();
+    await flushUntil(
+      'log rows',
+      () => host.querySelector('#node-transition-review-start') !== null
+    );
+    expect(host.querySelector('[aria-label="build room"]')).toBeNull();
     expect(host.querySelector('[aria-label="review room"]')).toBeNull();
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).toBeNull();
   });
 
   test('switching Log to Graph retains the mounted room and selecting a graph node updates ?node=', async () => {
@@ -634,7 +669,7 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.querySelector('[aria-label="build room"]')).not.toBeNull();
   });
 
-  test('closing the room removes only the node query parameter', async () => {
+  test('closing the room restores log opener focus and does not reopen the deep link', async () => {
     stubPageFetch();
     await act(async () => {
       renderPage('?keep=1&node=review');
@@ -647,10 +682,26 @@ describe('RunDetailPage inspect selection', () => {
         'close room'
       ).click();
     });
-    await flushUntil('room closed', () => (host.textContent ?? '').includes('Select a node'));
+    await flushUntil(
+      'room closed',
+      () => host.querySelector('[data-testid="console-inspect-room"]') === null
+    );
     expect(host.querySelector('[aria-label="review room"]')).toBeNull();
-    expect(locationSearch()).toBe('?keep=1');
-    expect(locationSearch()).not.toContain('node=');
+    expect(locationSearch()).toContain('node=review');
+    expect(locationSearch()).toContain('keep=1');
+    expect(win.document.activeElement?.id).toBe(roomOpenerId('console', 'log', 'review-start'));
+
+    await act(async () => {
+      tabButton('clear-node').click();
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).toBeNull();
+
+    await act(async () => {
+      tabButton('set-review').click();
+    });
+    await flushUntil('reopened', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
   });
 
   test('StreamToolbar All nodes filtering does not close or change the selected room', async () => {
@@ -693,12 +744,13 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.querySelector('[aria-label="review room"]')).toBe(roomBefore);
   });
 
-  test('Artifacts stays full width and returning to Log restores the selected room', async () => {
+  test('Artifacts keeps the selected room docked and Log/Graph survive open and close', async () => {
     stubPageFetch();
     await act(async () => {
       renderPage('?node=review');
     });
     await flushUntil('review room', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+    const roomBefore = host.querySelector('[aria-label="review room"]');
 
     await act(async () => {
       tabButton('Artifacts').click();
@@ -706,16 +758,15 @@ describe('RunDetailPage inspect selection', () => {
     await flushUntil('artifacts view', () =>
       (host.textContent ?? '').includes('No artifacts written to disk for this run.')
     );
-    expect(host.querySelector('[data-testid="console-inspect-pane"]')).toBeNull();
-    expect(host.querySelector('[aria-label="review room"]')).toBeNull();
+    expect(host.querySelector('[data-testid="console-inspect-pane"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="review room"]')).toBe(roomBefore);
     expect(host.querySelector('[data-testid="console-run-graph-scroller"]')).toBeNull();
 
     await act(async () => {
       tabButton('Log').click();
     });
     await flushUntil('log restored', () => (host.textContent ?? '').includes(REVIEW_TEXT));
-    expect(host.querySelector('[data-testid="console-inspect-pane"]')).not.toBeNull();
-    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="review room"]')).toBe(roomBefore);
     expect(locationSearch()).toContain('node=review');
   });
 
@@ -763,12 +814,17 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.textContent).not.toContain('Cancel');
   });
 
-  test('a log-row click stores the node query without changing the All nodes filter', async () => {
+  test('ordinary visits have no room until a log row is opened', async () => {
     stubPageFetch();
     await act(async () => {
       renderPage();
     });
-    await flushUntil('build fallback', () => (host.textContent ?? '').includes(BUILD_TEXT));
+    await flushUntil(
+      'log rows',
+      () => host.querySelector('#node-transition-review-start') !== null
+    );
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).toBeNull();
+    expect(host.querySelector('[role="separator"]')).toBeNull();
     const filter = requireSelect(
       host.querySelector('[aria-label="Filter stream by node"]'),
       'node filter'
@@ -779,13 +835,16 @@ describe('RunDetailPage inspect selection', () => {
       host.querySelector('#node-transition-review-start'),
       'review row'
     );
+    const opener = requireButton(reviewRow.querySelector('button'), 'review identity');
+    expect(opener.id).toBe(roomOpenerId('console', 'log', 'review-start'));
     await act(async () => {
-      requireButton(reviewRow.querySelector('button'), 'review identity').click();
+      opener.click();
     });
     await flushUntil('review selected', () => (host.textContent ?? '').includes(REVIEW_TEXT));
     expect(locationSearch()).toBe('?node=review');
     expect(filter.value).toBe('all');
     expect(host.querySelector('#node-transition-build-start')).not.toBeNull();
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).not.toBeNull();
   });
 
   test('jumps to an awaiting room, answers through the skill, and keeps gate keys inactive', async () => {
@@ -874,7 +933,7 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.textContent).not.toContain('Reply…');
   });
 
-  test('initial room selection prefers the pending Ask node over permission awaiting nodes', async () => {
+  test('ordinary visits stay closed and Awaiting input opens the pending Ask node', async () => {
     const pending = ask();
     const permission = ask({
       id: 'permission-1',
@@ -895,6 +954,14 @@ describe('RunDetailPage inspect selection', () => {
     });
     await act(async () => {
       renderPage();
+    });
+    await flushUntil('awaiting chrome', () =>
+      (host.textContent ?? '').includes('Awaiting input (1)')
+    );
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).toBeNull();
+
+    await act(async () => {
+      tabButton('Awaiting input (1)').click();
     });
     await flushUntil(
       'review Ask room',

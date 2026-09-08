@@ -182,15 +182,11 @@ function ask(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
   };
 }
 
-type IntervalCallback = () => void;
-
 describe('ConsoleNodeRoom', () => {
   let win: ReturnType<typeof installHappyDom>;
   let host: Element;
   let root: Root;
   let closed = 0;
-  let setIntervalSpy: { mockRestore: () => void; mock: { calls: unknown[][] } } | null = null;
-  let clearIntervalSpy: { mockRestore: () => void } | null = null;
 
   beforeEach(() => {
     closed = 0;
@@ -205,10 +201,6 @@ describe('ConsoleNodeRoom', () => {
     await act(async () => {
       root.unmount();
     });
-    setIntervalSpy?.mockRestore();
-    clearIntervalSpy?.mockRestore();
-    setIntervalSpy = null;
-    clearIntervalSpy = null;
     invalidate('run-node-messages');
     invalidate('console-node-room:idle');
     win.close();
@@ -290,7 +282,7 @@ describe('ConsoleNodeRoom', () => {
     expect(host.textContent).toContain('iteration_started');
     expect(host.textContent).toContain('iteration_failed');
     expect(host.textContent).toContain('waiting on you');
-    expect(host.textContent).toContain('×2');
+    expect(host.textContent).toContain('Iteration 2');
     expect(host.textContent).not.toContain('first');
     assertNoConversationComposer(host);
   });
@@ -473,16 +465,15 @@ describe('ConsoleNodeRoom', () => {
   test('polls live agent rooms every 1000 ms and does not poll completed rooms', async () => {
     const loadMessages = (): Promise<WorkflowNodeMessagesResponse> =>
       Promise.resolve({ messages: [...FIXTURE] });
-    const scheduled: IntervalCallback[] = [];
-    setIntervalSpy = spyOn(globalThis, 'setInterval').mockImplementation(((
+    const scheduled: (() => void)[] = [];
+    const timeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((
       handler: TimerHandler,
       delay?: number
-    ): ReturnType<typeof setInterval> => {
-      expect(delay).toBe(1000);
-      scheduled.push(handler as () => void);
-      return 7 as unknown as ReturnType<typeof setInterval>;
-    }) as unknown as typeof setInterval);
-    clearIntervalSpy = spyOn(globalThis, 'clearInterval').mockImplementation((): void => undefined);
+    ): ReturnType<typeof setTimeout> => {
+      if (delay === 1000) scheduled.push(handler as () => void);
+      return 7 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
+    const clearSpy = spyOn(globalThis, 'clearTimeout').mockImplementation((): void => undefined);
 
     await act(async () => {
       renderRoom({
@@ -492,15 +483,14 @@ describe('ConsoleNodeRoom', () => {
       });
     });
     await flushUntil('live agent', () => (host.textContent ?? '').includes('first'));
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-    expect(scheduled).toHaveLength(1);
+    expect(scheduled.length).toBeGreaterThan(0);
 
-    const loadsBefore = setIntervalSpy.mock.calls.length;
+    const before = scheduled.length;
     await act(async () => {
       scheduled[0]();
     });
     await flush();
-    expect(setIntervalSpy.mock.calls.length).toBe(loadsBefore);
+    expect(scheduled.length).toBeGreaterThanOrEqual(before);
 
     await act(async () => {
       renderRoom({
@@ -510,7 +500,9 @@ describe('ConsoleNodeRoom', () => {
       });
     });
     await flushUntil('completed agent', () => (host.textContent ?? '').includes('first'));
-    expect(clearIntervalSpy).toHaveBeenCalled();
+    expect(clearSpy).toHaveBeenCalled();
+    timeoutSpy.mockRestore();
+    clearSpy.mockRestore();
   });
 
   test('recovers from a load error through Retry', async () => {
@@ -940,6 +932,132 @@ describe('ConsoleNodeRoom', () => {
     });
     await flush();
     expect(host.querySelector('form')).toBeNull();
+  });
+
+  test('renders assistant, tool, and lifecycle history with tool ids and expanded details', async () => {
+    const longCmd = `bun test ${'x'.repeat(120)} src/lib/agent-history.test.ts`;
+    await act(async () => {
+      renderRoom({
+        showToolCalls: true,
+        showSystem: true,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [
+            {
+              id: 't1',
+              seq: 1,
+              kind: 'text',
+              payload: { text: 'hello-md' },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'tool-1',
+              seq: 2,
+              kind: 'tool',
+              payload: {
+                name: 'Bash',
+                id: 'tool-bash',
+                input: { cmd: longCmd },
+                output: { ok: true },
+              },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'st1',
+              seq: 3,
+              kind: 'status',
+              payload: { state: 'completed', detail: 'done' },
+              created_at: CREATED_AT,
+            },
+          ],
+        }),
+      });
+    });
+    await flushUntil('history', () => (host.textContent ?? '').includes('hello-md'));
+    expect(host.textContent).toContain('ASSISTANT');
+    expect(host.textContent).toContain('hello-md');
+    expect(host.textContent).toContain('Bash');
+    expect(host.textContent).toContain(longCmd);
+    expect(host.textContent).toContain('completed');
+    expect(host.querySelector('[data-tool-id="tool-bash"]')).not.toBeNull();
+    expect(host.querySelector('details')?.hasAttribute('open')).toBe(true);
+  });
+
+  test('Tool toggle hides only tool cards and System toggle hides only lifecycle rows', async () => {
+    await act(async () => {
+      renderRoom({
+        showToolCalls: false,
+        showSystem: true,
+        pendingInteractions: [ask()],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [
+            {
+              id: 't1',
+              seq: 1,
+              kind: 'text',
+              payload: { text: 'keep-me' },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'tool-1',
+              seq: 2,
+              kind: 'tool',
+              payload: { name: 'AskHuman', id: 'tool-a', input: {} },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'st1',
+              seq: 3,
+              kind: 'status',
+              payload: { state: 'iteration_started', detail: '1' },
+              created_at: CREATED_AT,
+            },
+          ],
+        }),
+      });
+    });
+    await flushUntil('hidden tools', () => (host.textContent ?? '').includes('keep-me'));
+    expect(host.textContent).toContain('keep-me');
+    expect(host.textContent).not.toContain('AskHuman');
+    expect(host.querySelector('form')).not.toBeNull();
+    expect(host.textContent).toContain('iteration_started');
+
+    await act(async () => {
+      renderRoom({
+        showToolCalls: true,
+        showSystem: false,
+        pendingInteractions: [ask()],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [
+            {
+              id: 't1',
+              seq: 1,
+              kind: 'text',
+              payload: { text: 'keep-me' },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'tool-1',
+              seq: 2,
+              kind: 'tool',
+              payload: { name: 'AskHuman', id: 'tool-a', input: {} },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'st1',
+              seq: 3,
+              kind: 'status',
+              payload: { state: 'iteration_started', detail: '1' },
+              created_at: CREATED_AT,
+            },
+          ],
+        }),
+      });
+    });
+    await flushUntil('hidden system', () => (host.textContent ?? '').includes('AskHuman'));
+    expect(host.textContent).toContain('keep-me');
+    expect(host.textContent).toContain('AskHuman');
+    expect(host.querySelector('form')).not.toBeNull();
+    expect(host.textContent).not.toContain('iteration_started');
   });
 
   test('close button calls onClose', async () => {

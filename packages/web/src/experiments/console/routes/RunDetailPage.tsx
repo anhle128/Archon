@@ -16,7 +16,6 @@ import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
-import { ArtifactPanel } from '../components/ArtifactPanel';
 import { ConsoleInspectPane } from '../components/ConsoleInspectPane';
 import { ConsoleAskChrome } from '../components/ask/ConsoleAskChrome';
 import {
@@ -24,17 +23,12 @@ import {
   type AskActionState,
   type AskActionStateByRequest,
 } from '../components/ask/ask-answer-controller';
-import { firstPendingAskAwaitingNodeId, isAskAwaitingRun } from '../components/ask/awaiting-chrome';
+import { isAskAwaitingRun } from '../components/ask/awaiting-chrome';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { buildConsoleLogEntries } from '../components/inspect/build-console-log-entries';
 import { buildLogRows } from '../components/inspect/build-log-rows';
-import {
-  readNodeSearchParam,
-  resolveInitialInspectSelection,
-  selectInspectNode,
-  type InspectSelection,
-} from '../components/inspect/console-inspect-selection';
-import { readApprovalContext } from '../components/inspect/read-approval-context';
+import { readNodeSearchParam } from '../components/inspect/console-inspect-selection';
+import type { AskDraftByRequest } from '../components/ask/parse-ask-envelope';
 import { synthesizeLogNodeStates } from '../components/inspect/synthesize-log-node-states';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useRunStreamSSE } from '../lib/sse';
@@ -42,6 +36,18 @@ import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import { runMessageConversationId, type Run, type RunEnvOverlay } from '../primitives/run';
+import {
+  applyRoomDeepLink,
+  chooseExecutionForNode,
+  closeRoom,
+  openRoom,
+  rememberRoomScroll,
+  resetRoomVisit,
+  roomOpenerId,
+  type RoomVisitState,
+} from '@/lib/execution-room-model';
+import { nodeMessageScopeKey } from '@/lib/node-message-pages';
+import { readRoomRatio, writeRoomRatio } from '@/lib/room-split-layout';
 import { foldNodeRuns } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
@@ -120,16 +126,6 @@ function writeNodeFilter(v: string): void {
   }
 }
 
-function isKnownInspectNode(
-  nodeId: string,
-  nodeStates: ConsoleRunDetail['nodeStates'],
-  rows: ReturnType<typeof buildLogRows>
-): boolean {
-  return (
-    nodeStates.some(state => state.nodeId === nodeId) || rows.some(row => row.nodeId === nodeId)
-  );
-}
-
 /**
  * ENV chip/table gate for run detail. Malformed/legacy `metadata.envOverlay`
  * stays `null` on the Run primitive — never render false audit UI from hybrids.
@@ -144,8 +140,6 @@ export function RunDetailPage(): ReactElement {
   const navigate = useNavigate();
   const location = useLocation();
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const appliedRunIdRef = useRef<string | null>(null);
-  const prevSearchNodeRef = useRef<string | null>(null);
   const [showToolCalls, setShowToolCalls] = useState<boolean>(() =>
     readToggle(TOGGLE_KEYS.toolCalls, true)
   );
@@ -154,10 +148,11 @@ export function RunDetailPage(): ReactElement {
   );
   const [view, setView] = useState<DetailView>(() => readView());
   const [streamNodeFilter, setStreamNodeFilter] = useState<string>(() => readNodeFilter());
-  const [inspectSelection, setInspectSelection] = useState<InspectSelection>({
-    nodeId: null,
-    logRowId: null,
-  });
+  const [room, setRoom] = useState<RoomVisitState>(() => resetRoomVisit(runId ?? ''));
+  const [roomRatio, setRoomRatio] = useState(() =>
+    typeof window === 'undefined' ? 40 : readRoomRatio('console', window.localStorage)
+  );
+  const [askDrafts, setAskDrafts] = useState<AskDraftByRequest>({});
   const [askActions, setAskActions] = useState<{
     runId: string | undefined;
     states: AskActionStateByRequest;
@@ -246,14 +241,6 @@ export function RunDetailPage(): ReactElement {
     [inspectNodeStates, detail]
   );
 
-  const askAwaitingNodeId = useMemo(() => {
-    if (detail === undefined || detail === null) return null;
-    return firstPendingAskAwaitingNodeId({
-      pending: detail.pendingInteractions,
-      nodes: inspectNodeStates,
-    });
-  }, [detail, inspectNodeStates]);
-
   const logEntries = useMemo(
     () =>
       buildConsoleLogEntries({
@@ -286,30 +273,32 @@ export function RunDetailPage(): ReactElement {
   }, [detail, nodeOptions, streamNodeFilter]);
 
   useEffect(() => {
-    if (detail === undefined || detail === null || runId === undefined) return;
-    if (appliedRunIdRef.current === runId) return;
-    appliedRunIdRef.current = runId;
-    setInspectSelection(
-      resolveInitialInspectSelection({
-        requestedNodeId: readNodeSearchParam(location.search),
-        preferredNodeId: askAwaitingNodeId,
-        nodeStates: inspectNodeStates,
-        rows: logRows,
-        approvalNodeId: readApprovalContext(detail.approval)?.nodeId ?? null,
-      })
-    );
-  }, [detail, runId, inspectNodeStates, logRows, location.search, askAwaitingNodeId]);
+    if (runId === undefined) return;
+    setAskDrafts({});
+  }, [runId]);
 
   useEffect(() => {
-    const requested = readNodeSearchParam(location.search);
-    const previous = prevSearchNodeRef.current;
-    prevSearchNodeRef.current = requested;
-    if (appliedRunIdRef.current !== runId || runId === undefined) return;
-    if (requested === null || requested === previous) return;
-    if (requested === inspectSelection.nodeId) return;
-    if (!isKnownInspectNode(requested, inspectNodeStates, logRows)) return;
-    setInspectSelection({ nodeId: requested, logRowId: null });
-  }, [location.search, runId, inspectSelection.nodeId, inspectNodeStates, logRows]);
+    if (detail === undefined || detail === null || runId === undefined) return;
+    const queryNode = readNodeSearchParam(location.search);
+    setRoom(previous => {
+      const base = previous.runId === runId ? previous : resetRoomVisit(runId);
+      const next = applyRoomDeepLink(base, queryNode, logRows);
+      if (
+        next.selection !== null &&
+        next.selection.openerId === null &&
+        next.appliedDeepLinkNode !== null
+      ) {
+        return {
+          ...next,
+          selection: {
+            ...next.selection,
+            openerId: roomOpenerId('console', 'log', next.selection.rowId),
+          },
+        };
+      }
+      return next;
+    });
+  }, [detail, runId, logRows, location.search]);
 
   const replaceNodeSearch = useCallback(
     (nodeId: string | null): void => {
@@ -325,14 +314,30 @@ export function RunDetailPage(): ReactElement {
   );
 
   const onInspectSelect = useCallback(
-    (nodeId: string, rowId?: string): void => {
-      setInspectSelection(selectInspectNode(nodeId, rowId ?? null));
+    (nodeId: string, rowId?: string, openerId: string | null = null): void => {
+      setRoom(previous => {
+        const lastExplicit =
+          previous.selection?.nodeId === nodeId
+            ? null
+            : (previous.lastExplicitRowByNode[nodeId] ?? null);
+        const chosen =
+          rowId !== undefined
+            ? (logRows.find(row => row.id === rowId && row.nodeId === nodeId) ?? null)
+            : chooseExecutionForNode(logRows, nodeId, lastExplicit);
+        if (chosen === null) return previous;
+        const nextOpener =
+          openerId ??
+          (rowId !== undefined
+            ? roomOpenerId('console', 'log', rowId)
+            : roomOpenerId('console', 'graph', nodeId));
+        return openRoom(previous, { nodeId, rowId: chosen.id, openerId: nextOpener });
+      });
       replaceNodeSearch(nodeId);
     },
-    [replaceNodeSearch]
+    [logRows, replaceNodeSearch]
   );
 
-  selectedNodeIdRef.current = inspectSelection.nodeId;
+  selectedNodeIdRef.current = room.selection?.nodeId ?? null;
 
   const setAskActionState = useCallback(
     (requestId: string, state: AskActionState): void => {
@@ -374,9 +379,17 @@ export function RunDetailPage(): ReactElement {
   );
 
   const onCloseRoom = useCallback((): void => {
-    setInspectSelection({ nodeId: null, logRowId: null });
-    replaceNodeSearch(null);
-  }, [replaceNodeSearch]);
+    const openerId = room.selection?.openerId ?? null;
+    setRoom(closeRoom);
+    if (openerId !== null) document.getElementById(openerId)?.focus();
+  }, [room.selection?.openerId]);
+
+  const onRoomRatioChange = useCallback((ratio: number): void => {
+    setRoomRatio(ratio);
+    if (typeof window !== 'undefined') {
+      writeRoomRatio('console', ratio, window.localStorage);
+    }
+  }, []);
 
   // Auto-scroll to bottom on new content IF user is already near the bottom.
   const lastBottomRef = useRef(true);
@@ -587,12 +600,32 @@ export function RunDetailPage(): ReactElement {
   );
 
   const projectCwd = project?.path;
-  const inspectView = view === 'graph' ? 'graph' : 'log';
-  const showInspectPane = view !== 'artifacts' && projectCwd !== undefined;
+  const selectedNodeId = room.selection?.nodeId ?? null;
+  const selectedLogRowId = room.selection?.rowId ?? null;
+  const selectedRow = logRows.find(row => row.id === selectedLogRowId) ?? null;
+  const transcriptScopeKey =
+    selectedRow === null
+      ? 'run:none|node:none|sel:node:none'
+      : nodeMessageScopeKey(
+          runId,
+          selectedRow.nodeId,
+          selectedRow.selection.kind === 'occurrence'
+            ? {
+                kind: 'occurrence',
+                occurrenceId: selectedRow.selection.occurrenceId,
+                ...(selectedRow.selection.attemptId !== undefined
+                  ? { attemptId: selectedRow.selection.attemptId }
+                  : {}),
+              }
+            : { kind: 'node', rowId: selectedRow.id }
+        );
 
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
-      <section className="console-run-view flex h-full flex-col">
+      <section
+        className="console-run-view flex h-full flex-col"
+        data-ask-draft-count={String(Object.keys(askDrafts).length)}
+      >
         <RunDetailHeader
           run={run}
           projectId={projectId}
@@ -609,21 +642,16 @@ export function RunDetailPage(): ReactElement {
             setViewPersist('graph');
           }}
           onSelectAwaitingNode={(nodeId: string): void => {
-            onInspectSelect(nodeId);
+            onInspectSelect(nodeId, undefined, null);
           }}
         />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {view === 'artifacts' ? (
+          {projectCwd !== undefined ? (
             <>
-              <div className="px-6">{toolbar}</div>
-              <ArtifactPanel runId={runId} />
-            </>
-          ) : showInspectPane && projectCwd !== undefined ? (
-            <>
-              {view === 'graph' ? <div className="px-6">{toolbar}</div> : null}
+              {view !== 'log' ? <div className="px-6">{toolbar}</div> : null}
               <ConsoleInspectPane
-                view={inspectView}
+                view={view}
                 run={run}
                 projectId={projectId}
                 projectCwd={projectCwd}
@@ -635,22 +663,38 @@ export function RunDetailPage(): ReactElement {
                 logEntries={logEntries}
                 usage={detail.usage}
                 streamNodeFilter={streamNodeFilter}
-                selectedNodeId={inspectSelection.nodeId}
-                selectedLogRowId={inspectSelection.logRowId}
+                selectedNodeId={selectedNodeId}
+                selectedLogRowId={selectedLogRowId}
                 showToolCalls={showToolCalls}
                 showSystem={showSystem}
                 logHeader={logHeader}
                 logFooter={logFooter}
                 logScrollRef={scrollRef}
-                onSelectNode={onInspectSelect}
+                onSelectNode={(nodeId: string, rowId?: string): void => {
+                  onInspectSelect(
+                    nodeId,
+                    rowId,
+                    rowId !== undefined
+                      ? roomOpenerId('console', 'log', rowId)
+                      : roomOpenerId('console', 'graph', nodeId)
+                  );
+                }}
                 onCloseRoom={onCloseRoom}
+                roomRatio={roomRatio}
+                onRoomRatioChange={onRoomRatioChange}
                 loadDefinition={skill.getWorkflowDagNodes}
-                loadMessages={skill.listNodeMessages}
+                loadMessages={skill.getNodeMessages}
+                loadMessage={skill.getNodeMessage}
                 pendingInteractions={detail.pendingInteractions}
                 viewerIsStarter={detail.viewerIsStarter}
                 starterDisplayName={detail.starterDisplayName}
                 actionStates={actionStates}
                 onSubmitAsk={submitAsk}
+                scopeKey={transcriptScopeKey}
+                initialScrollTop={room.scrollTopByScope[transcriptScopeKey]}
+                onScrollTopChange={(scrollTop: number): void => {
+                  setRoom(previous => rememberRoomScroll(previous, transcriptScopeKey, scrollTop));
+                }}
               />
             </>
           ) : (

@@ -100,6 +100,54 @@ describe('console NFR4 isolation', () => {
     expect(violations).toEqual([]);
   });
 
+  test('run-room files import approved shared lib modules and no Legacy components', async () => {
+    const roomFiles = [
+      'components/ConsoleInspectPane.tsx',
+      'components/ConsoleNodeRoom.tsx',
+      'components/inspect/ConsoleRoomHeader.tsx',
+      'components/inspect/ConsoleAgentHistoryList.tsx',
+      'components/NodeDivider.tsx',
+      'routes/RunDetailPage.tsx',
+    ];
+    const approved = new Set([
+      '@/lib/agent-history',
+      '@/lib/execution-room-model',
+      '@/lib/node-message-pages',
+      '@/lib/room-scroll-follow',
+      '@/lib/room-split-layout',
+      '@/lib/use-container-split-mode',
+      '@/lib/pair-tool-transcript',
+      '@/lib/project-text-transcript',
+      '@/lib/run-graph',
+      '@/lib/run-graph/constants',
+      '@/lib/api.generated',
+    ]);
+    const violations: string[] = [];
+    const seen = new Set<string>();
+    for (const relativePath of roomFiles) {
+      const source = await readFile(join(CONSOLE_ROOT, relativePath), 'utf8');
+      for (const site of parseImports(source)) {
+        if (site.spec.includes('components/workflows') || site.spec.startsWith('@/components')) {
+          violations.push(`${relativePath} imports ${site.spec}`);
+        }
+        if (site.spec.startsWith('@/lib/')) {
+          seen.add(site.spec);
+          const allowed = approved.has(site.spec) || site.spec.startsWith('@/lib/run-graph/');
+          if (!allowed) {
+            violations.push(`${relativePath} imports unapproved ${site.spec}`);
+          }
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+    expect(seen.has('@/lib/execution-room-model')).toBe(true);
+    expect(seen.has('@/lib/agent-history')).toBe(true);
+    expect(seen.has('@/lib/node-message-pages')).toBe(true);
+    expect(seen.has('@/lib/room-scroll-follow')).toBe(true);
+    expect(seen.has('@/lib/room-split-layout')).toBe(true);
+    expect(seen.has('@/lib/use-container-split-mode')).toBe(true);
+  });
+
   test('status cards wire consoleRunHref to current-node or approval-node ids', async () => {
     const card = compact(
       await readFile(join(CONSOLE_ROOT, 'components/ConsoleWorkflowResultCard.tsx'), 'utf8')
