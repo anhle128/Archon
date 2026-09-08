@@ -6962,11 +6962,11 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
 
       expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
       // Accepted contract: speckit-ralph-native-feature.yaml ralph-loop-run uses
-      // omp + xai-oauth/grok-4.5 @ high (final loop: anthropic/claude-sonnet-5).
+      // grok + grok-4.5 @ high (final loop: omp + anthropic/claude-sonnet-5).
       const loopNode = fixture.workflow.nodes.find(node => node.id === 'ralph-loop-run');
-      expect(loopNode?.provider).toBe('omp');
-      expect(loopNode?.model).toBe('xai-oauth/grok-4.5');
-      expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('omp');
+      expect(loopNode?.provider).toBe('grok');
+      expect(loopNode?.model).toBe('grok-4.5');
+      expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('grok');
       const options = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
       expect(options.model).toBe(loopNode?.model);
       expect(options.nodeConfig?.effort).toBe('high');
