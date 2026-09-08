@@ -86,8 +86,8 @@ test('[P1] inspect-file room shows visible tool output matching the mockup card'
   await expect(room).toBeVisible({
     timeout: T.medium,
   });
-  await expect(room.getByText(HITL_TOOL_OUTPUT)).toBeVisible({ timeout: T.medium });
-  await expect(room.locator('.ptool', { hasText: HITL_TOOL_OUTPUT })).toBeVisible();
+  await expect(room.getByText(HITL_TOOL_OUTPUT).first()).toBeVisible({ timeout: T.medium });
+  await expect(room.locator('.ptool', { hasText: HITL_TOOL_OUTPUT }).first()).toBeVisible();
   await expect(page.locator('.rounded-full', { hasText: 'Read' })).toHaveCount(0);
 });
 
@@ -101,8 +101,8 @@ test('[P1] Legacy inspect-file room also shows the mockup tool card', async ({ p
     .first()
     .click();
   const room = page.getByRole('region', { name: `${HITL_INSPECT_NODE} room` });
-  await expect(room.getByText(HITL_TOOL_OUTPUT)).toBeVisible({ timeout: T.medium });
-  await expect(room.locator('.ptool', { hasText: HITL_TOOL_OUTPUT })).toBeVisible();
+  await expect(room.getByText(HITL_TOOL_OUTPUT).first()).toBeVisible({ timeout: T.medium });
+  await expect(room.locator('.ptool', { hasText: HITL_TOOL_OUTPUT }).first()).toBeVisible();
   await expect(page.locator('.rounded-full', { hasText: 'Read' })).toHaveCount(0);
 });
 

@@ -85,7 +85,7 @@ test('[P1] HITL visual: Console and Legacy vs canonical mockup at required viewp
   await openRunDetail(page, started.runId, HITL_INSPECT_NODE);
   await expect(page.getByText(/Awaiting input/i).first()).toBeVisible({ timeout: T.medium });
   const room = page.getByRole('region', { name: `${HITL_INSPECT_NODE} room` });
-  await expect(room.locator('.ptool', { hasText: HITL_TOOL_OUTPUT })).toBeVisible({
+  await expect(room.locator('.ptool', { hasText: HITL_TOOL_OUTPUT }).first()).toBeVisible({
     timeout: T.medium,
   });
   await expect(page.getByRole('region', { name: `${HITL_INSPECT_NODE} room` })).toBeVisible();

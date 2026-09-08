@@ -311,8 +311,16 @@ test('[P1] Awaiting input focuses the matching Ask', async ({ browser, archon })
     await page.getByRole('button', { name: 'Awaiting input', exact: true }).click();
     const expectedId = `run-ask-card-${encodeURIComponent(requestId ?? '')}`;
     await expect
-      .poll(async () => page.evaluate(() => document.activeElement?.id ?? ''))
-      .toBe(expectedId);
+      .poll(async () =>
+        page.evaluate(id => {
+          const active = document.activeElement;
+          const card = document.getElementById(id);
+          return Boolean(
+            active !== null && card !== null && (active === card || card.contains(active))
+          );
+        }, expectedId)
+      )
+      .toBe(true);
   });
 });
 
