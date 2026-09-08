@@ -1,5 +1,5 @@
 worktree:
-  baseBranch: dev
+  baseBranch: develop
 
 github:
   prRemote: origin
