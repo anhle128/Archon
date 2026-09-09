@@ -217,9 +217,9 @@ nodes:
     description: Choose verify-archon feature-map ids from the plan, diff, and feature map.
     depends_on:
       - ralph-loop-run
-    provider: omp
-    model: cursor/gemini-3.8-flash
-    effort: high
+    provider: grok
+    model: grok-4.6
+    effort: xhigh
     context: fresh
     skills:
       - select-verify-archon-targets

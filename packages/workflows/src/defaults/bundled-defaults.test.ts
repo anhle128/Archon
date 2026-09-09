@@ -425,6 +425,8 @@ describe('bundled-defaults', () => {
       expect(content).toContain('id: validate-prd');
       expect(content).toContain('id: ralph-loop-run');
       expect(content).toContain('id: select-verify-targets');
+      expect(content).toContain('provider: grok');
+      expect(content).toContain('model: grok-4.6');
       expect(content).toContain('skills:');
       expect(content).toContain('select-verify-archon-targets');
       expect(content).toContain('Follow select-verify-archon-targets.');
