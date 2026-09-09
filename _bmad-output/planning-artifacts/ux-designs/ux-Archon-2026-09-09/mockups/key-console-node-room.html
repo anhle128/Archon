@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Archon Console — node room · readable transcript</title>
+<style>
+/*
+ * KEY SCREEN — Console node room, running node, mid-work.
+ * Chrome (rail · run header · toolbar · log stream · node panel) is the shipped HITL contract
+ * (spec-workflow-run-view-hitl/ux-mockup/console.html). Only the transcript INSIDE #panel-body is new.
+ * Governing spine sections:
+ *   DESIGN.md      Foundation (Console inherits console/theme.css) · Colors.family-chips · Components.tool-row
+ *   EXPERIENCE.md  Component Patterns (tool call row) · State Patterns (running · failed auto-expanded) · Key Flows (Kevin, retry)
+ * Tokens mirror packages/web/src/experiments/console/theme.css — cool charcoal hue 265, Geist / Geist Mono,
+ * brand teal = success, running = electric blue. Fonts fall back to system when offline.
+ */
+:root {
+  --surface: oklch(0.175 0.007 265); --surface-inset: oklch(0.13 0.006 265); --surface-elevated: oklch(0.205 0.009 265);
+  --surface-hover: oklch(0.225 0.01 265); --surface-bright: oklch(0.275 0.012 265);
+  --border: oklch(0.275 0.012 265); --border-bright: oklch(0.355 0.016 265);
+  --text-primary: oklch(0.975 0.004 265); --text-secondary: oklch(0.745 0.014 265); --text-tertiary: oklch(0.56 0.017 265);
+  --brand-magenta: oklch(0.64 0.295 330); --brand-teal: oklch(0.755 0.165 168);
+  --accent: var(--brand-magenta); --accent-bright: var(--brand-magenta); --accent-soft: oklch(0.64 0.295 330 / 0.14);
+  --running: oklch(0.72 0.155 245); --success: var(--brand-teal); --warning: oklch(0.8 0.14 85); --error: oklch(0.65 0.22 25);
+  --node-command: oklch(0.62 0.18 250); --node-prompt: oklch(0.58 0.19 290); --node-bash: oklch(0.75 0.15 75);
+  --node-approval: oklch(0.72 0.17 40);
+  --radius: 0.625rem;
+  --font-sans: 'Geist', 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; border-color: var(--border); }
+html, body { margin: 0; height: 100%; }
+body { background: oklch(0.11 0.005 265); color: var(--text-primary); font-family: var(--font-sans); font-size: 13px; padding: 24px; }
+.frame { width: 1280px; height: 820px; margin: 0 auto; border: 1px solid var(--border-bright); border-radius: 12px; overflow: hidden; background: var(--surface); box-shadow: 0 30px 80px oklch(0 0 0 / .5); }
+.frame-bar { height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: var(--surface-elevated); border-bottom: 1px solid var(--border); font-size: 11.5px; color: var(--text-tertiary); }
+.frame-bar i { width: 10px; height: 10px; border-radius: 50%; background: var(--border-bright); display: inline-block; }
+.frame-bar .url { margin-left: 12px; font-family: var(--font-mono); background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; color: var(--text-secondary); }
+.mono { font-family: var(--font-mono); }
+.chip { font-size: 10.5px; color: var(--text-secondary); background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
+.status-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; border-radius: 999px; padding: 3px 10px; border: 1px solid var(--border); color: var(--running); border-color: oklch(0.72 0.155 245 / .4); }
+.status-badge .sb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--running); }
+.btn { background: var(--surface-elevated); border: 1px solid var(--border); color: var(--text-primary); font-size: 12px; border-radius: var(--radius); padding: 6px 12px; }
+
+/* ---- Console chrome (from the HITL contract) ---- */
+#cc-app { display: flex; flex-direction: column; height: calc(100% - 34px); }
+.cc-rail { display: flex; align-items: center; gap: 8px; padding: 6px 14px; font-size: 11px; color: var(--text-tertiary); border-bottom: 1px solid var(--border); background: var(--surface-inset); }
+.cc-rail .rail-logo { font-weight: 800; letter-spacing: .12em; background: linear-gradient(135deg, var(--brand-magenta), oklch(0.56 0.215 305), var(--brand-teal)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.cc-rail .rail-project { color: var(--text-secondary); font-family: var(--font-mono); }
+.cc-head { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.cc-head .cc-title { font-weight: 700; font-size: 14px; font-family: var(--font-mono); }
+.cc-head .cc-meta { display: flex; gap: 6px; }
+.cc-head .cc-right { margin-left: auto; display: flex; gap: 10px; align-items: center; font-size: 11.5px; color: var(--text-tertiary); }
+.cc-toolbar { display: flex; align-items: center; gap: 18px; padding: 6px 14px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.cc-viewbtns { display: flex; gap: 2px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+.cc-vb { border: none; background: transparent; color: var(--text-tertiary); font-size: 12px; padding: 4px 12px; border-radius: 6px; }
+.cc-vb.active { background: var(--surface-elevated); color: var(--text-primary); }
+.cc-toggles { display: flex; gap: 12px; color: var(--text-secondary); font-size: 11.5px; }
+.cc-main { flex: 1; display: flex; min-height: 0; }
+.cc-views { flex: 1; min-width: 0; overflow: hidden; padding: 12px 14px; opacity: .55; }
+.cnode { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 8px; font-size: 12px; background: var(--surface); }
+.cnode .cn-head { display: flex; gap: 8px; align-items: center; font-family: var(--font-mono); font-size: 12px; }
+.cnode .type-pill { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
+.cnode .type-prompt { color: var(--node-prompt); } .cnode .type-bash { color: var(--node-bash); } .cnode .type-command { color: var(--node-command); }
+.cnode .cn-status { margin-left: auto; font-size: 10.5px; color: var(--text-tertiary); }
+.cnode .cn-status.ok { color: var(--success); } .cnode .cn-status.run { color: var(--running); }
+.cnode.selected { border-color: var(--accent-bright); box-shadow: 0 0 0 1px var(--accent-soft); opacity: 1; }
+.cnode .cn-line { color: var(--text-tertiary); font-size: 11.5px; margin-top: 4px; }
+#node-panel { width: 520px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; background: var(--surface); border-left: 1px solid var(--border); }
+#panel-header { padding: 12px 14px 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.ph-row { display: flex; align-items: center; gap: 8px; }
+.type-pill { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--node-prompt); }
+.ph-name { font-family: var(--font-mono); font-size: 13px; font-weight: 700; }
+.node-badge { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 2px 8px; border: 1px solid oklch(0.72 0.155 245 / .4); color: var(--running); }
+.panel-close { margin-left: auto; border: none; background: transparent; color: var(--text-tertiary); font-size: 13px; padding: 4px 7px; }
+.ph-meta { font-size: 11px; color: var(--text-tertiary); }
+#panel-body { flex: 1; overflow-y: auto; padding: 10px 12px; min-height: 0; }
+.cc-composer { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); }
+.cc-composer input { flex: 1; background: var(--surface-inset); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; color: var(--text-primary); font: inherit; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+
+/* ---- the transcript (NEW) ---- */
+.tx { font-family: var(--font-mono); font-size: 12px; }
+.tcall > summary { list-style: none; display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.tcall > summary::-webkit-details-marker { display: none; }
+.tcall > summary:hover { background: var(--surface-hover); }
+.chev { color: var(--text-tertiary); flex: 0 0 9px; font-size: 10px; display: inline-block; transition: transform .12s; }
+.tcall[open] > summary .chev { transform: rotate(90deg); }
+.gl { flex: 0 0 12px; text-align: center; font-weight: 700; }
+.gl-ok { color: var(--success); } .gl-err { color: var(--error); } .gl-run { color: var(--running); } .gl-na { color: var(--text-secondary); }
+.fam { flex: 0 0 auto; font-size: 11px; padding: 1px 7px; border-radius: 4px; background: var(--surface-elevated); border: 1px solid var(--border); max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.fam-shell { color: var(--node-bash); border-color: color-mix(in oklch, var(--node-bash) 40%, transparent); }
+.fam-file { color: var(--node-command); border-color: color-mix(in oklch, var(--node-command) 40%, transparent); }
+.fam-search { color: var(--node-prompt); border-color: color-mix(in oklch, var(--node-prompt) 45%, transparent); }
+.fam-code { color: var(--node-bash); border-color: color-mix(in oklch, var(--node-bash) 40%, transparent); }
+.fam-plan { color: var(--node-approval); border-color: color-mix(in oklch, var(--node-approval) 40%, transparent); }
+.hl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hl-path { display: flex; min-width: 0; }
+.hl-path .h { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.hl-path .t { flex: 0 0 auto; }
+.bd { flex: 0 0 auto; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+.bd .err { color: var(--error); } .bd .add { color: var(--success); } .bd .del { color: var(--error); } .bd .run { color: var(--running); }
+.tbody { margin: 2px 0 8px 29px; border-left: 2px solid var(--border); padding-left: 10px; }
+.tbar { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--text-secondary); margin-bottom: 6px; }
+.raw { margin-left: auto; min-height: 24px; display: inline-flex; align-items: center; background: transparent; border: 1px solid var(--border); color: var(--text-secondary); border-radius: 4px; padding: 1px 7px; font: inherit; font-size: 10.5px; }
+.box { background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; font-size: 11.5px; line-height: 1.5; }
+.box .cmd { color: var(--node-bash); } .box .fail { color: var(--error); font-weight: 700; }
+.chk { line-height: 1.85; color: var(--text-secondary); font-size: 11.5px; }
+.chk .ph { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-secondary); margin-top: 4px; }
+.chk .done { color: var(--success); } .chk .cur { color: var(--running); } .chk .td { color: var(--text-secondary); }
+.occ { display: flex; align-items: center; gap: 8px; margin: 10px 0 5px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); }
+.occ::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.asst { font-family: var(--font-sans); font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); margin: 6px 2px 8px; }
+.asst .role { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="frame-bar"><i></i><i></i><i></i><span class="url">minis-mac-mini.taildae6a9.ts.net:3090/console/p/archon/r/run_d9556522f45a?node=implement</span></div>
+  <div id="cc-app">
+    <div class="cc-rail"><span class="rail-logo">CONSOLE</span><span>›</span><span>PROJECTS</span><span>›</span><span class="rail-project">x10.gigo.harness-service</span></div>
+    <header class="cc-head">
+      <span class="cc-title">speckit-ralph-native-feature</span>
+      <span class="status-badge"><span class="sb-dot"></span>Running</span>
+      <div class="cc-meta"><span class="chip mono">oceanlabs-holding/x10.gigo.harness-service</span><span class="chip mono">attach-first-writer</span><span class="chip mono">codex · gpt-5.5 · xhigh</span></div>
+      <div class="cc-right"><span class="mono"><b style="color:var(--text-primary)">14:07</b></span><span class="mono"><b style="color:var(--text-primary)">6</b> runs</span><button class="btn">Cancel</button></div>
+    </header>
+    <div class="cc-toolbar">
+      <div class="cc-viewbtns"><button class="cc-vb active">Log</button><button class="cc-vb">Graph</button><button class="cc-vb">Artifacts&nbsp;2</button></div>
+      <div class="cc-toggles"><label><input type="checkbox" checked /> Tool calls</label><label><input type="checkbox" checked /> System</label></div>
+    </div>
+    <main class="cc-main">
+      <div class="cc-views">
+        <div class="cnode"><div class="cn-head"><span class="type-pill type-command">command</span>speckit-specify<span class="cn-status ok">completed · 1m 12s</span></div><div class="cn-line">Wrote specs/014-attach-first-writer/spec.md</div></div>
+        <div class="cnode"><div class="cn-head"><span class="type-pill type-command">command</span>speckit-plan<span class="cn-status ok">completed · 3m 40s</span></div><div class="cn-line">plan.md · research.md · data-model.md</div></div>
+        <div class="cnode"><div class="cn-head"><span class="type-pill type-bash">bash</span>ralph-prepare<span class="cn-status ok">completed · 4s</span></div><div class="cn-line">$ .specify/extensions/ralph/prepare.sh 014</div></div>
+        <div class="cnode selected"><div class="cn-head"><span class="type-pill type-prompt">prompt</span>implement<span class="cn-status run">running · 14m 07s · run 2</span></div><div class="cn-line">19 tool calls · 1 failed · retry after exit 101</div></div>
+        <div class="cnode" style="opacity:.6"><div class="cn-head"><span class="type-pill type-command">command</span>speckit-verify<span class="cn-status">pending</span></div></div>
+      </div>
+
+      <aside id="node-panel">
+        <div id="panel-header">
+          <div class="ph-row"><span class="type-pill">prompt</span><span class="ph-name">implement</span><span class="node-badge">Running</span><button class="panel-close">✕</button></div>
+          <div class="ph-meta">started 04:52 · running… · run 2 of 2 · omp · claude-opus-5</div>
+        </div>
+        <div id="panel-body" class="tx">
+
+          <div class="occ">Run 1</div>
+          <div class="asst"><span class="role">assistant</span>Reading the spec and the retry worker before touching anything.</div>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="file · read_file" aria-label="file · read_file">read_file</span><span class="hl hl-path"><span class="h">specs/014-attach-first-writer/</span><span class="t">spec.md</span></span><span class="bd">212 lines · 38ms</span></summary></details>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="file · read_file" aria-label="file · read_file">read_file</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/src/</span><span class="t">auto_retry.rs</span></span><span class="bd">418 lines · 41ms</span></summary></details>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-search">grep</span><span class="hl">"fn retry_backoff" in crates/</span><span class="bd">4 matches</span></summary></details>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-search" title="glob" aria-label="glob">glob</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/tests/</span><span class="t">**/*.rs</span></span><span class="bd">5 files</span></summary></details>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="todo" aria-label="todo">todo</span><span class="hl" style="color:var(--text-secondary)">todo updated</span><span class="bd">op: init</span></summary></details>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="task" aria-label="task">task</span><span class="hl">Scout retry call sites and CI config</span><span class="bd">2 subagents · 2m 04s</span></summary></details>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file">search_replace</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/src/</span><span class="t">auto_retry.rs</span></span><span class="bd"><span class="add">+14</span> <span class="del">−3</span></span></summary></details>
+          <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-err">✕</span><span class="fam fam-shell" title="shell · run_terminal_command" aria-label="shell · run_terminal_command">run_terminal_command</span><span class="hl">cargo test -p gigo-harness-worker --test auto_retry rm02_4_2_tdd_us1_001 -- --exact</span><span class="bd"><span class="err">exit 101</span> · 41.2s</span></summary>
+            <div class="tbody"><div class="tbar">shell · exit 101 · 41.2s<button class="raw" type="button">Raw</button></div>
+<div class="box"><span class="cmd">$</span> cargo test -p gigo-harness-worker --test auto_retry rm02_4_2_tdd_us1_001 -- --exact --test-threads=1
+test rm02_4_2_tdd_us1_001 ... <span class="fail">FAILED</span>
+thread 'rm02_4_2_tdd_us1_001' panicked at tests/auto_retry.rs:88:5:
+assertion `left == right` failed
+  left: 31
+ right: 30</div></div>
+          </details>
+
+          <div class="occ">Run 2 · retry</div>
+          <div class="asst"><span class="role">assistant</span>The backoff cap is off by one — <code style="font-family:var(--font-mono);font-size:11px">min(31)</code> then <code style="font-family:var(--font-mono);font-size:11px">+1</code>. Fixing and re-running only the failing case.</div>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="file · edit" aria-label="file · edit">edit</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/src/</span><span class="t">auto_retry.rs</span></span><span class="bd"><span class="add">+2</span> <span class="del">−2</span></span></summary></details>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-shell" title="shell · run_terminal_command" aria-label="shell · run_terminal_command">run_terminal_command</span><span class="hl">cargo test -p gigo-harness-worker --test auto_retry rm02_4_2_tdd_us1_001 -- --exact</span><span class="bd">exit 0 · 38.9s</span></summary></details>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-code" title="code · eval" aria-label="code · eval">eval</span><span class="hl">for n in 0..=8 { assert!(backoff(n) &lt;= Duration::from_secs(30)) }</span><span class="bd">rust · 12ms</span></summary></details>
+          <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="todo" aria-label="todo">todo</span><span class="hl">Research · Implement</span><span class="bd">4/6 done</span></summary>
+            <div class="tbody"><div class="tbar">todo · folded from 4 todo calls<button class="raw" type="button">Raw</button></div>
+              <div class="chk">
+                <div class="ph">Research</div>
+                <div><span class="done">☑</span> Read spec and auto_retry.rs</div>
+                <div><span class="done">☑</span> Locate the backoff cap</div>
+                <div class="ph">Implement</div>
+                <div><span class="done">☑</span> Fix off-by-one in backoff()</div>
+                <div><span class="done">☑</span> Re-run rm02_4_2_tdd_us1_001</div>
+                <div><span class="cur">◐</span> Run full auto_retry suite</div>
+                <div><span class="td">☐</span> Auto-commit after implement</div>
+              </div></div>
+          </details>
+          <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-run">◐</span><span class="fam fam-shell" title="shell · run_terminal_command" aria-label="shell · run_terminal_command">run_terminal_command</span><span class="hl">CARGO_BUILD_JOBS=1 cargo test -p gigo-harness-worker --test auto_retry</span><span class="bd"><span class="run">running</span> · 1m 48s</span></summary></details>
+
+        </div>
+      </aside>
+    </main>
+    <form class="cc-composer"><input type="text" placeholder="Reply… (queued for the run's conversation)" /><button class="btn btn-primary" type="button">Continue</button></form>
+  </div>
+</div>
+</body>
+</html>

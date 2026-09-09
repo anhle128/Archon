@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Archon — agent transcript · states sheet</title>
+<style>
+/*
+ * KEY SCREEN — transcript states sheet (surface-independent).
+ * Governing spine sections:
+ *   DESIGN.md      Colors.family-chips · Components.tool-row · Components.tool-body · Typography.mono
+ *   EXPERIENCE.md  Component Patterns (tool call row, tool body per family, occurrence header)
+ *                  State Patterns (collapsed / expanded / failed / running / skipped)
+ *                  Accessibility Floor (status glyph carries state; colour reinforces)
+ * Tokens mirror packages/web/src/index.css. Every colour below is a named product token.
+ * No JS: expand/collapse is native <details>, which is what the product uses today.
+ */
+:root {
+  --background: oklch(0.14 0.005 260); --surface: oklch(0.18 0.008 260);
+  --surface-elevated: oklch(0.22 0.01 260); --surface-inset: oklch(0.12 0.005 260);
+  --surface-hover: oklch(0.24 0.01 260); --border: oklch(0.28 0.01 260); --border-bright: oklch(0.35 0.015 260);
+  --text-primary: oklch(0.93 0.005 260); --text-secondary: oklch(0.65 0.01 260); --text-tertiary: oklch(0.45 0.01 260);
+  --accent-bright: oklch(0.72 0.18 250); --success: oklch(0.65 0.17 155); --warning: oklch(0.75 0.15 75); --error: oklch(0.6 0.2 25);
+  --node-command: oklch(0.62 0.18 250); --node-prompt: oklch(0.58 0.19 290); --node-bash: oklch(0.75 0.15 75);
+  --node-loop: oklch(0.62 0.18 170); --node-approval: oklch(0.72 0.17 40);
+  --radius: 0.625rem;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--background); color: var(--text-primary); font-family: var(--font-sans); font-size: 13px; padding: 28px 32px 80px; }
+h1 { font-size: 18px; margin: 0 0 4px; } h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-tertiary); margin: 34px 0 10px; }
+.sub { color: var(--text-secondary); font-size: 12.5px; margin: 0 0 6px; max-width: 78ch; }
+.note { color: var(--text-tertiary); font-size: 11.5px; font-style: italic; margin: 4px 0 0 29px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; max-width: 760px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 1180px; }
+.grid2 .panel { max-width: none; }
+.cap { font-size: 11px; color: var(--text-tertiary); margin: 0 0 6px; }
+
+/* ---------- tool call row ---------- */
+.tx { font-family: var(--font-mono); font-size: 12px; }
+.tcall > summary { list-style: none; display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.tcall > summary::-webkit-details-marker { display: none; }
+.tcall > summary:hover { background: var(--surface-hover); }
+.tcall > summary:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -2px; }
+.chev { color: var(--text-tertiary); flex: 0 0 9px; font-size: 10px; display: inline-block; transition: transform .12s; }
+.tcall[open] > summary .chev { transform: rotate(90deg); }
+.gl { flex: 0 0 12px; text-align: center; font-weight: 700; }
+.gl-ok { color: var(--success); } .gl-err { color: var(--error); } .gl-run { color: var(--accent-bright); } .gl-na { color: var(--text-secondary); } .gl-warn { color: var(--warning); }
+.fam { flex: 0 0 auto; font-size: 11px; padding: 1px 7px; border-radius: 4px; background: var(--surface-elevated); border: 1px solid var(--border); max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.fam-shell  { color: var(--node-bash);     border-color: color-mix(in oklch, var(--node-bash) 40%, transparent); }
+.fam-file   { color: var(--node-command);  border-color: color-mix(in oklch, var(--node-command) 40%, transparent); }
+.fam-search { color: var(--node-prompt);   border-color: color-mix(in oklch, var(--node-prompt) 45%, transparent); }
+.fam-code { color: var(--node-bash); border-color: color-mix(in oklch, var(--node-bash) 40%, transparent); }
+.fam-plan   { color: var(--node-approval); border-color: color-mix(in oklch, var(--node-approval) 40%, transparent); }
+.fam-gen    { color: var(--text-secondary); }
+.hl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.hl-path { display: flex; min-width: 0; }
+.hl-path .h { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.hl-path .t { flex: 0 0 auto; color: var(--text-primary); }
+.bd { flex: 0 0 auto; font-size: 11px; color: var(--text-secondary); white-space: nowrap; }
+.bd .err { color: var(--error); } .bd .add { color: var(--success); } .bd .del { color: var(--error); } .bd .run { color: var(--accent-bright); }
+
+/* ---------- expanded body ---------- */
+.tbody { margin: 2px 0 8px 29px; border-left: 2px solid var(--border); padding-left: 10px; }
+.tbar { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--text-secondary); margin-bottom: 6px; }
+.raw { margin-left: auto; min-height: 24px; display: inline-flex; align-items: center; background: transparent; border: 1px solid var(--border); color: var(--text-secondary); border-radius: 4px; padding: 1px 7px; font: inherit; font-size: 10.5px; cursor: pointer; }
+.raw:hover { color: var(--text-primary); border-color: var(--border-bright); }
+.box { background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; font-size: 11.5px; line-height: 1.5; }
+.box .cmd { color: var(--node-bash); } .box .fail { color: var(--error); font-weight: 700; } .box .pass { color: var(--success); font-weight: 700; }
+.box .d { color: var(--error); } .box .a { color: var(--success); } .box .ln { color: var(--text-secondary); display: inline-block; width: 3ch; text-align: right; margin-right: 8px; }
+.box .pl { color: var(--node-command); } .box .pl + .ln { display: inline; width: auto; margin: 0 6px 0 0; } .box .kw { color: var(--node-prompt); } .box .str { color: var(--success); } .box .cm { color: var(--text-secondary); }
+.chk { line-height: 1.85; color: var(--text-secondary); font-size: 11.5px; }
+.chk .ph { font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-secondary); margin-top: 4px; }
+.chk .done { color: var(--success); } .chk .cur { color: var(--accent-bright); } .chk .blk { color: var(--warning); } .chk .drop { color: var(--text-secondary); text-decoration: line-through; } .chk .td { color: var(--text-secondary); }
+.sub-card { background: var(--surface-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; margin-top: 5px; font-size: 11.5px; }
+.sub-card .ag { color: var(--node-approval); font-weight: 600; }
+.ctx { font-size: 11.5px; color: var(--text-secondary); margin-bottom: 2px; }
+.kv div { display: flex; gap: 10px; font-size: 11.5px; line-height: 1.7; } .kv .k { color: var(--text-secondary); flex: 0 0 11ch; } .kv .v { color: var(--text-primary); }
+.occ { display: flex; align-items: center; gap: 8px; margin: 12px 0 5px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-secondary); font-family: var(--font-mono); }
+.occ::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.asst { font-family: var(--font-sans); font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); margin: 8px 2px 10px; }
+.legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 22px; max-width: 760px; font-family: var(--font-mono); font-size: 12px; }
+.legend div { display: flex; align-items: center; gap: 10px; }
+.legend .tok { color: var(--text-tertiary); font-size: 10.5px; }
+.glyphs { display: flex; gap: 28px; font-family: var(--font-mono); font-size: 12px; }
+.glyphs span b { font-size: 15px; margin-right: 8px; }
+</style>
+</head>
+<body>
+
+<h1>Agent transcript — states sheet</h1>
+<p class="sub">Surface-independent. Everything a renderer on either node room must be able to show. Content is real: tool names and input keys are the ones observed in the deployment corpus (22,867 rows), paths are from <code>x10.gigo.harness-service</code>.</p>
+
+<h2>A · Chip colour by family — five treatments, every hue an existing <code>--node-*</code> token</h2>
+<div class="legend">
+  <div><span class="fam fam-shell">shell · code</span><span class="tok">--node-bash</span></div>
+  <div><span class="fam fam-file">file · web</span><span class="tok">--node-command</span></div>
+  <div><span class="fam fam-search">search · glob</span><span class="tok">--node-prompt</span></div>
+  <div><span class="fam fam-plan">todo · task</span><span class="tok">--node-approval</span></div>
+  <div><span class="fam fam-gen">generic</span><span class="tok">--text-secondary</span></div>
+</div>
+<p class="note" style="margin-left:0">Siblings share a hue so the family palette stays quieter than the status colours. Nine distinct hues on a dark surface would compete with ✓ ✕ ◐ for attention.</p>
+
+<h2>B · Status glyph — the character carries state, colour only reinforces</h2>
+<div class="glyphs">
+  <span><b class="gl-ok">✓</b>succeeded</span>
+  <span><b class="gl-err">✕</b>failed</span>
+  <span><b class="gl-run">◐</b>running</span>
+  <span><b class="gl-warn">⚠</b>interrupted</span>
+  <span><b class="gl-na">–</b>unknown / output missing</span>
+</div>
+<p class="note" style="margin-left:0">Five different shapes. A colour-blind reader loses nothing. <b>⚠</b> is a fifth character, not a recoloured ✕, because an interrupted tool was <i>stopped</i>, not failed — Claude writes it from the PostToolUseFailure hook when is_interrupt is true, and Codex cannot produce it at all. <code>--warning</code> is declared on both surfaces, so the glyph adds no token.</p>
+
+<h2>C · Collapsed rows — one per family, then the four hard cases</h2>
+<div class="panel tx">
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-shell">run_terminal_command</span><span class="hl">cargo test -p gigo-harness-worker --test auto_retry -- --test-threads=1</span><span class="bd">exit 0 · 38.9s</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="file · read_file" aria-label="file · read_file">read_file</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/src/</span><span class="t">auto_retry.rs</span></span><span class="bd">418 lines · 41ms</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="file · Edit" aria-label="file · Edit">Edit</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/src/</span><span class="t">auto_retry.rs</span></span><span class="bd"><span class="add">+2</span> <span class="del">−2</span></span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-search" title="search · Grep" aria-label="search · Grep">Grep</span><span class="hl">"fn retry_backoff" in crates/</span><span class="bd">3 files</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-search" title="glob" aria-label="glob">glob</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/tests/</span><span class="t">**/*.rs</span></span><span class="bd">11 files</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-code" title="code · eval" aria-label="code · eval">eval</span><span class="hl">assert!(backoff(5) &lt;= Duration::from_secs(30))</span><span class="bd">rust · 12ms</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan">todo_write</span><span class="hl">Tasks</span><span class="bd">2/5 done</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="task · Agent" aria-label="task · Agent">Agent</span><span class="hl">Scout retry-backoff call sites</span><span class="bd">1 subagent · 2m 04s</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file">WebFetch</span><span class="hl">docs.rs/tokio-retry/latest/tokio_retry/strategy</span><span class="bd">14 KB</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-gen">lsp</span><span class="hl">op: hover · path: auto_retry.rs · line: 212</span><span class="bd">—</span></summary></details>
+</div>
+<p class="note">Chip text is the tool name as the provider sent it — <code>read_file</code>, <code>Edit</code>, <code>Grep</code>, <code>eval</code> — because that is what the reader recognises. Only the colour says which family it resolved to.</p>
+
+<p class="cap" style="margin-top:18px">Hard case 1 · a long path elides in the <b>middle</b> — the filename always survives</p>
+<div class="panel tx" style="max-width:520px">
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file">Read</span><span class="hl hl-path"><span class="h">packages/web/src/experiments/console/components/inspect/</span><span class="t">ConsoleAgentHistoryList.tsx</span></span><span class="bd">296 lines</span></summary></details>
+</div>
+<p class="note">Panel is narrow on purpose. A tail cut would have shown <code>packages/web/src/experiments/console/com…</code> — useless.</p>
+
+<p class="cap" style="margin-top:18px">Hard case 2 · Codex — the tool <b>name is the whole script</b>, multi-line, no input at all</p>
+<div class="panel tx">
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-shell" title="shell" aria-label="shell">shell</span><span class="hl">for iteration in {1..11}; do …</span><span class="bd">exit 0 · 55s</span></summary>
+    <div class="tbody"><div class="tbar">shell · tool name · 7 lines<button class="raw" type="button">Raw</button></div>
+<div class="box"><span class="cmd">$</span> for iteration in {1..11}; do
+    if ! kill -0 62222 2&gt;/dev/null; then
+      exit 0
+    fi
+    sleep 5
+  done
+  exit 1</div></div>
+  </details>
+</div>
+<p class="note">Chip falls back to the family name <code>shell</code> because the raw name is 7 lines. Headline is the first line plus <code>…</code>. The <code>/bin/zsh -lc '…'</code> wrapper every Codex row carries is unwrapped — 4,911 rows would otherwise share the same prefix.</p>
+
+<p class="cap" style="margin-top:18px">Hard case 3 · MCP tool — <code>server · tool</code>, generic body</p>
+<div class="panel tx">
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-gen">gitnexus · query</span><span class="hl">"retry backoff cap"</span><span class="bd">5 processes</span></summary></details>
+</div>
+
+<p class="cap" style="margin-top:18px">Hard case 4 · unknown tool — up to three scalar <code>key: value</code>, never JSON</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-gen" title="generic" aria-label="generic">generic</span><span class="hl">command_id: cmd_7f3a · tail: 120</span><span class="bd">—</span></summary>
+    <div class="tbody"><div class="tbar">generic<button class="raw" type="button">Raw</button></div>
+      <div class="kv"><div><span class="k">command_id</span><span class="v">cmd_7f3a</span></div><div><span class="k">tail</span><span class="v">120</span></div><div><span class="k">filters</span><span class="v">{…}</span></div></div>
+    </div>
+  </details>
+</div>
+<p class="note">Objects collapse to <code>{…}</code>, arrays to <code>[n]</code>. The tool name <code>get_command_or_subagent_output</code> is 30 characters, so the chip falls back to the family name <code>generic</code> — the contract's rule, not a CSS truncation. The full name stays in the body, where it is readable and selectable.</p>
+
+<h2>D · Expanded bodies — one per family</h2>
+<div class="grid2">
+<div>
+<p class="cap">shell — terminal block, failed, auto-expanded</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-err">✕</span><span class="fam fam-shell" title="shell · run_terminal_command" aria-label="shell · run_terminal_command">run_terminal_command</span><span class="hl">cargo test -p gigo-harness-worker --test auto_retry rm02_4_2_tdd_us1_001 -- --exact</span><span class="bd"><span class="err">exit 101</span> · 41.2s</span></summary>
+    <div class="tbody"><div class="tbar">shell · exit 101 · 41.2s · cwd crates/gigo-harness-worker<button class="raw" type="button">Raw</button></div>
+<div class="box"><span class="cmd">$</span> cargo test -p gigo-harness-worker --test auto_retry rm02_4_2_tdd_us1_001 -- --exact --test-threads=1
+running 1 test
+test rm02_4_2_tdd_us1_001 ... <span class="fail">FAILED</span>
+
+failures:
+---- rm02_4_2_tdd_us1_001 stdout ----
+thread 'rm02_4_2_tdd_us1_001' panicked at tests/auto_retry.rs:88:5:
+assertion `left == right` failed
+  left: 31
+ right: 30</div></div>
+  </details>
+</div>
+</div>
+<div>
+<p class="cap">file — inline diff from old_string / new_string</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="file · Edit" aria-label="file · Edit">Edit</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/src/</span><span class="t">auto_retry.rs</span></span><span class="bd"><span class="add">+2</span> <span class="del">−2</span></span></summary>
+    <div class="tbody"><div class="tbar">file · 1 hunk · replace_all: false<button class="raw" type="button">Raw</button></div>
+<div class="box"><span class="ln">211</span>  pub fn backoff(attempt: u32) -&gt; Duration {
+<span class="ln">212</span><span class="d">-     let secs = 2u64.pow(attempt).min(31);</span>
+<span class="ln">212</span><span class="a">+     let secs = 2u64.pow(attempt).min(30);</span>
+<span class="ln">213</span><span class="d">-     Duration::from_secs(secs + 1)</span>
+<span class="ln">213</span><span class="a">+     Duration::from_secs(secs)</span>
+<span class="ln">214</span>  }</div></div>
+  </details>
+</div>
+</div>
+<div>
+<p class="cap">search — <code>output_mode: content</code> → matches, <code>path:line</code></p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-search" title="search · Grep" aria-label="search · Grep">Grep</span><span class="hl">"fn retry_backoff" in crates/</span><span class="bd">4 matches</span></summary>
+    <div class="tbody"><div class="tbar">search · pattern <code>fn retry_backoff</code> · scope crates/ · content<button class="raw" type="button">Raw</button></div>
+<div class="box"><span class="pl">gigo-harness-worker/src/auto_retry.rs</span><span class="ln">:204</span>  pub fn retry_backoff(attempt: u32) -&gt; Duration {
+<span class="pl">gigo-harness-worker/src/auto_retry.rs</span><span class="ln">:311</span>      let wait = retry_backoff(n);
+<span class="pl">gigo-harness-worker/tests/auto_retry.rs</span><span class="ln">:41</span>  use gigo_harness_worker::auto_retry::retry_backoff;
+<span class="pl">gigo-harness-worker/tests/auto_retry.rs</span><span class="ln">:88</span>      assert_eq!(retry_backoff(5).as_secs(), 30);</div></div>
+  </details>
+</div>
+</div>
+<div>
+<p class="cap">glob — a flat list of paths, no line numbers to parse</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-search" title="glob" aria-label="glob">glob</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/tests/</span><span class="t">**/*.rs</span></span><span class="bd">5 files</span></summary>
+    <div class="tbody"><div class="tbar">glob · 5 files<button class="raw" type="button">Raw</button></div>
+<div class="box"><span class="pl">tests/auto_retry.rs</span>
+<span class="pl">tests/auto_retry_bdd.rs</span>
+<span class="pl">tests/auto_retry_atdd.rs</span>
+<span class="pl">tests/common/mod.rs</span>
+<span class="pl">tests/fixtures/mod.rs</span></div></div>
+  </details>
+</div>
+</div>
+<div>
+<p class="cap">code — highlighted source, language as badge</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-code" title="code · eval" aria-label="code · eval">eval</span><span class="hl">use std::time::Duration; …</span><span class="bd">rust · 12ms</span></summary>
+    <div class="tbody"><div class="tbar">code · rust<button class="raw" type="button">Raw</button></div>
+<div class="box"><span class="kw">use</span> std::time::Duration;
+<span class="kw">use</span> gigo_harness_worker::auto_retry::backoff;
+<span class="cm">// cap must hold at the top of the range</span>
+<span class="kw">for</span> n <span class="kw">in</span> 0..=8 { assert!(backoff(n) &lt;= Duration::from_secs(<span class="str">30</span>)); }
+println!(<span class="str">"ok"</span>);</div>
+      <div class="box" style="margin-top:6px"><span class="pass">ok</span></div></div>
+  </details>
+</div>
+</div>
+<div>
+<p class="cap">todo — folded state, OMP nine ops · anchored at the last todo call</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="todo" aria-label="todo">todo</span><span class="hl">Research · Implement</span><span class="bd">3/6 done · 1 blocked</span></summary>
+    <div class="tbody"><div class="tbar">todo · folded from 5 todo calls<button class="raw" type="button">Raw</button></div>
+      <div class="chk">
+        <div class="ph">Research</div>
+        <div><span class="done">☑</span> Read story 5.5 spec and brainstorm</div>
+        <div><span class="done">☑</span> Scout Command Center and run-view code</div>
+        <div><span class="drop">☐ Map files, tests, and acceptance criteria</span> <span class="td">· dropped</span></div>
+        <div class="ph">Implement</div>
+        <div><span class="done">☑</span> Fix backoff cap off-by-one</div>
+        <div><span class="cur">◐</span> Re-run the failing tdd case</div>
+        <div><span class="blk">⊘</span> Run full auto_retry suite <span class="td">· blocked: CARGO_BUILD_JOBS=1 on CI</span></div>
+      </div></div>
+  </details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="todo" aria-label="todo">todo</span><span class="hl" style="color:var(--text-secondary)">todo updated</span><span class="bd">op: done</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="todo" aria-label="todo">todo</span><span class="hl" style="color:var(--text-secondary)">todo updated</span><span class="bd">op: block</span></summary></details>
+</div>
+<p class="note">Earlier todo calls collapse to a one-line <code>todo updated</code> row so the same checklist is not repeated down the transcript.</p>
+</div>
+<div>
+<p class="cap">todo — Claude <code>TodoWrite</code>, whole-list replacement, one phase</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="todo · TodoWrite" aria-label="todo · TodoWrite">TodoWrite</span><span class="hl">Tasks</span><span class="bd">2/5 done</span></summary>
+    <div class="tbody"><div class="tbar">todo · last call wins<button class="raw" type="button">Raw</button></div>
+      <div class="chk">
+        <div class="ph">Tasks</div>
+        <div><span class="done">☑</span> Read auto_retry.rs and the failing test</div>
+        <div><span class="done">☑</span> Locate the backoff cap</div>
+        <div><span class="cur">◐</span> Fix off-by-one in backoff()</div>
+        <div><span class="td">☐</span> Re-run rm02_4_2_tdd_us1_001</div>
+        <div><span class="td">☐</span> Run auto-commit hook</div>
+      </div></div>
+  </details>
+</div>
+<p class="note">Same renderer, same checklist. Claude never produces <code>blocked</code> or <code>abandoned</code>; the fold just never emits them.</p>
+</div>
+<div>
+<p class="cap">task — OMP batch: context, then one card per subtask</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="task" aria-label="task">task</span><span class="hl">Scout retry call sites and CI config</span><span class="bd">2 subagents</span></summary>
+    <div class="tbody"><div class="tbar">task · batch · 2 subtasks<button class="raw" type="button">Raw</button></div>
+      <div class="ctx">Read-only. Do not edit. Skip formatters, linters, tests. Report file:line.</div>
+      <div class="sub-card"><span class="ag">scout</span> · <b>ScoutBackoff</b> <span style="color:var(--text-secondary)">— every call site of retry_backoff and backoff, with the argument range</span></div>
+      <div class="sub-card"><span class="ag">scout</span> · <b>ScoutCI</b> <span style="color:var(--text-secondary)">— where CARGO_BUILD_JOBS is pinned in .github/workflows</span></div>
+    </div>
+  </details>
+</div>
+</div>
+<div>
+<p class="cap">task — Claude single <code>Agent</code> dispatch: no batch context, exactly one card</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="task · Agent" aria-label="task · Agent">Agent</span><span class="hl">Scout retry-backoff call sites</span><span class="bd">1 subagent · 2m 04s</span></summary>
+    <div class="tbody"><div class="tbar">task · single dispatch<button class="raw" type="button">Raw</button></div>
+      <div class="sub-card"><span class="ag">Explore</span> · <b>Scout retry-backoff call sites</b> <span style="color:var(--text-secondary)">— Find every caller of retry_backoff() and backoff() in crates/, report file:line and the attempt argument…</span></div>
+    </div>
+  </details>
+</div>
+</div>
+</div>
+
+<h2>E · Occurrence header — three wordings, pick one at review</h2>
+<p class="sub">Grouping keys on <code>occurrence_id</code>. The word <em>Attempt</em> is forbidden: <code>attempt_id</code> is a finer thing than an occurrence, and the label would lie.</p>
+<div class="grid2" style="grid-template-columns:1fr 1fr 1fr">
+  <div class="panel tx"><p class="cap">1 · Run N</p><div class="occ">Run 1</div><div class="occ">Run 2 · retry</div><div class="occ">Run 3 · iteration 2</div></div>
+  <div class="panel tx"><p class="cap">2 · Pass N</p><div class="occ">Pass 1</div><div class="occ">Pass 2 · after retry</div><div class="occ">Pass 3 · loop 2</div></div>
+  <div class="panel tx"><p class="cap">3 · reason only</p><div class="occ">first run</div><div class="occ">retry 1</div><div class="occ">iteration 2</div></div>
+</div>
+<p class="note" style="margin-left:0">Rendered only when a node spans more than one occurrence. A single-occurrence node shows no header at all.</p>
+
+<h2>F · Raw toggle — open</h2>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="file · read_file" aria-label="file · read_file">read_file</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/src/</span><span class="t">auto_retry.rs</span></span><span class="bd">418 lines · 41ms</span></summary>
+    <div class="tbody"><div class="tbar">file · 418 lines<button class="raw" type="button" style="color:var(--text-primary);border-color:var(--border-bright)">Raw ▾</button></div>
+<div class="box" style="color:var(--text-tertiary)">{
+  "name": "read_file",
+  "input": { "target_file": "crates/gigo-harness-worker/src/auto_retry.rs", "offset": 1, "limit": 500 },
+  "output": { "content": "//! Retry policy for the worker…", "truncated": true, "lines": 418 }
+}</div></div>
+  </details>
+</div>
+<p class="note">Same JSON the product shows today, one click away and closed by default. Debugging a provider loses nothing.</p>
+
+</body>
+</html>

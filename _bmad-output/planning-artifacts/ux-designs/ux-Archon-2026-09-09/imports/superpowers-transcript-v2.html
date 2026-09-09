@@ -1,0 +1,165 @@
+<h2>v2 — phương án B, áp cho toàn bộ transcript</h2>
+<p class="subtitle">
+  Tên tool là chip. Đường dẫn dài cắt ở <strong>giữa</strong> để tên file luôn đọc được —
+  lấy được cái lợi chính của C mà không tốn gấp đôi chiều cao.
+  Phần dưới là 4 ca khó, xem B có chịu được không.
+</p>
+
+<style>
+  .tx { background:#0f1115; border:1px solid #232833; border-radius:10px; padding:10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; color:#c9d1d9; }
+  .tx .row { display:flex; align-items:baseline; gap:8px; padding:5px 7px; border-radius:6px; }
+  .tx .row:hover { background:#161b22; }
+  .chev { color:#4d5566; flex:0 0 9px; }
+  .ic { flex:0 0 12px; text-align:center; }
+  .ok { color:#3fb950; } .bad { color:#f85149; } .run { color:#58a6ff; } .mut { color:#6e7681; }
+  .chip { background:#21262d; color:#d2a8ff; padding:1px 6px; border-radius:4px;
+          flex:0 0 auto; font-size:11px; }
+  .chip.sh { color:#7ee787; } .chip.mcp { color:#79c0ff; } .chip.gen { color:#8b949e; }
+  .hl { color:#c9d1d9; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bd { color:#6e7681; flex:0 0 auto; font-size:11px; }
+  .body { margin:2px 0 8px 33px; border-left:2px solid #232833; padding-left:10px; }
+  .term { background:#010409; border:1px solid #232833; border-radius:6px; padding:8px 10px; color:#8b949e; }
+  .term .cmd { color:#58a6ff; }
+  .att { display:flex; align-items:center; gap:8px; margin:14px 0 6px; color:#6e7681; font-size:10.5px;
+         text-transform:uppercase; letter-spacing:.08em; }
+  .att::after { content:""; flex:1; height:1px; background:#232833; }
+  .chk { color:#8b949e; line-height:1.85; }
+  .chk .ph { color:#6e7681; text-transform:uppercase; font-size:10px; letter-spacing:.07em; }
+  .sub { background:#161b22; border:1px solid #232833; border-radius:6px; padding:6px 9px; margin-top:5px; }
+  .agent { color:#f0883e; }
+  .add { color:#3fb950; } .del { color:#f85149; }
+  .asst { color:#adbac7; font-family:-apple-system,system-ui,sans-serif; font-size:12.5px;
+          line-height:1.6; margin:8px 0 10px 2px; }
+  .note { color:#6e7681; font-size:11px; margin:4px 0 0 33px; font-style:italic; }
+  .cap { color:#8b949e; font-size:11.5px; margin:16px 0 6px; }
+  .cap b { color:#c9d1d9; }
+</style>
+
+<div class="tx">
+  <div class="att">Attempt 1</div>
+
+  <div class="asst">Tôi sẽ scout surface run-detail của Console trước, rồi lập kế hoạch.</div>
+
+  <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+    ><span class="chip">read</span><span class="hl">console/primitives/event.ts</span><span class="bd">237 dòng · 120ms</span></div>
+
+  <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+    ><span class="chip">glob</span><span class="hl">packages/web/src</span><span class="bd">31 files</span></div>
+
+  <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+    ><span class="chip">grep</span><span class="hl">"foldNodeRuns" in packages/web/src</span><span class="bd">14 matches</span></div>
+
+  <div class="row"><span class="chev">▾</span><span class="ic ok">✓</span
+    ><span class="chip">todo</span><span class="hl">Research · Plan</span><span class="bd">1/6 xong</span></div>
+  <div class="body chk">
+    <div class="ph">Research</div>
+    <div><span class="ok">☑</span> Read story 5.5 spec and brainstorm</div>
+    <div><span class="mut">☐</span> Scout Command Center and run-view code</div>
+    <div><span class="mut">☐</span> Map files, tests, and acceptance criteria</div>
+    <div class="ph" style="margin-top:5px">Plan</div>
+    <div><span class="mut">☐</span> Write complete implementation plan</div>
+    <div><span class="mut">☐</span> Self-review coverage and placeholders</div>
+    <div><span class="mut">☐</span> Save plan and return JSON</div>
+  </div>
+
+  <div class="row"><span class="chev">▾</span><span class="ic ok">✓</span
+    ><span class="chip">task</span><span class="hl">Scout Command Center run-detail</span><span class="bd">1 subagent</span></div>
+  <div class="body">
+    <div class="mut" style="font-size:11px">Read-only. Do not edit. Skip formatters, linters, tests.</div>
+    <div class="sub"><span class="agent">scout</span> · <strong>ScoutConsole</strong>
+      <span class="mut">— foldNodeRuns, NodeDivider, RunStream…</span></div>
+  </div>
+
+  <div class="row"><span class="chev">▾</span><span class="ic bad">✕</span
+    ><span class="chip sh">bash</span><span class="hl">bun test node-room</span><span class="bd bad">exit 1 · 2.4s</span></div>
+  <div class="body">
+    <div class="term"><span class="cmd">$ bun test node-room</span><br>
+      <span class="bad">FAIL</span> NodeRoom.test.tsx<br>
+      &nbsp;&nbsp;● collapses a successful tool call<br>
+      &nbsp;&nbsp;&nbsp;&nbsp;expected 0 open, received 4
+    </div>
+  </div>
+
+  <div class="row"><span class="chev">▾</span><span class="ic ok">✓</span
+    ><span class="chip">edit</span><span class="hl">lib/agent-history.ts</span
+    ><span class="bd"><span class="add">+12</span> <span class="del">−3</span></span></div>
+  <div class="body">
+    <div style="background:#010409;border:1px solid #232833;border-radius:6px;padding:7px 9px">
+      <div class="del">50 −  const TOOL_CONTEXT_KEYS = ['cmd', 'path',</div>
+      <div class="add">50 +  presentation: toolPresentation(card),</div>
+      <div class="add">51 +  exitCode: resultFields.exitCode,</div>
+    </div>
+  </div>
+
+  <div class="att">Attempt 2 · sau retry</div>
+  <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+    ><span class="chip sh">bash</span><span class="hl">bun test node-room</span><span class="bd">exit 0 · 2.1s</span></div>
+</div>
+
+<p class="cap"><b>4 ca khó</b> — đây mới là chỗ thiết kế dễ vỡ, không phải ca đẹp ở trên.</p>
+
+<div class="tx">
+  <div class="mut" style="font-size:10.5px;margin:0 0 5px 2px">1 · Đường dẫn rất dài — cắt GIỮA, tên file luôn còn</div>
+  <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+    ><span class="chip">read</span><span class="hl">packages/web/src/…/inspect/ConsoleAgentHistoryList.tsx</span><span class="bd">296 dòng</span></div>
+  <div class="note">nếu cắt đuôi như thường lệ sẽ ra “packages/web/src/experiments/console/com…” — vô dụng</div>
+
+  <div class="mut" style="font-size:10.5px;margin:12px 0 5px 2px">2 · Codex — tên tool CHÍNH LÀ dòng lệnh, không có input</div>
+  <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+    ><span class="chip sh">shell</span><span class="hl">npm run build &amp;&amp; bun test --coverage</span><span class="bd">exit 0</span></div>
+  <div class="note">chip là <b>họ</b> tool, không phải cái tên thô — nếu nhét cả dòng lệnh vào chip thì chip vỡ</div>
+
+  <div class="mut" style="font-size:10.5px;margin:12px 0 5px 2px">3 · MCP — tên dài, chip vẫn đứng được</div>
+  <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+    ><span class="chip mcp">gitnexus · query</span><span class="hl">"tool call rendering"</span><span class="bd">5 processes</span></div>
+  <div class="note">tách <code>mcp__gitnexus__query</code> thành server · tool, theo đúng lệ có sẵn ở <code>tool-formatter.ts:70</code></div>
+
+  <div class="mut" style="font-size:10.5px;margin:12px 0 5px 2px">4 · Tool lạ hoàn toàn — fallback, vẫn KHÔNG có JSON</div>
+  <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+    ><span class="chip gen">notebook_edit</span><span class="hl">cell: 12 · mode: replace</span><span class="bd">—</span></div>
+  <div class="note">lấy tối đa 3 key vô hướng đầu; object/array thu thành <code>{…}</code> / <code>[n]</code></div>
+</div>
+
+<div class="section" style="margin-top:24px">
+  <h3>Còn đúng một điểm cần bạn chốt</h3>
+  <p class="subtitle">Dòng <code>▸ ✓ read</code> — cụm trạng thái nên là gì? Bấm chọn.</p>
+  <div class="options">
+    <div class="option" data-choice="glyph" onclick="toggleSelect(this)">
+      <div class="letter">1</div>
+      <div class="content">
+        <h3>Ký tự — ✓ ✕ ◐</h3>
+        <div class="tx" style="margin:7px 0">
+          <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span><span class="chip">read</span><span class="hl">event.ts</span></div>
+          <div class="row"><span class="chev">▸</span><span class="ic bad">✕</span><span class="chip sh">bash</span><span class="hl">bun test</span></div>
+          <div class="row"><span class="chev">▸</span><span class="ic run">◐</span><span class="chip">task</span><span class="hl">Review auth</span></div>
+        </div>
+        <p>Nhẹ, hợp chữ mono, không phụ thuộc bộ icon. Người mù màu vẫn phân biệt được vì hình khác nhau.</p>
+      </div>
+    </div>
+    <div class="option" data-choice="dot" onclick="toggleSelect(this)">
+      <div class="letter">2</div>
+      <div class="content">
+        <h3>Chấm tròn màu</h3>
+        <div class="tx" style="margin:7px 0">
+          <div class="row"><span class="chev">▸</span><span class="ic ok">●</span><span class="chip">read</span><span class="hl">event.ts</span></div>
+          <div class="row"><span class="chev">▸</span><span class="ic bad">●</span><span class="chip sh">bash</span><span class="hl">bun test</span></div>
+          <div class="row"><span class="chev">▸</span><span class="ic run">●</span><span class="chip">task</span><span class="hl">Review auth</span></div>
+        </div>
+        <p>Yên tĩnh nhất, giống AionUi. Đổi lại <b>chỉ còn màu để phân biệt</b> — mù màu là mất thông tin.</p>
+      </div>
+    </div>
+    <div class="option" data-choice="bar" onclick="toggleSelect(this)">
+      <div class="letter">3</div>
+      <div class="content">
+        <h3>Vạch trái, chỉ tô khi bất thường</h3>
+        <div class="tx" style="margin:7px 0">
+          <div class="row" style="border-left:2px solid transparent"><span class="chev">▸</span><span class="chip">read</span><span class="hl">event.ts</span></div>
+          <div class="row" style="border-left:2px solid #f85149"><span class="chev">▸</span><span class="chip sh">bash</span><span class="hl">bun test</span></div>
+          <div class="row" style="border-left:2px solid #58a6ff"><span class="chev">▸</span><span class="chip">task</span><span class="hl">Review auth</span></div>
+        </div>
+        <p>Thành công thì im lặng hoàn toàn, chỉ lỗi và đang chạy mới nổi lên. Ít nhiễu nhất khi run toàn màu xanh.</p>
+      </div>
+    </div>
+  </div>
+</div>
