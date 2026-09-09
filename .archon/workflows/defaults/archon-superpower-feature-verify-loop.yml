@@ -61,29 +61,9 @@ nodes:
     depends_on:
       - setup
     prompt: |
-      User input:
-      $ARGUMENTS
-
-      Use the Superpowers writing-plans method.
-      Read the repository instructions before you plan.
-      If the user input names a file or directory, read it before you plan.
-
-      Write one complete implementation plan.
-      Save it as docs/superpowers/plans/YYYY-MM-DD-<feature>.md.
-      Use the current local date for YYYY-MM-DD.
-      Use a short slug for <feature>.
-
-      The plan must be executable by another agent.
-      Include exact files to change, interfaces to add or change, tests to write, and commands to run.
-      Include TDD red, green, and refactor steps for code changes.
-      Include all known requirements from the approved brainstorm.
-      Include acceptance criteria and validation commands.
-      Include which verify-archon feature-map ids (under `.cursor/skills/verify-archon/features/`)
-      a later node should prove after implementation.
-      Do not leave placeholders.
-      If a product decision is missing, add an Open Questions section and choose a safe provisional default.
-      Keep each full Markdown sentence on its own physical line.
-
+      Follow writing-plans.
+      User input: $ARGUMENTS
+      Write docs/superpowers/plans/YYYY-MM-DD-<feature>.md.
       Return only JSON.
     output_format:
       type: object
@@ -114,26 +94,10 @@ nodes:
     depends_on:
       - write-plan
     prompt: |
-      Review and repair the Superpowers implementation plan directly.
-      Do not implement code in this step.
-
-      Plan path:
-      $write-plan.output.plan_path
-
-      Original user input:
-      $ARGUMENTS
-
-      Read the plan, repository instructions, and the source files that the plan mentions.
-      Check the plan against the approved brainstorm input, repository facts, Superpowers writing-plans rules, and TDD.
-      Fix every concrete issue in the plan file itself.
-      Make the plan complete enough for Grok to implement without more questions.
-      Add missing exact file paths, tests, commands, acceptance criteria, and implementation order.
-      Keep or add a short list of verify-archon feature-map ids the later prove step should run.
-      Allowed ids: discover-workflows, web-console, diagnose-install, run-deterministic-workflow, inspect-run.
-      Remove vague work, placeholders, and tasks that do not match the request.
-      If a decision cannot be inferred, keep an Open Questions section with a safe provisional default.
-      Keep each full Markdown sentence on its own physical line.
-
+      $writing-plans
+      Repair the plan in place. Do not implement code.
+      Plan: $write-plan.output.plan_path
+      User input: $ARGUMENTS
       Return only JSON.
     output_format:
       type: object
@@ -171,67 +135,11 @@ nodes:
     effort: high
     context: fresh
     prompt: |
-      ## Persona
-
-      You are a SHARP SOLUTION ARCHITECT who lives by KISS and YAGNI. You do not
-      invent work that isn't in the plan, and you do not drop work that is.
-
-      ## Headless mode — NO human is available
-
-      Resolve every decision yourself from the plan plus the actual codebase.
-      Do not stop to ask.
-
-      ## Task
-
-      The Superpowers plan to implement is the file:
-
-        $review-fix-plan.output.plan_path
-
-      Convert that ENTIRE plan into a Ralph PRD so an in-parent project-aware
-      Ralph loop can implement it one story per iteration. Do NOT implement the
-      feature itself — only produce the PRD files.
-
-      1. Read the plan file. Confirm it exists.
-      2. Derive `<name>` as the plan filename without `.md`
-         (e.g. `docs/superpowers/plans/2026-09-02-foo.md` → `2026-09-02-foo`).
-      3. Create the Ralph directory next to the plans folder:
-         `docs/superpowers/ralph/<name>/` via `mkdir -p`. Never `.archon/ralph/`.
-      4. Break the plan into right-sized Ralph user stories — each completable in a
-         single fresh-context iteration. Map the plan's TDD structure into concrete,
-         pass/fail acceptance criteria. Order stories by dependency (lower priority
-         runs first) and set `dependsOn` to only lower-priority story ids. No cycles,
-         no forward refs.
-      5. Write `docs/superpowers/ralph/<name>/prd.md` — a self-contained context
-         document (overview / problem / solution, goals + success metrics, non-goals,
-         technical context with real file:line references drawn from the plan, and a
-         story-overview table).
-      6. Write `docs/superpowers/ralph/<name>/prd.json` using EXACTLY this schema
-         (story-level `passes`, all `false` at start):
-
-         ```json
-         {
-           "feature": "<feature name>",
-           "userStories": [
-             {
-               "id": "US-001",
-               "title": "<short title>",
-               "description": "As a..., I want..., so that...",
-               "acceptanceCriteria": ["<verifiable criterion>", "..."],
-               "technicalNotes": "<real files, patterns, and plan refs to follow>",
-               "dependsOn": [],
-               "priority": 1,
-               "passes": false,
-               "notes": ""
-             }
-           ]
-         }
-         ```
-
-      7. Verify both files exist and prd.json is valid JSON whose `userStories` is a
-         non-empty array with every story `passes: false`.
-      8. Resolve `prd_dir` with `realpath` so it is an absolute path.
-
-      Return only JSON.
+      Convert the Superpowers plan into a Ralph PRD. Do not implement.
+      Plan: $review-fix-plan.output.plan_path
+      Write docs/superpowers/ralph/<plan-filename-without-md>/{prd.md,prd.json}
+      (stories passes:false, same schema as superpower-feature).
+      prd_dir must be an absolute realpath. Return only JSON.
     output_format:
       type: object
       properties:
@@ -312,46 +220,14 @@ nodes:
     model: cursor/gemini-3.8-flash
     effort: high
     context: fresh
+    skills:
+      - select-verify-archon-targets
     prompt: |
-      Choose one or more verify-archon feature-map ids to prove after this Superpowers
-      implementation. Do not implement product code. Do not start Mini, PM2, or Tailscale.
-
-      Plan path:
-      $review-fix-plan.output.plan_path
-
-      Base SHA file:
-      $ARTIFACTS_DIR/superpowers/base-sha.txt
-
-      User input:
-      $ARGUMENTS
-
-      Required reads:
-      - `.cursor/skills/verify-archon/SKILL.md`
-      - `.cursor/skills/verify-archon/features/README.md`
-      - Every file under `.cursor/skills/verify-archon/features/`
-      - The Superpowers plan
-      - `git diff` from the recorded base SHA to HEAD, plus unstaged and staged changes
-
-      Allowed ids (exact, one per line later):
-      - discover-workflows
-      - web-console
-      - diagnose-install
-      - run-deterministic-workflow
-      - inspect-run
-
-      Selection rules:
-      - Pick every id whose mapped user path this change can break.
-      - If anything under `packages/web` changed, include `web-console`.
-      - Always include at least one id.
-      - If nothing else is justified, use `discover-workflows`.
-      - Prefer the smallest set that still covers the changed user paths.
-      - Local bun verify only.
-
-      Write the proposed ids (one id per line, no commentary) to
-      `$ARTIFACTS_DIR/verify/feature-ids.proposed.txt`.
-      A later bash node is the source of truth and may add `web-console` or the
-      `discover-workflows` fallback.
-
+      Follow select-verify-archon-targets.
+      Plan: $review-fix-plan.output.plan_path
+      Base SHA: $ARTIFACTS_DIR/superpowers/base-sha.txt
+      User input: $ARGUMENTS
+      Write proposed ids to $ARTIFACTS_DIR/verify/feature-ids.proposed.txt.
       Return only JSON.
     output_format:
       type: object
@@ -567,52 +443,15 @@ nodes:
     context: fresh
     idle_timeout: 3600000
     when: "$record-verify.output == 'FAIL'"
+    skills:
+      - systematic-debugging
+      - verification-before-completion
     prompt: |
-      verify-archon prove failed. Fix the product so the next prove pass can succeed.
-      Do not create a pull request.
-      Do not start, stop, or talk to Mini / PM2 / Tailscale.
-      Local bun verify only.
-
-      User input:
-      $ARGUMENTS
-
-      Plan path:
-      $review-fix-plan.output.plan_path
-
-      Feature ids file:
-      $ARTIFACTS_DIR/verify/feature-ids.txt
-
-      Result file:
-      $ARTIFACTS_DIR/verify/result.txt
-
-      Exit codes:
-      $ARTIFACTS_DIR/verify/exit-codes.txt
-
-      Last error:
-      $ARTIFACTS_DIR/verify/last-error.txt
-
-      Evidence directory:
-      $ARTIFACTS_DIR/verify/evidence/
-
-      Required reads before editing:
-      - `.cursor/skills/verify-archon/SKILL.md`
-      - `.cursor/skills/verify-archon/features/README.md`
-      - The feature files for every id in `$ARTIFACTS_DIR/verify/feature-ids.txt`
-      - Every `summary.json`, `PROOF.md`, `ui-assertions.json`, and failing transcript
-        under `$ARTIFACTS_DIR/verify/evidence/`
-      - The Superpowers plan and the current git diff
-
-      Rules:
-      - Prefer a product-code fix when observed behavior is wrong.
-      - Edit the verify-archon harness or feature map only when the product is
-        correct and the map/harness drifted.
-      - Do not weaken assertions to get a green proof.
-      - Do not change selected feature ids unless an id is invalid; the bash
-        normalize node already applied the web-console and fallback rules.
-      - After edits, write `$ARTIFACTS_DIR/verify/fix-report.md` describing
-        files changed, why, and which asserts you expect to pass next.
-      - Leave the next `prove` node to re-run `verify-archon prove`.
-
+      Follow systematic-debugging and verification-before-completion.
+      Prove failed. Fix product (harness only if the map drifted). No PR. No Mini.
+      Plan: $review-fix-plan.output.plan_path
+      Ids, result, evidence: $ARTIFACTS_DIR/verify/
+      Write $ARTIFACTS_DIR/verify/fix-report.md.
       Return only JSON.
     output_format:
       type: object
@@ -647,22 +486,9 @@ nodes:
       - verify-gate
     output_type: pull-request
     prompt_suffix: |
-      ## verify-archon proof (required in the PR body)
-
-      This Superpowers run must not look like an unverified feature PR.
-
-      Read and cite:
-      - Feature ids: `$ARTIFACTS_DIR/verify/feature-ids.txt`
-      - Gate: `$ARTIFACTS_DIR/verify/result.txt` (must be PASS)
-      - Exit codes: `$ARTIFACTS_DIR/verify/exit-codes.txt`
-      - Evidence: `$ARTIFACTS_DIR/verify/evidence/<id>/`
-      - Plan: `$review-fix-plan.output.plan_path`
-
-      In the PR body Validation section, list every proved feature-map id and the
-      matching evidence path under `$ARTIFACTS_DIR/verify/evidence/`.
-      State that positive path = prove passed; negative path = fix then re-prove
-      (max 3); this PR exists only because the gate is PASS.
-      Do not claim Mini/PM2/Tailscale was used.
+      Follow archon-create-pr.
+      Gate is PASS. List each id from $ARTIFACTS_DIR/verify/feature-ids.txt
+      and its evidence under $ARTIFACTS_DIR/verify/evidence/.
 
   - id: verify-blocked
     description: Exhausted fix budget — write a blocked report and stop (no green PR).
