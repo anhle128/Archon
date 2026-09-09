@@ -1,0 +1,528 @@
+name: archon-superpower-feature-verify-loop
+description: |
+  Use when: Manual Superpowers brainstorming is complete and the user wants the
+            feature built, then proved with project-local verify-archon before
+            any pull request.
+  Triggers: "superpower feature verify", "superpower verify loop",
+            "archon-superpower-feature-verify-loop".
+  Does: Same early Superpowers pipeline as superpower-feature (plan → Codex plan
+        repair → Ralph PRD → in-parent Ralph implement, no PR). Then selects
+        verify-archon feature-map ids, runs `verify-archon prove <id>` fail-closed
+        on a local bun instance, and on failure runs a max-3 fix → re-prove
+        route_loop. Positive (all ids PASS) creates a PR that names the proved
+        ids and evidence paths. Exhaustion writes a blocked report and stops
+        with a non-zero exit — it does not open a green PR.
+  NOT for: Brainstorming itself, verify-only without implementation, Mini/PM2/
+        Tailscale proofs, or review-only work. Never start or stop Oceanlabs Mini.
+  Input: The approved brainstorm result, product notes, design spec path, or
+         requirements from the manual Superpowers brainstorming step. Run from
+         the anhle128/Archon checkout that contains `.agents/skills/verify-archon/`
+         (Codex discovers `skills: [verify-archon]`).
+provider: omp
+model: "xai-oauth/grok-4.6"
+effort: high
+tags:
+  - Superpowers
+  - Feature
+  - TDD
+  - Verify
+
+nodes:
+  - id: setup
+    description: Prepare Superpowers + verify-archon artifacts and preflight the helper.
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR/superpowers" "$ARTIFACTS_DIR/verify" docs/superpowers/plans
+      git rev-parse HEAD > "$ARTIFACTS_DIR/superpowers/base-sha.txt"
+      {
+        echo "Archon Superpowers feature + verify-archon loop"
+        echo "Base SHA: $(cat "$ARTIFACTS_DIR/superpowers/base-sha.txt")"
+        echo "Brainstorming is manual and must already be complete."
+        echo "Local bun verify only. Never Mini / PM2 / Tailscale."
+      } > "$ARTIFACTS_DIR/superpowers/setup.md"
+
+      VERIFY_BIN=".agents/skills/verify-archon/bin/verify-archon"
+      if [ ! -f "$VERIFY_BIN" ]; then
+        echo "ERROR: $VERIFY_BIN is missing." >&2
+        echo "Run this workflow from anhle128/Archon after verify-archon landed on develop." >&2
+        exit 1
+      fi
+      chmod +x "$VERIFY_BIN" || true
+      printf '%s\n' "$VERIFY_BIN" > "$ARTIFACTS_DIR/verify/helper-path.txt"
+      echo "VERIFY_BIN=$VERIFY_BIN"
+
+  - id: write-plan
+    description: Write the Superpowers implementation plan with Grok 4.6.
+    provider: claude
+    model: "opus"
+    effort: xhigh
+    context: fresh
+    skills:
+      - writing-plans
+    depends_on:
+      - setup
+    prompt: |
+      Follow writing-plans.
+      User input: $ARGUMENTS
+      Write docs/superpowers/plans/YYYY-MM-DD-<feature>.md.
+      Return only JSON.
+    output_format:
+      type: object
+      required:
+        - plan_path
+        - task_count
+        - summary
+        - open_questions_count
+        - validation_commands
+      properties:
+        plan_path:
+          type: string
+        task_count:
+          type: number
+        summary:
+          type: string
+        open_questions_count:
+          type: number
+        validation_commands:
+          type: string
+
+  - id: review-fix-plan
+    description: Review and repair the plan directly with Codex.
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    context: fresh
+    depends_on:
+      - write-plan
+    prompt: |
+      $writing-plans
+      Repair the plan in place. Do not implement code.
+      Plan: $write-plan.output.plan_path
+      User input: $ARGUMENTS
+      Return only JSON.
+    output_format:
+      type: object
+      required:
+        - plan_path
+        - verdict
+        - fixes_count
+        - open_questions_count
+        - review_report
+        - summary
+      properties:
+        plan_path:
+          type: string
+        verdict:
+          type: string
+          enum:
+            - clean
+            - fixed-with-changes
+            - needs-human-decision
+        fixes_count:
+          type: number
+        open_questions_count:
+          type: number
+        review_report:
+          type: string
+        summary:
+          type: string
+
+  - id: build-ralph-prd
+    description: Convert the Superpowers plan into a co-located Ralph PRD.
+    depends_on:
+      - review-fix-plan
+    provider: omp
+    model: cursor/gemini-3.8-flash
+    effort: high
+    context: fresh
+    prompt: |
+      Convert the Superpowers plan into a Ralph PRD. Do not implement.
+      Plan: $review-fix-plan.output.plan_path
+      Write docs/superpowers/ralph/<plan-filename-without-md>/{prd.md,prd.json}
+      (stories passes:false, same schema as superpower-feature).
+      prd_dir must be an absolute realpath. Return only JSON.
+    output_format:
+      type: object
+      properties:
+        prd_dir:
+          type: string
+        slug:
+          type: string
+        feature:
+          type: string
+        story_count:
+          type: number
+      required: [prd_dir, slug, story_count]
+
+  - id: validate-prd
+    description: Record PRD dir and confirm prd.json is ready for Ralph.
+    depends_on:
+      - build-ralph-prd
+    bash: |
+      set -euo pipefail
+      PRD_DIR=$build-ralph-prd.output.prd_dir
+      if [ -z "$PRD_DIR" ] || [ ! -f "$PRD_DIR/prd.json" ]; then
+        echo "ERROR: no prd.json in build-ralph-prd prd_dir ('$PRD_DIR')." >&2
+        exit 1
+      fi
+      if [ ! -f "$PRD_DIR/prd.md" ]; then
+        echo "ERROR: prd.md not found in $PRD_DIR" >&2
+        exit 1
+      fi
+      mkdir -p "$ARTIFACTS_DIR/superpowers"
+      printf '%s\n' "$PRD_DIR" > "$ARTIFACTS_DIR/superpowers/prd-dir.txt"
+      echo "PRD_DIR=$PRD_DIR"
+      echo "BRANCH=$(git branch --show-current)"
+      TOTAL=$(jq '.userStories | length' "$PRD_DIR/prd.json")
+      DONE=$(jq '[.userStories[] | select(.passes == true)] | length' "$PRD_DIR/prd.json")
+      echo "STORIES_TOTAL=$TOTAL"
+      echo "STORIES_DONE=$DONE"
+      echo "STORIES_REMAINING=$((TOTAL - DONE))"
+
+  - id: ralph-loop-run
+    description: In-parent project-aware Ralph loop (no PR until verify-archon passes).
+    depends_on:
+      - validate-prd
+    idle_timeout: 3600000
+    provider: omp
+    effort: high
+    model: cursor/cursor-grok-4.6
+    output_format:
+      type: object
+      properties:
+        done:
+          type: boolean
+          description: true ONLY when every story in prd.json has passes true; false otherwise.
+        mode:
+          type: string
+        story_id:
+          type: string
+        note:
+          type: string
+      required:
+        - done
+    loop:
+      command: archon-ralph-project-aware-iteration
+      fresh_context: true
+      max_iterations: 35
+      until_bash: |
+        set -euo pipefail
+        PRD_FILE="$ARTIFACTS_DIR/superpowers/prd-dir.txt"
+        [ -f "$PRD_FILE" ] || exit 1
+        PRD_DIR=$(cat "$PRD_FILE")
+        [ -n "$PRD_DIR" ] && [ -f "$PRD_DIR/prd.json" ] || exit 1
+        jq -e '.userStories | type == "array" and length > 0 and all(.[]; .passes == true)' "$PRD_DIR/prd.json" >/dev/null
+
+  - id: select-verify-targets
+    description: Choose verify-archon feature-map ids from the plan, diff, and feature map.
+    depends_on:
+      - ralph-loop-run
+    provider: grok
+    model: grok-4.6
+    effort: xhigh
+    context: fresh
+    skills:
+      - select-verify-archon-targets
+    prompt: |
+      Follow select-verify-archon-targets.
+      Plan: $review-fix-plan.output.plan_path
+      Base SHA: $ARTIFACTS_DIR/superpowers/base-sha.txt
+      User input: $ARGUMENTS
+      Write proposed ids to $ARTIFACTS_DIR/verify/feature-ids.proposed.txt.
+      Return only JSON.
+    output_format:
+      type: object
+      required:
+        - feature_ids
+        - rationale
+        - web_changed
+      properties:
+        feature_ids:
+          type: string
+          description: Space- or newline-separated allowed feature-map ids.
+        rationale:
+          type: string
+        web_changed:
+          type: boolean
+
+  - id: normalize-verify-targets
+    description: Canonicalize feature-ids.txt (allowed ids, web-console rule, fallback).
+    depends_on:
+      - select-verify-targets
+    bash: |
+      set -euo pipefail
+      OUT_DIR="$ARTIFACTS_DIR/verify"
+      mkdir -p "$OUT_DIR"
+      IDS_FILE="$OUT_DIR/feature-ids.txt"
+      PROPOSED="$OUT_DIR/feature-ids.proposed.txt"
+      BASE_SHA_FILE="$ARTIFACTS_DIR/superpowers/base-sha.txt"
+      BASE_SHA=$(cat "$BASE_SHA_FILE")
+      SELECTED=$select-verify-targets.output.feature_ids
+
+      {
+        if [ -f "$PROPOSED" ]; then
+          cat "$PROPOSED"
+        fi
+        printf '%s\n' "$SELECTED"
+      } > "$OUT_DIR/feature-ids.raw.txt"
+
+      : > "$IDS_FILE"
+      while IFS= read -r raw || [ -n "$raw" ]; do
+        id=$(printf '%s' "$raw" | tr -d '\r' | awk '{print $1}')
+        case "$id" in
+          discover-workflows|web-console|diagnose-install|run-deterministic-workflow|inspect-run)
+            if ! grep -qx "$id" "$IDS_FILE"; then
+              printf '%s\n' "$id" >> "$IDS_FILE"
+            fi
+            ;;
+        esac
+      done < "$OUT_DIR/feature-ids.raw.txt"
+
+      web_changed=0
+      if git diff --name-only "$BASE_SHA" HEAD | grep -q '^packages/web/'; then
+        web_changed=1
+      fi
+      if git diff --name-only | grep -q '^packages/web/'; then
+        web_changed=1
+      fi
+      if git diff --name-only --cached | grep -q '^packages/web/'; then
+        web_changed=1
+      fi
+      if [ "$web_changed" -eq 1 ] && ! grep -qx 'web-console' "$IDS_FILE"; then
+        printf '%s\n' 'web-console' >> "$IDS_FILE"
+      fi
+
+      if [ ! -s "$IDS_FILE" ]; then
+        printf '%s\n' 'discover-workflows' > "$IDS_FILE"
+      fi
+
+      echo "FEATURE_IDS_FILE=$IDS_FILE"
+      echo "WEB_CHANGED=$web_changed"
+      echo "SELECTED_IDS=$(tr '\n' ' ' < "$IDS_FILE")"
+    timeout: 60000
+
+  - id: prove-preflight
+    description: chmod verify-archon helpers and install the Playwright harness when needed.
+    depends_on:
+      - normalize-verify-targets
+      - fix-verify
+    trigger_rule: one_success
+    always_run: true
+    bash: |
+      set -euo pipefail
+      OUT_DIR="$ARTIFACTS_DIR/verify"
+      mkdir -p "$OUT_DIR/evidence" "$OUT_DIR/runs"
+      IDS_FILE="$OUT_DIR/feature-ids.txt"
+      VERIFY_BIN=".agents/skills/verify-archon/bin/verify-archon"
+      HARNESS=".agents/skills/verify-archon/harness"
+
+      write_fail() {
+        printf 'FAIL\n' > "$OUT_DIR/result.txt"
+        printf '%s\n' "${1:-verify preflight failed}" > "$OUT_DIR/last-error.txt"
+      }
+
+      if [ ! -f "$VERIFY_BIN" ]; then
+        write_fail "missing $VERIFY_BIN"
+        echo "ERROR: verify-archon helper is missing." >&2
+        exit 1
+      fi
+      chmod +x "$VERIFY_BIN" || true
+
+      if [ ! -f "$IDS_FILE" ] || [ ! -s "$IDS_FILE" ]; then
+        printf '%s\n' 'discover-workflows' > "$IDS_FILE"
+      fi
+
+      if grep -qx 'web-console' "$IDS_FILE"; then
+        if [ ! -f "$HARNESS/package.json" ]; then
+          write_fail "web-console selected but $HARNESS/package.json is missing"
+          echo "ERROR: Playwright harness package.json missing for web-console." >&2
+          exit 1
+        fi
+        echo "Installing verify-archon Playwright harness deps ($HARNESS)." >&2
+        if ! (cd "$HARNESS" && bun install) >&2; then
+          write_fail "bun install failed in $HARNESS"
+          exit 1
+        fi
+      fi
+    timeout: 180000
+
+  - id: prove
+    description: Follow verify-archon and prove every selected feature-map id (fail-closed).
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    context: fresh
+    idle_timeout: 3600000
+    skills:
+      - verify-archon
+    depends_on:
+      - prove-preflight
+    always_run: true
+    prompt: |
+      $verify-archon
+      Follow verify-archon.
+      Prove every id in $ARTIFACTS_DIR/verify/feature-ids.txt.
+      Write PASS or FAIL to $ARTIFACTS_DIR/verify/result.txt and evidence under $ARTIFACTS_DIR/verify/.
+      Return only JSON with result PASS|FAIL.
+    output_format:
+      type: object
+      required:
+        - result
+      properties:
+        result:
+          type: string
+          enum:
+            - PASS
+            - FAIL
+
+  - id: record-verify
+    description: Read prove artifacts and emit PASS or FAIL for the route_loop gate.
+    depends_on:
+      - prove
+    trigger_rule: all_done
+    always_run: true
+    bash: |
+      set -euo pipefail
+      RESULT="$ARTIFACTS_DIR/verify/result.txt"
+      if [ -f "$RESULT" ]; then
+        gate=$(tr -d '\r\n' < "$RESULT")
+      else
+        gate=FAIL
+        printf 'FAIL\n' > "$RESULT"
+      fi
+      case "$gate" in
+        PASS|FAIL) ;;
+        *)
+          gate=FAIL
+          printf 'FAIL\n' > "$RESULT"
+          ;;
+      esac
+      printf '%s\n' "$gate"
+    timeout: 30000
+
+  - id: verify-gate
+    description: PASS → PR; FAIL → fix-verify (max 3); exhaustion → blocked report.
+    depends_on:
+      - record-verify
+    route_loop:
+      condition: "$record-verify.output == 'PASS'"
+      max_iterations: 3
+      routes:
+        positive: create-pull-request
+        negative: fix-verify
+        exhausted: verify-blocked
+
+  - id: fix-verify
+    description: Fix product code (or harness drift) from failing verify-archon evidence.
+    provider: omp
+    model: cursor/gpt-5.6-sol
+    effort: xhigh
+    context: fresh
+    idle_timeout: 3600000
+    when: "$record-verify.output == 'FAIL'"
+    skills:
+      - systematic-debugging
+      - verification-before-completion
+    prompt: |
+      Follow systematic-debugging and verification-before-completion.
+      Prove failed. Fix product (harness only if the map drifted). No PR. No Mini.
+      Plan: $review-fix-plan.output.plan_path
+      Ids, result, evidence: $ARTIFACTS_DIR/verify/
+      Write $ARTIFACTS_DIR/verify/fix-report.md.
+      Return only JSON.
+    output_format:
+      type: object
+      required:
+        - fixed
+        - files_changed
+        - fix_kind
+        - summary
+      properties:
+        fixed:
+          type: boolean
+        files_changed:
+          type: string
+        fix_kind:
+          type: string
+          enum:
+            - product
+            - harness
+            - mixed
+        summary:
+          type: string
+
+  - id: create-pull-request
+    description: Create the pull request only after verify-archon PASS.
+    command: archon-create-pr
+    provider: omp
+    model: cursor/gemini-3.8-flash
+    effort: high
+    context: fresh
+    idle_timeout: 900000
+    depends_on:
+      - verify-gate
+    output_type: pull-request
+    prompt_suffix: |
+      Follow archon-create-pr.
+      Gate is PASS. List each id from $ARTIFACTS_DIR/verify/feature-ids.txt
+      and its evidence under $ARTIFACTS_DIR/verify/evidence/.
+
+  - id: verify-blocked
+    description: Exhausted fix budget — write a blocked report and stop (no green PR).
+    depends_on:
+      - verify-gate
+    bash: |
+      set -euo pipefail
+      OUT_DIR="$ARTIFACTS_DIR/verify"
+      REPORT="$OUT_DIR/BLOCKED.md"
+      IDS_FILE="$OUT_DIR/feature-ids.txt"
+      RESULT_FILE="$OUT_DIR/result.txt"
+      CODES_FILE="$OUT_DIR/exit-codes.txt"
+      ERR_FILE="$OUT_DIR/last-error.txt"
+      EVIDENCE_DIR="$OUT_DIR/evidence"
+
+      {
+        echo "# verify-archon gate blocked"
+        echo
+        echo "The fix → re-prove route_loop exhausted its budget (max 3)."
+        echo "No pull request was created."
+        echo
+        echo "## Selected feature ids"
+        if [ -f "$IDS_FILE" ]; then
+          cat "$IDS_FILE"
+        else
+          echo "(missing $IDS_FILE)"
+        fi
+        echo
+        echo "## Last gate"
+        if [ -f "$RESULT_FILE" ]; then
+          cat "$RESULT_FILE"
+        else
+          echo "FAIL (result.txt missing)"
+        fi
+        echo
+        echo "## Exit codes"
+        if [ -f "$CODES_FILE" ]; then
+          cat "$CODES_FILE"
+        else
+          echo "(missing $CODES_FILE)"
+        fi
+        echo
+        echo "## Last error"
+        if [ -f "$ERR_FILE" ]; then
+          cat "$ERR_FILE"
+        else
+          echo "(none recorded)"
+        fi
+        echo
+        echo "## Evidence"
+        echo "$EVIDENCE_DIR"
+        if [ -d "$EVIDENCE_DIR" ]; then
+          find "$EVIDENCE_DIR" -type f | sort
+        fi
+      } > "$REPORT"
+
+      echo "VERIFY_BLOCKED_REPORT=$REPORT"
+      echo "verify-archon fix budget exhausted. See $REPORT" >&2
+      exit 1
+    timeout: 60000

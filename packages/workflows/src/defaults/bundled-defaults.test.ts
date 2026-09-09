@@ -415,6 +415,45 @@ describe('bundled-defaults', () => {
       expect(content).toContain('command: archon-create-pr');
     });
 
+    it('archon-superpower-feature-verify-loop proves before PR and blocks on exhaustion', () => {
+      const content = BUNDLED_WORKFLOWS['archon-superpower-feature-verify-loop'];
+      expect(content).toContain('name: archon-superpower-feature-verify-loop');
+      expect(content).toContain('id: setup');
+      expect(content).toContain('id: write-plan');
+      expect(content).toContain('id: review-fix-plan');
+      expect(content).toContain('id: build-ralph-prd');
+      expect(content).toContain('id: validate-prd');
+      expect(content).toContain('id: ralph-loop-run');
+      expect(content).toContain('id: select-verify-targets');
+      expect(content).toContain('provider: grok');
+      expect(content).toContain('model: grok-4.6');
+      expect(content).toContain('skills:');
+      expect(content).toContain('select-verify-archon-targets');
+      expect(content).toContain('Follow select-verify-archon-targets.');
+      expect(content).toContain('id: normalize-verify-targets');
+      expect(content).toContain('id: prove-preflight');
+      expect(content).toContain('id: prove');
+      expect(content).toContain('id: record-verify');
+      expect(content).toContain('id: verify-gate');
+      expect(content).toContain('id: fix-verify');
+      expect(content).toContain('id: create-pull-request');
+      expect(content).toContain('id: verify-blocked');
+      expect(content).toContain('- verify-archon');
+      expect(content).toContain('Follow verify-archon.');
+      expect(content).toContain('provider: codex');
+      expect(content).toContain('model: gpt-5.6-sol');
+      expect(content).toContain('.agents/skills/verify-archon/bin/verify-archon');
+      expect(content).not.toContain('.cursor/skills/verify-archon');
+      expect(content).toContain('$ARTIFACTS_DIR/verify/result.txt');
+      expect(content).toContain('$ARTIFACTS_DIR/verify/feature-ids.txt');
+      expect(content).toContain('condition: "$record-verify.output == \'PASS\'"');
+      expect(content).toContain('negative: fix-verify');
+      expect(content).toContain('exhausted: verify-blocked');
+      expect(content).toContain('command: archon-create-pr');
+      expect(content).toContain('No pull request was created.');
+      expect(content).not.toContain('TODO');
+    });
+
     it('BMAD create-story workflows should gate downstream work on independent readiness validation', () => {
       const workflowNames = [
         'bmad-create-story-with-tea',

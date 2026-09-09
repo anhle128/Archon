@@ -30,7 +30,7 @@ Preconditions:
 End-to-end (preferred):
 
 ```bash
-.cursor/skills/verify-archon/bin/verify-archon prove web-console
+.agents/skills/verify-archon/bin/verify-archon prove web-console
 ```
 
 That is `launch --with-web` → `doctor` → Playwright `drive web-console` → `cleanup` (keeps evidence; kills API + Vite + browser).
@@ -38,10 +38,10 @@ That is `launch --with-web` → `doctor` → Playwright `drive web-console` → 
 Step-wise:
 
 ```bash
-.cursor/skills/verify-archon/bin/verify-archon launch --with-web
-.cursor/skills/verify-archon/bin/verify-archon doctor --json
-.cursor/skills/verify-archon/bin/verify-archon drive web-console
-.cursor/skills/verify-archon/bin/verify-archon cleanup
+.agents/skills/verify-archon/bin/verify-archon launch --with-web
+.agents/skills/verify-archon/bin/verify-archon doctor --json
+.agents/skills/verify-archon/bin/verify-archon drive web-console
+.agents/skills/verify-archon/bin/verify-archon cleanup
 ```
 
 Manual Vite equivalent if debugging the helper (repo root, API already on 13090):
@@ -52,12 +52,12 @@ PORT=13090 bun run dev --host 127.0.0.1 --port 15173 --strictPort
 # Do not insert `--` before Vite flags; bun steals `--port` and prints usage.
 ```
 
-Manual Playwright equivalent (after `bun install` in `.cursor/skills/verify-archon/harness`):
+Manual Playwright equivalent (after `bun install` in `.agents/skills/verify-archon/harness`):
 
 ```bash
 ARCHON_VERIFY_WEB_URL=http://127.0.0.1:15173 \
-ARCHON_VERIFY_EVIDENCE_DIR=.cursor/skills/verify-archon/evidence/runs/<id> \
-bun --cwd .cursor/skills/verify-archon/harness run drive-console
+ARCHON_VERIFY_EVIDENCE_DIR=.agents/skills/verify-archon/evidence/runs/<id> \
+bun --cwd .agents/skills/verify-archon/harness run drive-console
 ```
 
 - **Auth posture.** `verify-archon http /api/auth/status`. Status `200`, `enabled` is `false`. If `enabled` is true, stop — this skill does not drive OAuth.
