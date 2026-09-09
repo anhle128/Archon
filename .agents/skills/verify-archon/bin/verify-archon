@@ -37,7 +37,8 @@ Environment:
   ARCHON_VERIFY_EVIDENCE   Evidence root (default <repo>/.agents/skills/verify-archon/evidence)
 
 Default local launch is offline: SQLite, loopback, no platform adapters, no Mini.
-CLI/HTTP proofs do not need Vite. UI proofs require launch --with-web.
+CLI/HTTP proofs do not need Vite. UI proofs (web-console, hitl-run-room)
+require launch --with-web. hitl-run-room also needs ARCHON_E2E_FAKE_PROVIDER=1.
 '
 
 CMD_HELP_LAUNCH='Usage: verify-archon launch [--port N] [--home DIR] [--with-web] [--json] [--dry-run]
@@ -49,7 +50,8 @@ GET /api/health returns status "ok".
 --with-web also starts (from packages/web) `bun run dev --host 127.0.0.1
 --port 15173 --strictPort` with PORT=<api> so Vite proxies /api to the
 isolated server. Ready when GET <webUrl>/console returns the Archon SPA
-shell (title Archon, #root). Required for drive web-console.
+shell (title Archon, #root). Required for drive web-console and
+drive hitl-run-room.
 Do not pass a bare `--` before Vite flags: bun then treats `--port` as its
 own flag and prints `bun run` usage instead of starting Vite.
 
@@ -72,7 +74,7 @@ launches skip those checks so prove discover-workflows stays Vite-free.
 CMD_HELP_DRIVE='Usage: verify-archon drive <feature> [--json]
 
 Features: diagnose-install | discover-workflows | run-deterministic-workflow
-          | inspect-run | web-console
+          | inspect-run | web-console | hitl-run-room
 
 Runs the mapped recipe, writes evidence under evidence/runs/<run-id>/,
 and exits non-zero if an observable assertion fails.
@@ -81,13 +83,17 @@ web-console opens Playwright (system Chrome) against the Vite origin,
 asserts visible DOM (rail, runs empty state, Settings heading), and
 writes screenshots + video. Requires launch --with-web. HTTP-only is
 not a passing web-console proof.
+
+hitl-run-room seeds e2e-hitl-run, runs it with the fake provider, then
+opens /console/p/:projectId/r/:runId and asserts the percentage room.
+Requires launch --with-web. HTTP-only is not a passing room proof.
 '
 
 CMD_HELP_PROVE='Usage: verify-archon prove [feature] [--json]
 
 Full generator loop: launch → doctor → drive one feature → cleanup.
 Cleanup does not delete evidence. Default feature: discover-workflows.
-prove web-console implies --with-web (API + Vite).
+prove web-console and prove hitl-run-room imply --with-web (API + Vite).
 '
 
 CMD_HELP_CLEANUP='Usage: verify-archon cleanup [--dry-run] [--json] [--keep-home]
@@ -216,6 +222,7 @@ verify_env() {
   export HOST=127.0.0.1
   export DATABASE_URL=
   export ARCHON_TELEMETRY_DISABLED=1
+  export ARCHON_E2E_FAKE_PROVIDER=1
   unset TELEGRAM_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN DISCORD_BOT_TOKEN || true
   unset BETTER_AUTH_SECRET DATABASE_URL || true
   export DATABASE_URL=
@@ -288,7 +295,7 @@ parse_help_command() {
 }
 
 cmd_features() {
-  local ids='["diagnose-install","discover-workflows","run-deterministic-workflow","inspect-run","web-console"]'
+  local ids='["diagnose-install","discover-workflows","run-deterministic-workflow","inspect-run","web-console","hitl-run-room"]'
   if [[ "$json_mode" -eq 1 ]]; then
     emit_json --argjson features "$ids" '{ok:true, features:$features}'
   else
@@ -479,6 +486,7 @@ cmd_launch() {
       export HOST=127.0.0.1
       export DATABASE_URL=
       export ARCHON_TELEMETRY_DISABLED=1
+      export ARCHON_E2E_FAKE_PROVIDER=1
       unset TELEGRAM_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN DISCORD_BOT_TOKEN BETTER_AUTH_SECRET
       export DATABASE_URL=
       # --watch stays under this PID group. Record bun's PID.
@@ -878,6 +886,117 @@ drive_inspect_run() {
     '{feature:$feature, evidenceDir:$evidenceDir, ok:true}' >"$ev/summary.json"
 }
 
+require_system_chrome() {
+  if [[ -d '/Applications/Google Chrome.app' ]]; then
+    return 0
+  fi
+  command -v google-chrome >/dev/null || command -v google-chrome-stable >/dev/null \
+    || die "system Chrome not found (harness uses Playwright channel: chrome)"
+}
+
+ensure_playwright_harness() {
+  local harness=$1
+  if [[ ! -d "$harness/node_modules/playwright" ]]; then
+    log "installing Playwright harness deps in $harness"
+    (cd "$harness" && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 bun install) \
+      || die "bun install failed in $harness"
+  fi
+  require_system_chrome
+  if [[ ! -x "${HOME}/.cache/ms-playwright/ffmpeg-1011/ffmpeg-linux" ]] \
+    && [[ ! -x "${HOME}/.cache/ms-playwright/ffmpeg-1011/ffmpeg-mac" ]]; then
+    (cd "$harness" && bunx playwright install ffmpeg) \
+      || log "playwright ffmpeg install skipped; screenshots still required"
+  fi
+}
+
+drive_hitl_run_room() {
+  local ev web_url home repo fixture harness run_id
+  ev=$(evidence_dir)
+  web_url=$(state_get webUrl)
+  home=$(state_get archonHome)
+  repo=$repo_root
+  [[ -n "$web_url" ]] || die "hitl-run-room requires launch --with-web (no webUrl in state)"
+  [[ -n "$home" ]] || die "hitl-run-room requires isolated ARCHON_HOME from launch"
+  fixture=$repo/e2e/fixtures/workflows/e2e-hitl-run.yaml
+  [[ -f "$fixture" ]] || die "missing HITL fixture $fixture"
+
+  verify_env
+  mkdir -p "$home/workflows"
+  cp "$fixture" "$home/workflows/e2e-hitl-run.yaml"
+
+  local raw code payload
+  raw=$(http_raw GET /api/auth/status)
+  code=$(printf '%s' "$raw" | tail -n 1)
+  payload=$(printf '%s' "$raw" | sed '$d')
+  printf '%s\n' "$payload" >"$ev/auth-status.http.json"
+  [[ "$code" == "200" ]] || die "GET /api/auth/status HTTP $code"
+  assert_jq "$ev/auth-status.http.json" '.enabled == false' \
+    "solo verification expects GET /api/auth/status enabled=false"
+
+  raw=$(http_raw POST /api/codebases "{\"path\":\"$repo\"}")
+  code=$(printf '%s' "$raw" | tail -n 1)
+  payload=$(printf '%s' "$raw" | sed '$d')
+  printf '%s\n' "$payload" >"$ev/codebase-register.http.json"
+  [[ "$code" == "200" || "$code" == "201" ]] || die "POST /api/codebases HTTP $code"
+  assert_jq "$ev/codebase-register.http.json" '.id != null and .id != ""' \
+    "register response missing codebase id"
+
+  cd "$repo"
+  set +e
+  bun run cli -- --cwd "$repo" workflow run e2e-hitl-run --no-worktree --json \
+    >"$ev/hitl-run.cli.stdout.txt" 2>"$ev/hitl-run.cli.stderr.txt"
+  local run_ec=$?
+  set -e
+  printf '%s\n' "$run_ec" >"$ev/hitl-run.cli.exit"
+  if [[ "$run_ec" -ne 0 ]]; then
+    die "workflow run e2e-hitl-run failed (exit $run_ec); see hitl-run.cli.stderr.txt"
+  fi
+  local envelope
+  envelope=$(grep 'workflowRunRef' "$ev/hitl-run.cli.stdout.txt" | tail -n 1) \
+    || die "no workflowRunRef in e2e-hitl-run CLI output"
+  printf '%s\n' "$envelope" >"$ev/hitl-run.cli.json"
+  run_id=$(jq -r '.workflowRunRef.runId // empty' "$ev/hitl-run.cli.json")
+  [[ -n "$run_id" && "$run_id" != "null" ]] || die "e2e-hitl-run envelope missing runId"
+  printf '%s\n' "$run_id" >"$ev/hitl-run-id.txt"
+
+  raw=$(http_raw GET "/api/workflows/runs/$run_id")
+  code=$(printf '%s' "$raw" | tail -n 1)
+  payload=$(printf '%s' "$raw" | sed '$d')
+  printf '%s\n' "$payload" >"$ev/run-detail.http.json"
+  [[ "$code" == "200" ]] || die "GET /api/workflows/runs/$run_id HTTP $code"
+  assert_jq "$ev/run-detail.http.json" '.run.codebase_id != null and .run.codebase_id != ""' \
+    "run-detail missing codebase_id"
+
+  harness=$skill_dir/harness
+  ensure_playwright_harness "$harness"
+  export ARCHON_VERIFY_WEB_URL=$web_url
+  export ARCHON_VERIFY_API_URL
+  ARCHON_VERIFY_API_URL=$(state_get baseUrl)
+  export ARCHON_VERIFY_EVIDENCE_DIR=$ev
+  export ARCHON_VERIFY_RUN_ID=$run_id
+  (cd "$harness" && bun run drive-hitl-run-room) || die "Playwright drive-hitl-run-room failed"
+
+  [[ -f "$ev/hitl-room-open.png" ]] || die "missing screenshot hitl-room-open.png"
+  [[ -f "$ev/hitl-room-closed.png" ]] || die "missing screenshot hitl-room-closed.png"
+  [[ -f "$ev/hitl-room-deeplink.png" ]] || die "missing screenshot hitl-room-deeplink.png"
+  [[ -f "$ev/ui-assertions.json" ]] || die "missing ui-assertions.json"
+  assert_jq "$ev/ui-assertions.json" '.ok == true' "ui-assertions.ok is not true"
+  assert_jq "$ev/ui-assertions.json" \
+    '[.assertions[] | select(.id=="room-open" and .ok==true)] | length == 1' \
+    "room-open assertion missing"
+  assert_jq "$ev/ui-assertions.json" \
+    '[.assertions[] | select(.id=="room-history" and .ok==true)] | length == 1' \
+    "room-history assertion missing"
+  assert_jq "$ev/ui-assertions.json" \
+    '[.assertions[] | select(.id=="room-deeplink" and .ok==true)] | length == 1' \
+    "room-deeplink assertion missing"
+
+  jq -n --arg feature hitl-run-room --arg evidenceDir "$ev" --arg webUrl "$web_url" \
+    --arg runId "$run_id" --slurpfile ui "$ev/ui-assertions.json" \
+    '{feature:$feature, evidenceDir:$evidenceDir, webUrl:$webUrl, runId:$runId, ok:true, ui:$ui[0]}' \
+    >"$ev/summary.json"
+}
+
 drive_web_console() {
   local ev web_url harness
   ev=$(evidence_dir)
@@ -903,18 +1022,7 @@ drive_web_console() {
   printf '%s\n' "$payload" >"$ev/codebases.http.json"
 
   harness=$skill_dir/harness
-  if [[ ! -d "$harness/node_modules/playwright" ]]; then
-    log "installing Playwright harness deps in $harness"
-    (cd "$harness" && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 bun install) \
-      || die "bun install failed in $harness"
-  fi
-  command -v google-chrome >/dev/null || command -v google-chrome-stable >/dev/null \
-    || die "system Chrome not found (harness uses Playwright channel: chrome)"
-  # Video is optional. Playwright records only when its ffmpeg is present.
-  if [[ ! -x "${HOME}/.cache/ms-playwright/ffmpeg-1011/ffmpeg-linux" ]]; then
-    (cd "$harness" && bunx playwright install ffmpeg) \
-      || log "playwright ffmpeg install skipped; screenshots still required"
-  fi
+  ensure_playwright_harness "$harness"
 
   export ARCHON_VERIFY_WEB_URL=$web_url
   export ARCHON_VERIFY_EVIDENCE_DIR=$ev
@@ -950,6 +1058,7 @@ cmd_drive() {
     run-deterministic-workflow) drive_run_deterministic ;;
     inspect-run) drive_inspect_run ;;
     web-console) drive_web_console ;;
+    hitl-run-room) drive_hitl_run_room ;;
     *) die "unknown feature: $feature (run: verify-archon features)" ;;
   esac
   if [[ "$json_mode" -eq 1 ]]; then
@@ -1060,7 +1169,7 @@ cmd_cleanup() {
 
 cmd_prove() {
   local feature=${1:-discover-workflows}
-  if [[ "$feature" == "web-console" ]]; then
+  if [[ "$feature" == "web-console" || "$feature" == "hitl-run-room" ]]; then
     with_web=1
   fi
   cmd_launch
@@ -1093,6 +1202,11 @@ cmd_prove() {
   )
   if [[ "$feature" == "web-console" ]]; then
     copies+=(ui-assertions.json console-runs.png console-runs-all.png console-settings.png)
+  elif [[ "$feature" == "hitl-run-room" ]]; then
+    copies+=(
+      ui-assertions.json hitl-run.cli.json hitl-run-id.txt
+      hitl-room-open.png hitl-room-closed.png hitl-room-deeplink.png
+    )
   else
     copies+=(
       validate-e2e-deterministic.cli.json codebase-register.meta.json
@@ -1105,7 +1219,7 @@ cmd_prove() {
       cp -a "$ev/$f" "$last_dir/$f"
     fi
   done
-  if [[ "$feature" == "web-console" && -d "$ev/video" ]]; then
+  if [[ ( "$feature" == "web-console" || "$feature" == "hitl-run-room" ) && -d "$ev/video" ]]; then
     mkdir -p "$last_dir/video"
     local vid
     for vid in "$ev"/video/*.{webm,mp4}; do

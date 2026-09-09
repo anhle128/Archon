@@ -4,7 +4,8 @@
   "type": "module",
   "description": "Verification scaffolding: Playwright driver for the Archon console. Not product runtime.",
   "scripts": {
-    "drive-console": "node drive-console.mjs"
+    "drive-console": "node drive-console.mjs",
+    "drive-hitl-run-room": "node drive-hitl-run-room.mjs"
   },
   "dependencies": {
     "playwright": "^1.55.2"

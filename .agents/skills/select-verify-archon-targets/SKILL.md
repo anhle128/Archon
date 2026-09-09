@@ -25,6 +25,7 @@ Allowed ids only:
 - `diagnose-install`
 - `run-deterministic-workflow`
 - `inspect-run`
+- `hitl-run-room`
 
 ## Inputs (resolve in this order)
 
@@ -52,6 +53,7 @@ Never require `$ARTIFACTS_DIR` for a successful manual run.
 
 - Include every id whose mapped user path the diff or plan can break.
 - If anything under `packages/web` changed, include `web-console`.
+- If the plan or diff can break run-detail room paths (Console/Legacy room, agent history, Ask cards, `?node=`, node-message paging, or execution-history used by the room), include `hitl-run-room`. Do not treat a green `web-console` as covering that path.
 - Always emit at least one id.
 - If nothing else is justified, use `discover-workflows`.
 - Local bun verify only (ids must be driveable by `verify-archon`).
@@ -62,7 +64,7 @@ Return JSON (and show it to the user when manual):
 
 ```json
 {
-  "feature_ids": ["web-console", "inspect-run"],
+  "feature_ids": ["web-console", "inspect-run", "hitl-run-room"],
   "rationale": "…",
   "web_changed": true,
   "base_ref": "abc123…",
@@ -87,6 +89,7 @@ while read -r id; do
 done < .agents/skills/verify-archon/evidence/last-select/feature-ids.proposed.txt
 ```
 
-Note: today's feature map is CLI/HTTP/console-shell oriented. Deep product UI
-(e.g. HITL run room) may need e2e or a new feature-map entry — say so if the
-diff is broader than the map.
+`hitl-run-room` is the map entry for Console run-detail room (open/close,
+~40% split, history, `?node=`). Narrow-viewport / Legacy / multi-Ask paths
+still live in `e2e/ui/workflow-run-hitl-room.spec.ts` — say so when the
+diff is broader than this recipe.

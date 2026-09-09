@@ -15,7 +15,7 @@ This directory is the maintained source for proving Archon the way a user does �
 ## Driving conventions
 
 - Start every recipe from the baseline state unless its preconditions say otherwise.
-- Prefer CLI `--json` and HTTP JSON for CLI/API features. **web-console** requires a real browser, visible DOM assertions, and screenshots — HTTP the console reads is not a pass.
+- Prefer CLI `--json` and HTTP JSON for CLI/API features. **web-console** and **hitl-run-room** require a real browser, visible DOM assertions, and screenshots — HTTP the console reads is not a pass.
 - Treat every command as literal. Keep quoted names and flags unchanged.
 - Run Archon CLI through `verify-archon cli -- <args>` so `ARCHON_HOME` matches the launched instance.
 - Run HTTP through `verify-archon http <path>` so the request hits the instance under doctor.
@@ -50,3 +50,4 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Run a deterministic workflow](./run-deterministic-workflow.md) covers `e2e-deterministic` dry-run and a real no-AI run.
 - [Inspect a workflow run](./inspect-run.md) covers `runs` / `get` / `status` after a run exists.
 - [Open the web console](./web-console.md) covers Playwright against `/console` and `/console/settings` (screenshots required; HTTP the UI reads is supporting only).
+- [Open the HITL run room](./hitl-run-room.md) covers Playwright against `/console/p/:projectId/r/:runId`: room absent, ~40% open/close, agent history, and `?node=` (screenshots required).
