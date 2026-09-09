@@ -26,7 +26,7 @@ Feature: **discover-workflows**
 
 ## Artifacts here
 
-Slim copies only (full workflow-definition dumps stay in `../runs/<run-id>/`, gitignored).
+Slim copies only (full workflow-definition dumps stay in `../../runs/<run-id>/`, gitignored). This directory is `last-proof/discover-workflows/` so a later `prove web-console` does not wipe it.
 
 | File                                  | Proof                                    |
 | ------------------------------------- | ---------------------------------------- |

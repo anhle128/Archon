@@ -10,7 +10,7 @@ description: >-
 
 # Verify Archon
 
-Drive this Archon fork (`anhle128/Archon`) the way a user does. CI green and `tsc` are not proof. A proof is a real CLI command or HTTP request against a live instance, plus the resulting state.
+Drive this Archon fork (`anhle128/Archon`) the way a user does. CI green and `tsc` are not proof. A CLI/HTTP proof is a real command or `/api/*` request against a live instance, plus the resulting state. A **web-console** proof is a real browser session against `/console`: visible DOM assertions plus screenshots (and video when the harness records it). HTTP-only is not a passing UI claim.
 
 Primary surfaces: **Archon CLI** (`bun run cli`) and the **server HTTP API** (`bun run dev:server`). The web console (`bun run dev:web`, `/console`) is secondary. Oceanlabs production Mini (PM2 + PostgreSQL over Tailscale) is an optional remote target — never the default, and never started or stopped from here.
 
@@ -48,6 +48,8 @@ Preferred:
 
 ```bash
 .cursor/skills/verify-archon/bin/verify-archon launch
+# UI proofs also start Vite (API 13090 + web 15173):
+.cursor/skills/verify-archon/bin/verify-archon launch --with-web
 ```
 
 Manual equivalent (repo root):
@@ -71,7 +73,13 @@ curl -sS "http://127.0.0.1:${PORT}/api/health"
 
 Body must have `"status":"ok"`. `archon serve` from source exits: it is compiled-binaries only. Use `bun run dev:server`.
 
-Optional web UI: `PORT=$PORT bun run dev:web` (Vite `5173`, proxies `/api` to `PORT`). Not required for CLI/HTTP proofs. `packages/web/dist` is absent until `bun run build:web`; the API server then logs `web_dist_not_found` and still serves `/api/*`.
+Optional web UI for CLI/HTTP proofs is unused. For **web-console**, the helper starts Vite on **15173** (not laptop 5173) with `PORT` equal to the API port so `packages/web/vite.config.ts` proxies `/api` to the isolated server:
+
+```bash
+PORT=13090 bun --cwd packages/web exec vite --host 127.0.0.1 --port 15173 --strictPort
+```
+
+`bun run dev:web` is the same Vite app on 5173. Verification must set `PORT=<api>` or the proxy still targets 3090. Ready when `GET http://127.0.0.1:15173/console` is the SPA shell (`<title>Archon</title>`, `#root`). `packages/web/dist` is absent until `bun run build:web`; the API server then logs `web_dist_not_found` and still serves `/api/*` — that is **not** a UI proof.
 
 ### Mini (optional remote)
 
@@ -108,6 +116,7 @@ Local target must all be true:
 3. `lsof` shows that PID (or its recorded child) owns `HOST:PORT`.
 4. `GET /api/health` returns 200 and `status === "ok"`.
 5. `ARCHON_HOME` is the isolated directory from launch, not `~/.archon`.
+6. If launch recorded `webUrl` ( `--with-web` ): Vite is listening on that port and `GET <webUrl>/console` is the Archon SPA shell. API-only launches skip this so `prove discover-workflows` stays Vite-free.
 
 Also run and **record** (do not require green AI binaries):
 
@@ -123,10 +132,11 @@ Run doctor before the first drive, after any failed drive, and on a fresh sessio
 
 ## Drive
 
-Harness: `verify-archon` wrapping the real Archon CLI and HTTP API. No Playwright unless the mapped feature is a visual console bug.
+Harness: `verify-archon` wrapping the real Archon CLI and HTTP API. CLI/HTTP features stay curl/CLI. **web-console** must open Playwright (system Chrome, `channel: 'chrome'`) against the Vite origin — see [harness/README.md](harness/README.md). Never click by coordinates.
 
 ```bash
 .cursor/skills/verify-archon/bin/verify-archon drive discover-workflows
+.cursor/skills/verify-archon/bin/verify-archon drive web-console   # requires launch --with-web
 ```
 
 Stable handles (use these, not coordinates):
@@ -139,7 +149,9 @@ Stable handles (use these, not coordinates):
 | Register project | `POST /api/codebases` body `{"path":"<repo-root>"}`                                |
 | Project catalog  | `GET /api/workflows?cwd=<repo-root>`                                               |
 | Runs             | `GET /api/workflows/runs` and `bun run cli -- workflow runs --json`                |
-| Console routes   | `/console`, `/console/p/:projectId/r/:runId`, `/legacy/chat`                       |
+| Console routes   | `/console` (RunsPage), `/console/settings` (SettingsPage)                          |
+| Console rail     | `nav[aria-label="Projects"]`; buttons `All projects`, `Add project`                |
+| Console filters  | chip accessible name `/^All \d+$/` (not the rail "All projects" button)            |
 
 CLI rules from this repo:
 
@@ -168,7 +180,9 @@ Proof standards:
 - Mocks only at a production boundary (Mini unreachable, missing Claude binary). Name the skip.
 - `--dry-run` on `workflow run` does not create a run and does not call a provider. Confirm by reading `workflow runs` before and after. `--exec-code` **does** execute bash/script nodes.
 
-Minimum artifacts per drive: `summary.json`, the command transcript, HTTP/CLI JSON, exit codes. Screenshots only if a UI interaction is the claim.
+Minimum artifacts per drive: `summary.json`, the command transcript, HTTP/CLI JSON, exit codes.
+
+When the claim is **UI** (`web-console`): screenshots are **required**. HTTP 200 on `/console` or `/api/*` is not enough. The Playwright harness writes `console-runs.png`, `console-runs-all.png`, `console-settings.png`, `ui-assertions.json`, and a short `video/*.webm` when Chrome records it. Viewport must be ≥1024px wide (`1440×900` in the harness) because `ProjectRail` is `hidden lg:block`.
 
 ## Cleanup
 
@@ -180,6 +194,7 @@ Minimum artifacts per drive: `summary.json`, the command transcript, HTTP/CLI JS
 Cleanup may:
 
 - `SIGTERM` the PID recorded at launch (then the recorded listener PID if it is still the owner of `HOST:PORT`).
+- `SIGTERM` the recorded Vite spawn/listener PIDs when `--with-web` was used.
 - Remove the isolated `ARCHON_HOME` scratch directory.
 - Remove the state file.
 
@@ -197,7 +212,7 @@ After cleanup, confirm evidence still exists at the path printed by launch/docto
 Executable: `.cursor/skills/verify-archon/bin/verify-archon`
 
 ```text
-verify-archon launch [--port N] [--home DIR] [--json] [--dry-run]
+verify-archon launch [--port N] [--home DIR] [--with-web] [--json] [--dry-run]
 verify-archon doctor [--json]
 verify-archon drive <feature> [--json]
 verify-archon prove [feature] [--json]          # launch → doctor → drive → cleanup
@@ -208,6 +223,8 @@ verify-archon cleanup [--dry-run] [--json] [--keep-home]
 verify-archon status [--json]
 verify-archon features
 ```
+
+`prove web-console` implies `--with-web` (API + Vite + Playwright). `prove discover-workflows` stays API-only.
 
 `--json` prints one JSON object on stdout (logs on stderr). `--dry-run` on `launch`/`cleanup` prints the planned action and does not start or kill anything.
 

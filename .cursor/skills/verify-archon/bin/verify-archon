@@ -6,39 +6,50 @@ set -euo pipefail
 USAGE='Usage: verify-archon [--json] [--dry-run] [--help] <command> [args]
 
 Commands:
-  launch [--port N] [--home DIR]   Start a local bun server (isolated ARCHON_HOME)
-  doctor                           Read-only: is this instance worth driving?
-  drive <feature>                  Drive one mapped feature and capture evidence
-  prove [feature]                  launch → doctor → drive → cleanup (keeps evidence)
-  cli -- <archon-args>             bun run cli with the verification environment
-  http [METHOD] <path> [--body J]  curl the instance under doctor
-  evidence                         Print the evidence directory for this run
-  cleanup [--keep-home]            Stop what launch started; never deletes evidence
-  status                           Show recorded instance state
-  features                         List feature-map ids the helper can drive
-  help [command]                   This message, or help for one command
+  launch [--port N] [--home DIR] [--with-web]
+                               Start a local bun API server (isolated ARCHON_HOME).
+                               --with-web also starts Vite for /console.
+  doctor                       Read-only: is this instance worth driving?
+  drive <feature>              Drive one mapped feature and capture evidence
+  prove [feature]              launch → doctor → drive → cleanup (keeps evidence)
+  cli -- <archon-args>         bun run cli with the verification environment
+  http [METHOD] <path> [--body J]
+                               curl the API instance under doctor
+  evidence                     Print the evidence directory for this run
+  cleanup [--keep-home]        Stop what launch started; never deletes evidence
+  status                       Show recorded instance state
+  features                     List feature-map ids the helper can drive
+  help [command]               This message, or help for one command
 
 Global flags:
   --json       Machine-readable JSON on stdout; human logs on stderr
   --dry-run    Print planned launch/cleanup actions without starting or killing
+  --with-web   Also start bun Vite (packages/web) proxied at the API PORT
   -h, --help   Show help
 
 Environment:
   ARCHON_VERIFY_TARGET     local (default) | mini
   ARCHON_VERIFY_BASE_URL   Required for mini; default local http://127.0.0.1:$PORT
   ARCHON_VERIFY_PORT       Default 13090 (avoids Mini/laptop 3090)
+  ARCHON_VERIFY_WEB_PORT   Default 15173 (avoids laptop Vite 5173)
   ARCHON_VERIFY_HOME       Isolated ARCHON_HOME (default under /tmp/archon-verify)
   ARCHON_VERIFY_STATE_DIR  State file directory (default /tmp/archon-verify)
   ARCHON_VERIFY_EVIDENCE   Evidence root (default <repo>/.cursor/skills/verify-archon/evidence)
 
 Default local launch is offline: SQLite, loopback, no platform adapters, no Mini.
+CLI/HTTP proofs do not need Vite. UI proofs require launch --with-web.
 '
 
-CMD_HELP_LAUNCH='Usage: verify-archon launch [--port N] [--home DIR] [--json] [--dry-run]
+CMD_HELP_LAUNCH='Usage: verify-archon launch [--port N] [--home DIR] [--with-web] [--json] [--dry-run]
 
 Start bun run dev:server with HOST=127.0.0.1, empty DATABASE_URL (SQLite),
 ARCHON_TELEMETRY_DISABLED=1, and an isolated ARCHON_HOME. Waits until
 GET /api/health returns status "ok".
+
+--with-web also starts `bun --cwd packages/web exec vite --host 127.0.0.1
+--port 15173 --strictPort` with PORT=<api> so Vite proxies /api to the
+isolated server. Ready when GET <webUrl>/console returns the Archon SPA
+shell (title Archon, #root). Required for drive web-console.
 
 Refuses to launch when ARCHON_VERIFY_TARGET=mini (use doctor against the
 remote URL instead). --dry-run prints the command and env without spawning.
@@ -50,6 +61,10 @@ Read-only health of the instance recorded by launch (or Mini base URL).
 Requires: live PID (local), port ownership, GET /api/health status=ok,
 and isolated ARCHON_HOME. Also records `archon doctor` but does not fail
 the instance check when only AI binaries are missing.
+
+When launch --with-web recorded webUrl, also requires Vite listening and
+GET <webUrl>/console to be the Archon SPA shell (title + #root). API-only
+launches skip those checks so prove discover-workflows stays Vite-free.
 '
 
 CMD_HELP_DRIVE='Usage: verify-archon drive <feature> [--json]
@@ -59,18 +74,24 @@ Features: diagnose-install | discover-workflows | run-deterministic-workflow
 
 Runs the mapped recipe, writes evidence under evidence/runs/<run-id>/,
 and exits non-zero if an observable assertion fails.
+
+web-console opens Playwright (system Chrome) against the Vite origin,
+asserts visible DOM (rail, runs empty state, Settings heading), and
+writes screenshots + video. Requires launch --with-web. HTTP-only is
+not a passing web-console proof.
 '
 
 CMD_HELP_PROVE='Usage: verify-archon prove [feature] [--json]
 
 Full generator loop: launch → doctor → drive one feature → cleanup.
 Cleanup does not delete evidence. Default feature: discover-workflows.
+prove web-console implies --with-web (API + Vite).
 '
 
 CMD_HELP_CLEANUP='Usage: verify-archon cleanup [--dry-run] [--json] [--keep-home]
 
-SIGTERM the PID recorded at launch (then the recorded listener PID if it
-still owns HOST:PORT). Removes isolated ARCHON_HOME unless --keep-home.
+SIGTERM the PIDs recorded at launch (API spawn/listener, and Vite if
+--with-web). Removes isolated ARCHON_HOME unless --keep-home.
 Never deletes evidence. Never pkills by process name. No-op for Mini.
 '
 
@@ -89,8 +110,10 @@ DATABASE_URL, and ARCHON_TELEMETRY_DISABLED matching the launched instance.
 json_mode=0
 dry_run=0
 keep_home=0
+with_web=0
 port_override=''
 home_override=''
+default_web_port=${ARCHON_VERIFY_WEB_PORT:-15173}
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -315,6 +338,78 @@ wait_health() {
   return 1
 }
 
+wait_vite() {
+  local url=$1
+  local tries=60
+  local i body
+  for ((i = 1; i <= tries; i++)); do
+    if body=$(curl -sS --max-time 2 "$url/console" 2>/dev/null); then
+      if [[ "$body" == *'<title>Archon</title>'* && "$body" == *'id="root"'* ]]; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# Start packages/web Vite on ARCHON_VERIFY_WEB_PORT, proxying /api to the
+# isolated API PORT (vite.config.ts reads process.env.PORT via loadEnv '').
+start_vite() {
+  local api_port web_port run_id ev_dir
+  api_port=$(state_get port)
+  web_port=$default_web_port
+  run_id=$(state_get runId)
+  ev_dir=$(state_get evidenceDir)
+  [[ -n "$api_port" && -n "$run_id" ]] || die "start_vite needs launch state (port, runId)"
+
+  local existing recorded
+  existing=$(listener_pid "$web_port")
+  recorded=$(state_get webListenPid)
+  if [[ -n "$existing" ]]; then
+    if [[ -n "$recorded" && "$existing" == "$recorded" ]]; then
+      log "reusing Vite listener PID $existing on port $web_port"
+      return 0
+    fi
+    die "web port $web_port already in use by PID $existing (not this verification instance)"
+  fi
+
+  command -v bun >/dev/null || die "bun not on PATH"
+  local web_log=$state_dir/$run_id/vite.log
+  mkdir -p "$(dirname "$web_log")" "${ev_dir:-/tmp}"
+  (
+    cd "$repo_root"
+    export PORT=$api_port
+    export HOST=127.0.0.1
+    bun --cwd packages/web exec vite --host 127.0.0.1 --port "$web_port" --strictPort
+  ) >"$web_log" 2>&1 &
+  local web_spawn=$!
+  sleep 0.5
+  if ! pid_alive "$web_spawn"; then
+    die "vite process $web_spawn exited immediately; see $web_log"
+  fi
+  if ! wait_vite "http://127.0.0.1:$web_port"; then
+    die "vite did not serve /console on port $web_port; see $web_log"
+  fi
+  local web_listen
+  web_listen=$(listener_pid "$web_port")
+  local body
+  body=$(load_state | jq \
+    --arg webUrl "http://127.0.0.1:$web_port" \
+    --arg webPort "$web_port" \
+    --arg webSpawnPid "$web_spawn" \
+    --arg webListenPid "${web_listen:-}" \
+    --arg webLogFile "$web_log" \
+    '. + {webUrl:$webUrl, webPort:($webPort|tonumber),
+      webSpawnPid:($webSpawnPid|tonumber),
+      webListenPid:(if $webListenPid=="" then null else ($webListenPid|tonumber) end),
+      webLogFile:$webLogFile}')
+  save_state "$body"
+  if [[ -n "$ev_dir" ]]; then
+    cp "$web_log" "$ev_dir/vite.log" 2>/dev/null || true
+  fi
+}
+
 pid_alive() {
   local pid=$1
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
@@ -355,10 +450,14 @@ cmd_launch() {
   if [[ "$dry_run" -eq 1 ]]; then
     if [[ "$json_mode" -eq 1 ]]; then
       emit_json --arg port "$port" --arg home "$home_dir" --arg cmd "bun run dev:server" \
-        '{ok:true, dryRun:true, port:$port, archonHome:$home, command:$cmd}'
+        --argjson withWeb "$with_web" --arg webPort "$default_web_port" \
+        '{ok:true, dryRun:true, port:$port, archonHome:$home, command:$cmd, withWeb:($withWeb==1), webPort:$webPort}'
     else
       log "dry-run launch PORT=$port HOST=127.0.0.1 ARCHON_HOME=$home_dir"
       log "would run: bun run dev:server (cwd=$repo_root)"
+      if [[ "$with_web" -eq 1 ]]; then
+        log "would run: PORT=$port bun --cwd packages/web exec vite --host 127.0.0.1 --port $default_web_port --strictPort"
+      fi
     fi
     return 0
   fi
@@ -422,10 +521,17 @@ cmd_launch() {
     save_state "$body"
   fi
 
+  if [[ "$with_web" -eq 1 ]]; then
+    start_vite
+  fi
+
   if [[ "$json_mode" -eq 1 ]]; then
     load_state | jq --argjson ok true '. + {ok:$ok}'
   else
     log "launched $(state_get baseUrl) ARCHON_HOME=$(state_get archonHome)"
+    if [[ -n "$(state_get webUrl)" ]]; then
+      log "web $(state_get webUrl) (Vite proxy → API $(state_get port))"
+    fi
     log "evidence $(state_get evidenceDir)"
   fi
 }
@@ -536,6 +642,46 @@ cmd_doctor() {
     add_check productDoctor pass "exit $doc_ec (AI binary fails expected offline)"
   else
     add_check productDoctor skip "cli doctor not run"
+  fi
+
+  # Vite is optional. CLI/HTTP proofs never start it. Fail only when launch
+  # recorded a webUrl (prove web-console / launch --with-web).
+  local web_url web_port web_spawn web_listen
+  web_url=$(state_get webUrl)
+  web_port=$(state_get webPort)
+  web_spawn=$(state_get webSpawnPid)
+  web_listen=$(state_get webListenPid)
+  if [[ -z "$web_url" ]]; then
+    add_check vite skip "no webUrl (API-only launch; required for web-console)"
+  else
+    if [[ -n "$web_spawn" ]]; then
+      if pid_alive "$web_spawn"; then
+        add_check viteSpawn pass "PID $web_spawn alive"
+      else
+        add_check viteSpawn fail "PID $web_spawn not running"
+      fi
+    fi
+    local web_owner
+    web_owner=$(listener_pid "$web_port")
+    if [[ -z "$web_owner" ]]; then
+      add_check viteListener fail "nothing listening on $web_port"
+    elif [[ -n "$web_listen" && "$web_owner" != "$web_listen" && "$web_owner" != "$web_spawn" ]]; then
+      add_check viteListener fail "port $web_port owned by $web_owner, expected $web_listen"
+    else
+      add_check viteListener pass "PID $web_owner owns $web_port"
+    fi
+    local html
+    set +e
+    html=$(curl -sS --max-time 5 "$web_url/console" 2>/dev/null)
+    local html_ec=$?
+    set -e
+    if [[ $html_ec -ne 0 ]]; then
+      add_check viteConsole fail "curl failed ($html_ec) for $web_url/console"
+    elif [[ "$html" == *'<title>Archon</title>'* && "$html" == *'id="root"'* ]]; then
+      add_check viteConsole pass "$web_url/console is the Archon SPA shell"
+    else
+      add_check viteConsole fail "$web_url/console is not the Archon SPA (title/root missing)"
+    fi
   fi
 
   local ok=true
@@ -730,14 +876,19 @@ drive_inspect_run() {
 }
 
 drive_web_console() {
-  local ev
+  local ev web_url harness
   ev=$(evidence_dir)
+  web_url=$(state_get webUrl)
+  [[ -n "$web_url" ]] || die "web-console requires launch --with-web (no webUrl in state)"
+
   local raw code payload
   raw=$(http_raw GET /api/auth/status)
   code=$(printf '%s' "$raw" | tail -n 1)
   payload=$(printf '%s' "$raw" | sed '$d')
   printf '%s\n' "$payload" >"$ev/auth-status.http.json"
   [[ "$code" == "200" ]] || die "GET /api/auth/status HTTP $code"
+  assert_jq "$ev/auth-status.http.json" '.enabled == false' \
+    "solo verification expects GET /api/auth/status enabled=false (login would block the console)"
   raw=$(http_raw GET /api/health)
   payload=$(printf '%s' "$raw" | sed '$d')
   printf '%s\n' "$payload" >"$ev/health.http.json"
@@ -747,8 +898,36 @@ drive_web_console() {
   raw=$(http_raw GET /api/codebases)
   payload=$(printf '%s' "$raw" | sed '$d')
   printf '%s\n' "$payload" >"$ev/codebases.http.json"
-  jq -n --arg feature web-console --arg evidenceDir "$ev" \
-    '{feature:$feature, evidenceDir:$evidenceDir, ok:true}' >"$ev/summary.json"
+
+  harness=$skill_dir/harness
+  if [[ ! -d "$harness/node_modules/playwright" ]]; then
+    log "installing Playwright harness deps in $harness"
+    (cd "$harness" && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 bun install) \
+      || die "bun install failed in $harness"
+  fi
+  command -v google-chrome >/dev/null || command -v google-chrome-stable >/dev/null \
+    || die "system Chrome not found (harness uses Playwright channel: chrome)"
+
+  export ARCHON_VERIFY_WEB_URL=$web_url
+  export ARCHON_VERIFY_EVIDENCE_DIR=$ev
+  (cd "$harness" && bun run drive-console) || die "Playwright drive-console failed"
+
+  [[ -f "$ev/console-runs.png" ]] || die "missing screenshot console-runs.png"
+  [[ -f "$ev/console-runs-all.png" ]] || die "missing screenshot console-runs-all.png"
+  [[ -f "$ev/console-settings.png" ]] || die "missing screenshot console-settings.png"
+  [[ -f "$ev/ui-assertions.json" ]] || die "missing ui-assertions.json"
+  assert_jq "$ev/ui-assertions.json" '.ok == true' "ui-assertions.ok is not true"
+  assert_jq "$ev/ui-assertions.json" \
+    '[.assertions[] | select(.id=="console-rail" and .ok==true)] | length == 1' \
+    "rail assertion missing"
+  assert_jq "$ev/ui-assertions.json" \
+    '[.assertions[] | select(.id=="console-settings" and .ok==true)] | length == 1' \
+    "settings route assertion missing"
+
+  jq -n --arg feature web-console --arg evidenceDir "$ev" --arg webUrl "$web_url" \
+    --slurpfile ui "$ev/ui-assertions.json" \
+    '{feature:$feature, evidenceDir:$evidenceDir, webUrl:$webUrl, ok:true, ui:$ui[0]}' \
+    >"$ev/summary.json"
 }
 
 cmd_drive() {
@@ -784,19 +963,27 @@ cmd_cleanup() {
     fi
     return 0
   fi
-  local spawn listen home ev port
+  local spawn listen home ev port web_spawn web_listen web_port
   spawn=$(state_get spawnPid)
   listen=$(state_get listenPid)
   home=$(state_get archonHome)
   ev=$(state_get evidenceDir)
   port=$(state_get port)
+  web_spawn=$(state_get webSpawnPid)
+  web_listen=$(state_get webListenPid)
+  web_port=$(state_get webPort)
   if [[ "$dry_run" -eq 1 ]]; then
     if [[ "$json_mode" -eq 1 ]]; then
-      emit_json --arg spawn "$spawn" --arg listen "$listen" --arg home "$home" --arg ev "$ev" \
-        '{ok:true, dryRun:true, wouldSignalPids:[($spawn|tonumber? // empty), ($listen|tonumber? // empty)] | map(select(. != null)),
+      emit_json --arg spawn "$spawn" --arg listen "$listen" --arg webSpawn "$web_spawn" \
+        --arg webListen "$web_listen" --arg home "$home" --arg ev "$ev" \
+        '{ok:true, dryRun:true,
+          wouldSignalPids:[$spawn,$listen,$webSpawn,$webListen] | map(select(. != "" and . != "null")) | map(tonumber),
           wouldRemoveHome:$home, wouldPreserveEvidence:$ev}'
     else
-      log "dry-run cleanup would signal PID $spawn then $listen"
+      log "dry-run cleanup would signal API PID $spawn then $listen"
+      if [[ -n "$web_spawn" ]]; then
+        log "dry-run cleanup would signal Vite PID $web_spawn then $web_listen"
+      fi
       log "would remove ARCHON_HOME $home"
       log "would keep evidence $ev"
     fi
@@ -819,6 +1006,14 @@ cmd_cleanup() {
       fi
     fi
   }
+  stop_pid "$web_spawn"
+  if [[ -n "$web_port" ]]; then
+    local web_owner
+    web_owner=$(listener_pid "$web_port")
+    if [[ -n "$web_owner" && ( "$web_owner" == "$web_listen" || "$web_owner" == "$web_spawn" ) ]]; then
+      stop_pid "$web_owner"
+    fi
+  fi
   stop_pid "$spawn"
   if [[ -n "$port" ]]; then
     local owner
@@ -849,14 +1044,17 @@ cmd_cleanup() {
   fi
   # Drop instance pointers but keep runId/evidenceDir so `evidence` still works
   if [[ -f "$state_file" ]]; then
-    load_state | jq '.spawnPid=null | .listenPid=null | .cleanedAt=now
-      | .cleanedAt|=(strftime("%Y-%m-%dT%H:%M:%SZ"))' >"$state_file.tmp"
+    load_state | jq '.spawnPid=null | .listenPid=null | .webSpawnPid=null | .webListenPid=null
+      | .cleanedAt=now | .cleanedAt|=(strftime("%Y-%m-%dT%H:%M:%SZ"))' >"$state_file.tmp"
     mv "$state_file.tmp" "$state_file"
   fi
 }
 
 cmd_prove() {
   local feature=${1:-discover-workflows}
+  if [[ "$feature" == "web-console" ]]; then
+    with_web=1
+  fi
   cmd_launch
   cmd_doctor >/dev/null
   cmd_drive "$feature"
@@ -866,26 +1064,37 @@ cmd_prove() {
   if [[ ! -d "$ev" ]]; then
     die "evidence missing after cleanup: $ev"
   fi
-  mkdir -p "$evidence_root/last-proof"
-  rm -rf "$evidence_root/last-proof"
-  mkdir -p "$evidence_root/last-proof"
+  # Per-feature last-proof so discover-workflows and web-console coexist.
+  local last_dir=$evidence_root/last-proof/$feature
+  rm -rf "$last_dir"
+  mkdir -p "$last_dir"
   # Commit-sized subset: skip full workflow-definition dumps (they are megabytes).
   local f
   for f in summary.json launch-health.http.json doctor-health.http.json doctor.cli.txt \
     doctor.cli.exit validate-e2e-deterministic.cli.json codebase-register.meta.json \
     workflow-list.cli.names.json workflows-bundled.http.names.json \
-    workflows-project.http.names.json; do
+    workflows-project.http.names.json ui-assertions.json \
+    console-runs.png console-runs-all.png console-settings.png; do
     if [[ -f "$ev/$f" ]]; then
-      cp -a "$ev/$f" "$evidence_root/last-proof/$f"
+      cp -a "$ev/$f" "$last_dir/$f"
     fi
   done
+  if [[ -d "$ev/video" ]]; then
+    mkdir -p "$last_dir/video"
+    local vid
+    for vid in "$ev"/video/*.{webm,mp4}; do
+      if [[ -f "$vid" ]]; then
+        cp -a "$vid" "$last_dir/video/"
+      fi
+    done
+  fi
   if [[ "$json_mode" -eq 1 ]]; then
-    emit_json --arg feature "$feature" --arg evidenceDir "$ev" --arg lastProof "$evidence_root/last-proof" \
+    emit_json --arg feature "$feature" --arg evidenceDir "$ev" --arg lastProof "$last_dir" \
       '{ok:true, feature:$feature, evidenceDir:$evidenceDir, lastProof:$lastProof}'
   else
     log "proved $feature"
     log "evidence $ev"
-    log "copied to $evidence_root/last-proof"
+    log "copied to $last_dir"
   fi
 }
 
@@ -904,6 +1113,10 @@ while [[ $# -gt 0 ]]; do
       home_override=${2:-}
       shift 2 || die "--home needs a value"
       ;;
+    --with-web)
+      with_web=1
+      shift
+      ;;
     -h|--help) parse_help_command "${2:-}"; exit 0 ;;
     --) shift; args+=("$@"); break ;;
     -*)
@@ -920,7 +1133,25 @@ set -- "${args[@]:1}"
 
 case "$command" in
   help) parse_help_command "${1:-}"; exit 0 ;;
-  launch) cmd_launch ;;
+  launch)
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --with-web) with_web=1; shift ;;
+        --json) json_mode=1; shift ;;
+        --dry-run) dry_run=1; shift ;;
+        --port)
+          port_override=${2:-}
+          shift 2 || die "--port needs a value"
+          ;;
+        --home)
+          home_override=${2:-}
+          shift 2 || die "--home needs a value"
+          ;;
+        *) die "unknown launch args: $1" ;;
+      esac
+    done
+    cmd_launch
+    ;;
   doctor) cmd_doctor ;;
   drive) cmd_drive "${1:-}" ;;
   prove) cmd_prove "${1:-}" ;;

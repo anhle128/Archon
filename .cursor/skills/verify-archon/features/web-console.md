@@ -1,41 +1,78 @@
 # Open the web console
 
-Open the web console lets a user reach the default Archon UI at `/console`, inspect runs and settings, and fall back to the legacy pages under `/legacy`. This is a secondary surface; Oceanlabs operators primarily drive CLI + server workflows.
+Open the web console lets a user reach the default Archon UI at `/console`, inspect runs and settings, and fall back to the legacy pages under `/legacy`. This is a secondary surface; operators primarily drive CLI + server workflows. A passing proof is a **visible** console state, not an HTTP status code.
 
 ## Sub-features
 
 - `console-root` redirects `/` to `/console`.
 - `console-runs` shows the runs index at `/console` and `/console/p/:projectId`.
+- `console-settings` opens `/console/settings`.
 - `console-run-detail` opens `/console/p/:projectId/r/:runId`.
 - `legacy-chat` remains at `/legacy/chat` for the deprecation window.
-- `api-behind-ui` is the JSON the console actually loads (`/api/health`, `/api/workflows`, `/api/workflows/runs`, `/api/codebases`).
+- `api-behind-ui` is the JSON the console actually loads (`/api/health`, `/api/auth/status`, `/api/workflows`, `/api/workflows/runs`, `/api/codebases`).
 
 ## How to get to it (user POV)
 
-- Run `bun run dev` (server 3090 + Vite 5173) and open `http://127.0.0.1:5173/console`.
-- Run `bun run dev:server` alone and, if `packages/web/dist` exists, open `http://127.0.0.1:<port>/console`.
+- Verification (this skill): `verify-archon launch --with-web` then open `http://127.0.0.1:15173/console`.
+- Laptop/dev: `bun run dev` (server 3090 + Vite 5173) and open `http://127.0.0.1:5173/console`.
+- Vite only: `PORT=<api-port> bun run dev:web` (default Vite 5173; proxies `/api` to `PORT` or 3090).
 - On Mini, open the Tailscale origin (often port 3090) at `/console`.
-- Use `bun run dev:web` when only the Vite app should start; it proxies `/api` to `PORT` (default 3090).
+- API-only `bun run dev:server` does **not** serve the SPA unless `packages/web/dist` exists. That is not a UI proof.
 
 ## Driving it with verify-archon
 
 Preconditions:
 
-- `verify-archon doctor` passed for the API.
-- Solo SQLite: `GET /api/auth/status` reports auth disabled; `SessionGate` does not require login.
-- HTML for `/console` exists only if `packages/web/dist` was built or Vite is running on 5173. API proof does not require that.
+- Isolated local target (not Mini). Solo SQLite: do not set `BETTER_AUTH_SECRET` or `DATABASE_URL`.
+- `GET /api/auth/status` reports `{ "enabled": false }`. `SessionGate` then passthroughs after a brief loader — no login.
+- Vite is running with `PORT` equal to the verification API port. `prove web-console` starts both.
 
-- **Auth posture.** Read the login gate. Run `verify-archon http /api/auth/status`. Status `200`. Local verification expects `enabled` false.
-- **Health the UI reads.** Run `verify-archon http /api/health`. Status `200`, `status` is `"ok"`.
-- **Catalog the UI reads.** Run `verify-archon http /api/workflows`. Status `200`.
-- **Projects the UI reads.** Run `verify-archon http /api/codebases`. Status `200` (array, possibly empty).
-- **Optional HTML.** If Vite is up, fetch `http://127.0.0.1:5173/console`. Status `200` and the document identifies the console. If only the API server is up and `web/dist` is missing, record `web_dist_not_found` and do not claim the UI rendered.
-- **Proof.** Evidence contains `auth-status.http.json`, `health.http.json`, and `workflows.http.json`. Screenshots are required only when a UI interaction (not an API read) is the thing under test.
+End-to-end (preferred):
+
+```bash
+.cursor/skills/verify-archon/bin/verify-archon prove web-console
+```
+
+That is `launch --with-web` → `doctor` → Playwright `drive web-console` → `cleanup` (keeps evidence; kills API + Vite + browser).
+
+Step-wise:
+
+```bash
+.cursor/skills/verify-archon/bin/verify-archon launch --with-web
+.cursor/skills/verify-archon/bin/verify-archon doctor --json
+.cursor/skills/verify-archon/bin/verify-archon drive web-console
+.cursor/skills/verify-archon/bin/verify-archon cleanup
+```
+
+Manual Vite equivalent if debugging the helper (repo root, API already on 13090):
+
+```bash
+PORT=13090 bun --cwd packages/web exec vite --host 127.0.0.1 --port 15173 --strictPort
+```
+
+Manual Playwright equivalent (after `bun install` in `.cursor/skills/verify-archon/harness`):
+
+```bash
+ARCHON_VERIFY_WEB_URL=http://127.0.0.1:15173 \
+ARCHON_VERIFY_EVIDENCE_DIR=.cursor/skills/verify-archon/evidence/runs/<id> \
+bun --cwd .cursor/skills/verify-archon/harness run drive-console
+```
+
+- **Auth posture.** `verify-archon http /api/auth/status`. Status `200`, `enabled` is `false`. If `enabled` is true, stop — this skill does not drive OAuth.
+- **Health the UI reads.** `verify-archon http /api/health`. Status `200`, `status` is `"ok"`.
+- **Open `/console` in the browser** (Playwright, viewport 1440×900 so `ProjectRail` is not `hidden lg:block`).
+- **Rail.** `getByRole('navigation', { name: 'Projects' })` is visible. Inside it: exact text `Archon`, exact text `console`, `getByRole('button', { name: 'All projects' })`, `getByRole('button', { name: 'Add project' })`.
+- **Runs index.** `getByRole('heading', { name: 'All projects', level: 1 })` is visible. Copy `Every run, across every project.` and `Pick a project on the left to start a run.` is visible. Default filter is Running → `Nothing running right now.` Screenshot: `console-runs.png`.
+- **All filter.** Click `getByRole('button', { name: /^All \d+$/ })` (not the rail "All projects" button). `No runs yet.` is visible. Screenshot: `console-runs-all.png`.
+- **Settings.** Click `getByRole('link', { name: 'Settings' })`. URL is `/console/settings`. `getByRole('heading', { name: 'Settings', level: 1 })` is visible. Screenshot: `console-settings.png`.
+- **Proof.** Evidence contains those three PNGs, `ui-assertions.json` with `"ok": true`, and preferably `video/*.webm`. HTTP JSON for auth/health/workflows is supporting context only. **HTTP-only is not a pass.**
 
 ## Gotchas
 
-- Vite proxies `/api` to `env.PORT ?? 3090`. A verification server on 13090 is invisible to `bun run dev:web` unless `PORT=13090` is set for Vite too.
+- Vite proxies `/api` to `env.PORT ?? 3090`. A verification server on 13090 is invisible to Vite unless `PORT=13090` is set for the Vite process. `launch --with-web` does this.
+- Verification Vite listens on **15173** (`ARCHON_VERIFY_WEB_PORT`) so it does not collide with a laptop `5173`.
 - `archon serve` is binary-only. Source launches are `bun run dev` / `dev:server` / `dev:web`.
-- Do not invent Playwright coverage. Prefer HTTP + CLI. Use a browser only when the bug is visual.
-- Better Auth (`BETTER_AUTH_SECRET` + Postgres) gates `/api/*` with 401. Local verification must not enable that.
+- Selectors come from `packages/web/src/experiments/console/` (`ProjectRail`, `RunsPage`, `FilterChips`, `SettingsPage`). Do not invent `data-testid`s or click coordinates.
+- The All filter chip's accessible name is `All <count>` (e.g. `All 0`). A name of `All` also matches the rail "All projects" button — use `/^All \d+$/`.
+- Better Auth (`BETTER_AUTH_SECRET` + Postgres) gates `/api/*` with 401 and redirects the SPA to `/login`. Local verification must not enable that.
 - Mini over Tailscale may be unreachable from a cloud VM. Report the failed `curl` and skip; do not treat that as a product bug in this checkout.
