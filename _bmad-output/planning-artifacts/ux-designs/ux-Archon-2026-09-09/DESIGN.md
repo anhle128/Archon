@@ -466,6 +466,7 @@ Same height and anatomy as any other row, so it does not interrupt the scan.
 **Subtask card** (`{components.subtask-card}`) — `surface-elevated`, 1px `border`, radius `{rounded.md}`, `{spacing.subcard-pad}`, 5px top margin.
 Agent name in node-approval semibold, `·`, subtask name bold, `—` then prompt excerpt in text-secondary.
 Batch context, when present, is one text-secondary line above the first card.
+The card is itself a `<details>`, so it carries the same chevron as a tool row at `{components.chevron}` and the same 120ms rotation — closed it is the one line above, and open it adds the full prompt preformatted in a `{components.body-box}` inset within the card. Nesting a disclosure inside a disclosure is the reason the card reuses the row's chevron rather than inventing a second affordance.
 
 **Key-value list** (`{components.kv-list}`) — up to three rows, key in text-secondary at `{spacing.kv-key-w}`, value in text-primary; `{…}` and `[n]` are literal text.
 
