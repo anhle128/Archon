@@ -187,6 +187,25 @@ describe('workflow-node-messages persistence', () => {
     expect(full?.payload).toEqual({ text: 'two' });
   });
 
+  test('bounds a cursor page to its captured high-water mark', async () => {
+    for (const text of ['one', 'two', 'appended-after-snapshot']) {
+      await appendNodeMessage({
+        workflow_run_id: 'run-1',
+        node_id: 'snapshot',
+        kind: 'text',
+        payload: { text },
+      });
+    }
+
+    const page = await listNodeMessages('run-1', 'snapshot', {
+      afterSeq: 0,
+      throughSeq: 2,
+      limit: 100,
+    });
+
+    expect(page.map(row => row.seq)).toEqual([1, 2]);
+  });
+
   test('allows one row above the public 500 maximum so cursor hasMore can be true', async () => {
     for (let seq = 1; seq <= 501; seq += 1) {
       await appendNodeMessage({

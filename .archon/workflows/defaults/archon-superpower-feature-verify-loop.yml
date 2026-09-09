@@ -270,7 +270,7 @@ nodes:
       while IFS= read -r raw || [ -n "$raw" ]; do
         id=$(printf '%s' "$raw" | tr -d '\r' | awk '{print $1}')
         case "$id" in
-          discover-workflows|web-console|diagnose-install|run-deterministic-workflow|inspect-run)
+          discover-workflows|web-console|diagnose-install|run-deterministic-workflow|inspect-run|hitl-run-room)
             if ! grep -qx "$id" "$IDS_FILE"; then
               printf '%s\n' "$id" >> "$IDS_FILE"
             fi
@@ -332,10 +332,10 @@ nodes:
         printf '%s\n' 'discover-workflows' > "$IDS_FILE"
       fi
 
-      if grep -qx 'web-console' "$IDS_FILE"; then
+      if grep -Eqx 'web-console|hitl-run-room' "$IDS_FILE"; then
         if [ ! -f "$HARNESS/package.json" ]; then
-          write_fail "web-console selected but $HARNESS/package.json is missing"
-          echo "ERROR: Playwright harness package.json missing for web-console." >&2
+          write_fail "UI feature selected but $HARNESS/package.json is missing"
+          echo "ERROR: Playwright harness package.json missing for web-console/hitl-run-room." >&2
           exit 1
         fi
         echo "Installing verify-archon Playwright harness deps ($HARNESS)." >&2

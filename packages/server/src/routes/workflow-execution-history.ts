@@ -121,8 +121,16 @@ function closeExecution(
     runStartedMs !== undefined && Number.isFinite(startedMs) && startedMs >= runStartedMs
       ? startedMs - runStartedMs
       : open.start_offset_ms;
+  const attemptId = asString(data.attempt_id);
+  const retryEpoch = asEpoch(data.retry_epoch);
+  const loopAncestry = asLoopAncestry(data.loop_ancestry);
+  const routeActivationSeq = asEpoch(data.route_activation_seq);
   return nodeExecutionSchema.parse({
     ...open,
+    ...(attemptId !== undefined ? { attempt_id: attemptId } : {}),
+    ...(retryEpoch !== undefined ? { retry_epoch: retryEpoch } : {}),
+    ...(loopAncestry !== undefined ? { loop_ancestry: loopAncestry } : {}),
+    ...(routeActivationSeq !== undefined ? { route_activation_seq: routeActivationSeq } : {}),
     status: statusFromEvent(row.event_type, data),
     ended_at: endedAt,
     ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
@@ -238,9 +246,24 @@ export function projectWorkflowExecutionHistory(
   for (const pending of awaiting) {
     const scope = pending.execution_scope;
     if (scope?.occurrence_id !== undefined) {
-      const existing = completed.find(item => item.occurrence_id === scope.occurrence_id);
+      const matchingAttempt = completed.find(
+        item => item.occurrence_id === scope.occurrence_id && item.attempt_id === scope.attempt_id
+      );
+      const existing =
+        matchingAttempt ?? completed.find(item => item.occurrence_id === scope.occurrence_id);
       if (existing !== undefined) {
         existing.status = 'awaiting';
+        existing.attempt_id = scope.attempt_id;
+        existing.retry_epoch = scope.retry_epoch;
+        existing.loop_ancestry = scope.loop_ancestry;
+        existing.route_activation_seq = scope.route_activation_seq;
+        if (matchingAttempt === undefined) {
+          delete existing.started_at;
+          delete existing.start_offset_ms;
+        }
+        delete existing.ended_at;
+        delete existing.duration_ms;
+        delete existing.error;
         continue;
       }
     }

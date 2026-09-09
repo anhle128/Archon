@@ -14,27 +14,26 @@ import { RunDetailHeader } from '../components/RunDetailHeader';
 import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
-import { ApprovalContext } from '../components/ApprovalContext';
-import { ApprovalPanel } from '../components/ApprovalPanel';
-import { ArtifactPanel } from '../components/ArtifactPanel';
 import { ConsoleInspectPane } from '../components/ConsoleInspectPane';
+import {
+  ConsoleReplyComposer,
+  type ReplyDestinationState,
+} from '../components/ConsoleReplyComposer';
 import { ConsoleAskChrome } from '../components/ask/ConsoleAskChrome';
 import {
   createAskAnswerController,
   type AskActionState,
   type AskActionStateByRequest,
 } from '../components/ask/ask-answer-controller';
-import { firstPendingAskAwaitingNodeId, isAskAwaitingRun } from '../components/ask/awaiting-chrome';
+import {
+  firstPendingAskAwaitingInteraction,
+  isAskAwaitingRun,
+} from '../components/ask/awaiting-chrome';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { buildConsoleLogEntries } from '../components/inspect/build-console-log-entries';
 import { buildLogRows } from '../components/inspect/build-log-rows';
-import {
-  readNodeSearchParam,
-  resolveInitialInspectSelection,
-  selectInspectNode,
-  type InspectSelection,
-} from '../components/inspect/console-inspect-selection';
-import { readApprovalContext } from '../components/inspect/read-approval-context';
+import { readNodeSearchParam } from '../components/inspect/console-inspect-selection';
+import type { AskDraftByRequest } from '../components/ask/parse-ask-envelope';
 import { synthesizeLogNodeStates } from '../components/inspect/synthesize-log-node-states';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useRunStreamSSE } from '../lib/sse';
@@ -42,6 +41,22 @@ import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import { runMessageConversationId, type Run, type RunEnvOverlay } from '../primitives/run';
+import type { ConversationSummary } from '../primitives/conversation';
+import {
+  applyRoomDeepLink,
+  askCardId,
+  chooseExecutionForInteraction,
+  chooseExecutionForNode,
+  closeRoom,
+  openRoom,
+  openExplicitRoom,
+  rememberRoomScroll,
+  resetRoomVisit,
+  roomOpenerId,
+  type RoomVisitState,
+} from '@/lib/execution-room-model';
+import { nodeMessageScopeKey } from '@/lib/node-message-pages';
+import { readRoomRatio, writeRoomRatio } from '@/lib/room-split-layout';
 import { foldNodeRuns } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
@@ -55,9 +70,8 @@ import type { AskAnswerBody, ArtifactFile, ConsoleRunDetail } from '../skills/ru
  *   - skill.listMessages() → conversation messages (assistant text, user input,
  *                            persisted tool calls in metadata)
  *
- * RunStream merges both into one timeline. Paused runs render the
- * ApprovalContext + ApprovalPanel at the bottom of the stream so the user can
- * answer the gate in place.
+ * RunStream merges both into one timeline. Approval controls render inside
+ * the exact execution section and the selected execution room.
  *
  * Updates flow through SSE (lib/sse.ts) with a 30s safety-net refetch
  * for runs that are still running/paused.
@@ -68,6 +82,22 @@ const TOGGLE_KEYS = {
   view: 'archon.console.detailView',
   node: 'archon.console.runNodeFilter',
 } as const;
+
+function focusAskCard(requestId: string): void {
+  let attempts = 0;
+  const focusAsk = (): void => {
+    const card = document.getElementById(askCardId(requestId, 'room'));
+    if (card !== null) {
+      card.focus();
+      if (document.activeElement === card) return;
+    }
+    if (attempts < 30) {
+      attempts += 1;
+      requestAnimationFrame(focusAsk);
+    }
+  };
+  requestAnimationFrame(focusAsk);
+}
 
 function readToggle(key: string, defaultOn: boolean): boolean {
   try {
@@ -120,16 +150,6 @@ function writeNodeFilter(v: string): void {
   }
 }
 
-function isKnownInspectNode(
-  nodeId: string,
-  nodeStates: ConsoleRunDetail['nodeStates'],
-  rows: ReturnType<typeof buildLogRows>
-): boolean {
-  return (
-    nodeStates.some(state => state.nodeId === nodeId) || rows.some(row => row.nodeId === nodeId)
-  );
-}
-
 /**
  * ENV chip/table gate for run detail. Malformed/legacy `metadata.envOverlay`
  * stays `null` on the Run primitive — never render false audit UI from hybrids.
@@ -144,8 +164,6 @@ export function RunDetailPage(): ReactElement {
   const navigate = useNavigate();
   const location = useLocation();
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const appliedRunIdRef = useRef<string | null>(null);
-  const prevSearchNodeRef = useRef<string | null>(null);
   const [showToolCalls, setShowToolCalls] = useState<boolean>(() =>
     readToggle(TOGGLE_KEYS.toolCalls, true)
   );
@@ -154,16 +172,19 @@ export function RunDetailPage(): ReactElement {
   );
   const [view, setView] = useState<DetailView>(() => readView());
   const [streamNodeFilter, setStreamNodeFilter] = useState<string>(() => readNodeFilter());
-  const [inspectSelection, setInspectSelection] = useState<InspectSelection>({
-    nodeId: null,
-    logRowId: null,
-  });
+  const [room, setRoom] = useState<RoomVisitState>(() => resetRoomVisit(runId ?? ''));
+  const [roomRatio, setRoomRatio] = useState(() =>
+    typeof window === 'undefined' ? 40 : readRoomRatio('console', window.localStorage)
+  );
+  const [askDrafts, setAskDrafts] = useState<AskDraftByRequest>({});
   const [askActions, setAskActions] = useState<{
     runId: string | undefined;
     states: AskActionStateByRequest;
   }>({ runId, states: {} });
   const actionStates = askActions.runId === runId ? askActions.states : {};
   const selectedNodeIdRef = useRef<string | null>(null);
+  const roomOpenerToRestoreRef = useRef<string | null>(null);
+  const logScrollTopBeforeRoomRef = useRef<number | null>(null);
 
   // `Project | null` / `ConsoleRunDetail | null` rather than the `as unknown as T`
   // casts the original sentinel used — keeps the null path honest for
@@ -177,6 +198,13 @@ export function RunDetailPage(): ReactElement {
   const { data: detail, error: detailError } = useEntity<ConsoleRunDetail | null>(
     runId !== undefined ? K.run(runId) : 'noop:no-run-id',
     () => (runId !== undefined ? skill.getRun(runId) : Promise.resolve(null))
+  );
+
+  const parentPlatformId = detail?.parentPlatformId ?? null;
+  const parentConversation = useEntity<ConversationSummary | null>(
+    K.parentConversation(parentPlatformId),
+    () =>
+      parentPlatformId === null ? Promise.resolve(null) : skill.getConversation(parentPlatformId)
   );
 
   // Messages are tied to the run's conversation — and the /messages endpoint
@@ -242,17 +270,15 @@ export function RunDetailPage(): ReactElement {
   }, [detail]);
 
   const logRows = useMemo(
-    () => buildLogRows(inspectNodeStates, detail?.rawEvents ?? [], detail?.nodeExecutions),
+    () =>
+      buildLogRows(
+        inspectNodeStates,
+        detail?.rawEvents ?? [],
+        detail?.nodeExecutions,
+        detail?.run.startedAt
+      ),
     [inspectNodeStates, detail]
   );
-
-  const askAwaitingNodeId = useMemo(() => {
-    if (detail === undefined || detail === null) return null;
-    return firstPendingAskAwaitingNodeId({
-      pending: detail.pendingInteractions,
-      nodes: inspectNodeStates,
-    });
-  }, [detail, inspectNodeStates]);
 
   const logEntries = useMemo(
     () =>
@@ -286,30 +312,32 @@ export function RunDetailPage(): ReactElement {
   }, [detail, nodeOptions, streamNodeFilter]);
 
   useEffect(() => {
-    if (detail === undefined || detail === null || runId === undefined) return;
-    if (appliedRunIdRef.current === runId) return;
-    appliedRunIdRef.current = runId;
-    setInspectSelection(
-      resolveInitialInspectSelection({
-        requestedNodeId: readNodeSearchParam(location.search),
-        preferredNodeId: askAwaitingNodeId,
-        nodeStates: inspectNodeStates,
-        rows: logRows,
-        approvalNodeId: readApprovalContext(detail.approval)?.nodeId ?? null,
-      })
-    );
-  }, [detail, runId, inspectNodeStates, logRows, location.search, askAwaitingNodeId]);
+    if (runId === undefined) return;
+    setAskDrafts({});
+  }, [runId]);
 
   useEffect(() => {
-    const requested = readNodeSearchParam(location.search);
-    const previous = prevSearchNodeRef.current;
-    prevSearchNodeRef.current = requested;
-    if (appliedRunIdRef.current !== runId || runId === undefined) return;
-    if (requested === null || requested === previous) return;
-    if (requested === inspectSelection.nodeId) return;
-    if (!isKnownInspectNode(requested, inspectNodeStates, logRows)) return;
-    setInspectSelection({ nodeId: requested, logRowId: null });
-  }, [location.search, runId, inspectSelection.nodeId, inspectNodeStates, logRows]);
+    if (detail === undefined || detail === null || runId === undefined) return;
+    const queryNode = readNodeSearchParam(location.search);
+    setRoom(previous => {
+      const base = previous.runId === runId ? previous : resetRoomVisit(runId);
+      const next = applyRoomDeepLink(base, queryNode, logRows);
+      if (
+        next.selection !== null &&
+        next.selection.openerId === null &&
+        next.appliedDeepLinkNode !== null
+      ) {
+        return {
+          ...next,
+          selection: {
+            ...next.selection,
+            openerId: roomOpenerId('console', 'log', next.selection.rowId),
+          },
+        };
+      }
+      return next;
+    });
+  }, [detail, runId, logRows, location.search]);
 
   const replaceNodeSearch = useCallback(
     (nodeId: string | null): void => {
@@ -325,14 +353,38 @@ export function RunDetailPage(): ReactElement {
   );
 
   const onInspectSelect = useCallback(
-    (nodeId: string, rowId?: string): void => {
-      setInspectSelection(selectInspectNode(nodeId, rowId ?? null));
+    (
+      nodeId: string,
+      rowId?: string,
+      openerId: string | null = null,
+      rememberExplicit = rowId !== undefined
+    ): void => {
+      if (selectedNodeIdRef.current === null) {
+        logScrollTopBeforeRoomRef.current = scrollRef.current?.scrollTop ?? null;
+      }
+      setRoom(previous => {
+        const lastExplicit = previous.lastExplicitRowByNode[nodeId] ?? null;
+        const chosen =
+          rowId !== undefined
+            ? (logRows.find(row => row.id === rowId && row.nodeId === nodeId) ?? null)
+            : chooseExecutionForNode(logRows, nodeId, lastExplicit);
+        if (chosen === null) return previous;
+        const nextOpener =
+          openerId ??
+          (rowId !== undefined
+            ? roomOpenerId('console', 'log', rowId)
+            : roomOpenerId('console', 'graph', nodeId));
+        const selection = { nodeId, rowId: chosen.id, openerId: nextOpener };
+        return rememberExplicit
+          ? openExplicitRoom(previous, selection)
+          : openRoom(previous, selection);
+      });
       replaceNodeSearch(nodeId);
     },
-    [replaceNodeSearch]
+    [logRows, replaceNodeSearch]
   );
 
-  selectedNodeIdRef.current = inspectSelection.nodeId;
+  selectedNodeIdRef.current = room.selection?.nodeId ?? null;
 
   const setAskActionState = useCallback(
     (requestId: string, state: AskActionState): void => {
@@ -373,10 +425,41 @@ export function RunDetailPage(): ReactElement {
     [askController]
   );
 
+  useLayoutEffect(() => {
+    if (room.selection !== null) return;
+    const openerId = roomOpenerToRestoreRef.current;
+    const scrollTop = logScrollTopBeforeRoomRef.current;
+    if (openerId === null && scrollTop === null) return;
+    roomOpenerToRestoreRef.current = null;
+    logScrollTopBeforeRoomRef.current = null;
+    let restoreFrame: number | undefined;
+    const frame = requestAnimationFrame(() => {
+      restoreFrame = requestAnimationFrame(() => {
+        if (scrollTop !== null && scrollRef.current !== null) {
+          scrollRef.current.scrollTop = scrollTop;
+        }
+        if (openerId !== null) {
+          document.getElementById(openerId)?.focus({ preventScroll: true });
+        }
+      });
+    });
+    return (): void => {
+      cancelAnimationFrame(frame);
+      if (restoreFrame !== undefined) cancelAnimationFrame(restoreFrame);
+    };
+  }, [room.selection]);
+
   const onCloseRoom = useCallback((): void => {
-    setInspectSelection({ nodeId: null, logRowId: null });
-    replaceNodeSearch(null);
-  }, [replaceNodeSearch]);
+    roomOpenerToRestoreRef.current = room.selection?.openerId ?? null;
+    setRoom(closeRoom);
+  }, [room.selection?.openerId]);
+
+  const onRoomRatioChange = useCallback((ratio: number): void => {
+    setRoomRatio(ratio);
+    if (typeof window !== 'undefined') {
+      writeRoomRatio('console', ratio, window.localStorage);
+    }
+  }, []);
 
   // Auto-scroll to bottom on new content IF user is already near the bottom.
   const lastBottomRef = useRef(true);
@@ -482,6 +565,31 @@ export function RunDetailPage(): ReactElement {
     ]
   );
   useKeymap({ bindings });
+  const selectedNodeId = room.selection?.nodeId ?? null;
+  const selectedLogRowId = room.selection?.rowId ?? null;
+  const selectedRow = logRows.find(row => row.id === selectedLogRowId) ?? null;
+  const transcriptScopeKey =
+    selectedRow === null
+      ? 'run:none|node:none|sel:node:none'
+      : nodeMessageScopeKey(
+          runId ?? '',
+          selectedRow.nodeId,
+          selectedRow.selection.kind === 'occurrence'
+            ? {
+                kind: 'occurrence',
+                occurrenceId: selectedRow.selection.occurrenceId,
+                ...(selectedRow.selection.attemptId !== undefined
+                  ? { attemptId: selectedRow.selection.attemptId }
+                  : {}),
+              }
+            : { kind: 'node', rowId: selectedRow.id }
+        );
+  const onRoomScrollTopChange = useCallback(
+    (scrollTop: number): void => {
+      setRoom(previous => rememberRoomScroll(previous, transcriptScopeKey, scrollTop));
+    },
+    [transcriptScopeKey]
+  );
 
   if (projectId === undefined || runId === undefined) {
     return (
@@ -569,36 +677,45 @@ export function RunDetailPage(): ReactElement {
   const logFooter: ReactNode = (
     <div className="px-6 pb-4">
       <RunFinishedLine run={run} />
-      {run.status === 'paused' && run.approval !== null && run.approval !== undefined ? (
-        <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-warning" />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
-              Waiting for approval
-            </span>
-          </div>
-          <ApprovalContext run={run} />
-          <div className="mt-2">
-            <ApprovalPanel run={run} />
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 
   const projectCwd = project?.path;
-  const inspectView = view === 'graph' ? 'graph' : 'log';
-  const showInspectPane = view !== 'artifacts' && projectCwd !== undefined;
+
+  const replyState: ReplyDestinationState =
+    parentPlatformId === null
+      ? { kind: 'missing' }
+      : parentConversation.error !== undefined
+        ? { kind: 'error' }
+        : parentConversation.loading
+          ? { kind: 'loading' }
+          : parentConversation.data?.platformType === 'web'
+            ? { kind: 'ready', parentPlatformId }
+            : { kind: 'non_web' };
 
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
-      <section className="console-run-view flex h-full flex-col">
+      <section
+        className="console-run-view flex h-full flex-col"
+        data-ask-draft-count={String(Object.keys(askDrafts).length)}
+      >
         <RunDetailHeader
           run={run}
           projectId={projectId}
           projectName={project?.name ?? projectId}
           usage={detail.usage}
           askAwaiting={isAskAwaitingRun(run.status, detail.pendingInteractions)}
+          onAwaitingInput={(): void => {
+            const interaction = firstPendingAskAwaitingInteraction({
+              pending: detail.pendingInteractions,
+              nodes: inspectNodeStates,
+            });
+            if (interaction === null) return;
+            const row = chooseExecutionForInteraction(logRows, interaction);
+            if (row === null) return;
+            onInspectSelect(interaction.node_id, row.id, null, false);
+            focusAskCard(interaction.tool_use_id);
+          }}
         />
         <ConsoleAskChrome
           status={run.status}
@@ -608,22 +725,20 @@ export function RunDetailPage(): ReactElement {
           onRequestGraphView={(): void => {
             setViewPersist('graph');
           }}
-          onSelectAwaitingNode={(nodeId: string): void => {
-            onInspectSelect(nodeId);
+          onSelectAwaitingNode={(nodeId, interaction): void => {
+            const row = chooseExecutionForInteraction(logRows, interaction);
+            if (row === null) return;
+            onInspectSelect(nodeId, row.id, null, false);
+            focusAskCard(interaction.tool_use_id);
           }}
         />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {view === 'artifacts' ? (
+          {projectCwd !== undefined ? (
             <>
-              <div className="px-6">{toolbar}</div>
-              <ArtifactPanel runId={runId} />
-            </>
-          ) : showInspectPane && projectCwd !== undefined ? (
-            <>
-              {view === 'graph' ? <div className="px-6">{toolbar}</div> : null}
+              {view !== 'log' ? <div className="px-6">{toolbar}</div> : null}
               <ConsoleInspectPane
-                view={inspectView}
+                view={view}
                 run={run}
                 projectId={projectId}
                 projectCwd={projectCwd}
@@ -635,22 +750,40 @@ export function RunDetailPage(): ReactElement {
                 logEntries={logEntries}
                 usage={detail.usage}
                 streamNodeFilter={streamNodeFilter}
-                selectedNodeId={inspectSelection.nodeId}
-                selectedLogRowId={inspectSelection.logRowId}
+                selectedNodeId={selectedNodeId}
+                selectedLogRowId={selectedLogRowId}
                 showToolCalls={showToolCalls}
                 showSystem={showSystem}
                 logHeader={logHeader}
                 logFooter={logFooter}
                 logScrollRef={scrollRef}
-                onSelectNode={onInspectSelect}
+                onSelectNode={(nodeId: string, rowId?: string): void => {
+                  onInspectSelect(
+                    nodeId,
+                    rowId,
+                    rowId !== undefined
+                      ? roomOpenerId('console', 'log', rowId)
+                      : roomOpenerId('console', 'graph', nodeId)
+                  );
+                }}
                 onCloseRoom={onCloseRoom}
+                roomRatio={roomRatio}
+                onRoomRatioChange={onRoomRatioChange}
                 loadDefinition={skill.getWorkflowDagNodes}
-                loadMessages={skill.listNodeMessages}
+                loadMessages={skill.getNodeMessages}
+                loadMessage={skill.getNodeMessage}
                 pendingInteractions={detail.pendingInteractions}
                 viewerIsStarter={detail.viewerIsStarter}
                 starterDisplayName={detail.starterDisplayName}
                 actionStates={actionStates}
                 onSubmitAsk={submitAsk}
+                scopeKey={transcriptScopeKey}
+                initialScrollTop={room.scrollTopByScope[transcriptScopeKey]}
+                onScrollTopChange={onRoomScrollTopChange}
+                askDrafts={askDrafts}
+                onAskDraftChange={(requestId: string, draft): void => {
+                  setAskDrafts(previous => ({ ...previous, [requestId]: draft }));
+                }}
               />
             </>
           ) : (
@@ -661,6 +794,13 @@ export function RunDetailPage(): ReactElement {
           )}
         </div>
 
+        <ConsoleReplyComposer
+          state={replyState}
+          onSend={async (message: string): Promise<void> => {
+            if (replyState.kind !== 'ready') return;
+            await skill.sendMessage(replyState.parentPlatformId, message);
+          }}
+        />
         <RunActionBar run={run} />
       </section>
     </StreamContextProvider>

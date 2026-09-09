@@ -82,11 +82,12 @@ test('[P1] inspect-file room shows visible tool output matching the mockup card'
 }) => {
   const started = await archon.runHitlWorkflow();
   await openRunDetail(page, started.runId, HITL_INSPECT_NODE);
-  await expect(page.getByRole('region', { name: `${HITL_INSPECT_NODE} room` })).toBeVisible({
+  const room = page.getByRole('region', { name: `${HITL_INSPECT_NODE} room` });
+  await expect(room).toBeVisible({
     timeout: T.medium,
   });
-  await expect(page.getByText(HITL_TOOL_OUTPUT)).toBeVisible({ timeout: T.medium });
-  await expect(page.locator('.ptool', { hasText: HITL_TOOL_OUTPUT })).toBeVisible();
+  await expect(room.getByText(HITL_TOOL_OUTPUT).first()).toBeVisible({ timeout: T.medium });
+  await expect(room.locator('.ptool', { hasText: HITL_TOOL_OUTPUT }).first()).toBeVisible();
   await expect(page.locator('.rounded-full', { hasText: 'Read' })).toHaveCount(0);
 });
 
@@ -99,8 +100,9 @@ test('[P1] Legacy inspect-file room also shows the mockup tool card', async ({ p
     .getByRole('button', { name: new RegExp(HITL_INSPECT_NODE) })
     .first()
     .click();
-  await expect(page.getByText(HITL_TOOL_OUTPUT)).toBeVisible({ timeout: T.medium });
-  await expect(page.locator('.ptool', { hasText: HITL_TOOL_OUTPUT })).toBeVisible();
+  const room = page.getByRole('region', { name: `${HITL_INSPECT_NODE} room` });
+  await expect(room.getByText(HITL_TOOL_OUTPUT).first()).toBeVisible({ timeout: T.medium });
+  await expect(room.locator('.ptool', { hasText: HITL_TOOL_OUTPUT }).first()).toBeVisible();
   await expect(page.locator('.rounded-full', { hasText: 'Read' })).toHaveCount(0);
 });
 
@@ -170,16 +172,20 @@ test('[P1] Console Ask card submit continues only after explicit CLI resume', as
   }
 });
 
-test('[P1] CLI-origin composer cannot approve; Chat tab is unavailable without a web parent', async ({
+test('[P1] CLI-origin composer cannot approve; Chat tab stays visible without a web parent', async ({
   page,
   archon,
 }) => {
   const started = await archon.runHitlWorkflow();
   await openLegacyRunDetail(page, started.runId);
   await expect(page.getByText(/e2e-hitl-run/i).first()).toBeVisible({ timeout: T.medium });
-  await expect(page.getByRole('tab', { name: 'Chat' })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: 'Chat' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Source Control' })).toBeVisible();
-  await expect(page.getByRole('form', { name: 'Run conversation composer' })).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Chat' }).click();
+  await expect(page.getByRole('form', { name: 'Run conversation composer' })).toBeVisible();
+  await expect(
+    page.getByPlaceholder('This run has no parent conversation, so replies cannot be delivered.')
+  ).toBeVisible();
 
   const before = await getRunDetail(page, started.runId);
   expect(before.status).toBe('paused');

@@ -182,15 +182,11 @@ function ask(overrides: Partial<PendingInteraction> = {}): PendingInteraction {
   };
 }
 
-type IntervalCallback = () => void;
-
 describe('ConsoleNodeRoom', () => {
   let win: ReturnType<typeof installHappyDom>;
   let host: Element;
   let root: Root;
   let closed = 0;
-  let setIntervalSpy: { mockRestore: () => void; mock: { calls: unknown[][] } } | null = null;
-  let clearIntervalSpy: { mockRestore: () => void } | null = null;
 
   beforeEach(() => {
     closed = 0;
@@ -205,10 +201,6 @@ describe('ConsoleNodeRoom', () => {
     await act(async () => {
       root.unmount();
     });
-    setIntervalSpy?.mockRestore();
-    clearIntervalSpy?.mockRestore();
-    setIntervalSpy = null;
-    clearIntervalSpy = null;
     invalidate('run-node-messages');
     invalidate('console-node-room:idle');
     win.close();
@@ -252,6 +244,7 @@ describe('ConsoleNodeRoom', () => {
           closed += 1;
         },
         pendingInteractions: [],
+        ownsUnscopedInteractions: true,
         viewerIsStarter: true,
         starterDisplayName: 'Avery',
         actionStates: {},
@@ -290,13 +283,15 @@ describe('ConsoleNodeRoom', () => {
     expect(host.textContent).toContain('iteration_started');
     expect(host.textContent).toContain('iteration_failed');
     expect(host.textContent).toContain('waiting on you');
-    expect(host.textContent).toContain('×2');
+    expect(host.textContent).toContain('Iteration 2');
     expect(host.textContent).not.toContain('first');
     assertNoConversationComposer(host);
   });
 
   test('rekeys loadMessages when the selected agent node changes', async () => {
     const calls: [string, string][] = [];
+    const savedReview: number[] = [];
+    const savedPlan: number[] = [];
     const loadMessages = (runId: string, nodeId: string): Promise<WorkflowNodeMessagesResponse> => {
       calls.push([runId, nodeId]);
       if (nodeId === 'plan') return Promise.resolve({ messages: [...PLAN_MESSAGES] });
@@ -312,11 +307,17 @@ describe('ConsoleNodeRoom', () => {
         run: run({ id: 'run-switch' }),
         definitionNodes,
         loadMessages,
+        onScrollTopChange: (scrollTop: number): void => {
+          savedReview.push(scrollTop);
+        },
       });
     });
     await flushUntil('first agent', () => (host.textContent ?? '').includes('first'));
     expect(calls).toEqual([['run-switch', 'review']]);
 
+    const reviewScroll = host.querySelector('[data-testid="console-node-room-scroll"]');
+    if (!(reviewScroll instanceof HTMLElement)) throw new Error('missing review scroll host');
+    reviewScroll.scrollTop = 41;
     await act(async () => {
       renderRoom({
         run: run({ id: 'run-switch' }),
@@ -328,9 +329,14 @@ describe('ConsoleNodeRoom', () => {
           nodeState({ nodeId: 'plan', name: 'Plan', status: 'running' }),
         ],
         loadMessages,
+        onScrollTopChange: (scrollTop: number): void => {
+          savedPlan.push(scrollTop);
+        },
       });
     });
     await flushUntil('second agent', () => (host.textContent ?? '').includes('second'));
+    expect(savedReview).toContain(41);
+    expect(savedPlan).toEqual([]);
     expect(calls).toEqual([
       ['run-switch', 'review'],
       ['run-switch', 'plan'],
@@ -471,18 +477,64 @@ describe('ConsoleNodeRoom', () => {
   });
 
   test('polls live agent rooms every 1000 ms and does not poll completed rooms', async () => {
-    const loadMessages = (): Promise<WorkflowNodeMessagesResponse> =>
-      Promise.resolve({ messages: [...FIXTURE] });
-    const scheduled: IntervalCallback[] = [];
-    setIntervalSpy = spyOn(globalThis, 'setInterval').mockImplementation(((
+    const afterSeqs: number[] = [];
+    const burst = Array.from({ length: 100 }, (_, index): WorkflowNodeMessage => {
+      const seq = index + 9;
+      return {
+        id: `fresh-${seq}`,
+        seq,
+        kind: 'text',
+        payload: { text: `fresh-${seq}` },
+        created_at: CREATED_AT,
+      };
+    });
+    const loadMessages = async (
+      _runId: string,
+      _nodeId: string,
+      options?: { afterSeq?: number }
+    ): Promise<WorkflowNodeMessagesResponse> => {
+      const afterSeq = options?.afterSeq ?? 0;
+      afterSeqs.push(afterSeq);
+      if (afterSeq === 0) {
+        return {
+          messages: [...FIXTURE],
+          nextCursor: '8',
+          highWatermark: 8,
+          hasMore: false,
+        };
+      }
+      if (afterSeq === 8) {
+        return {
+          messages: burst,
+          nextCursor: '108',
+          highWatermark: 109,
+          hasMore: true,
+        };
+      }
+      return {
+        messages: [
+          {
+            id: 'fresh-109',
+            seq: 109,
+            kind: 'text',
+            payload: { text: 'fresh-109' },
+            created_at: CREATED_AT,
+          },
+        ],
+        nextCursor: '109',
+        highWatermark: 109,
+        hasMore: false,
+      };
+    };
+    const scheduled: (() => void)[] = [];
+    const timeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((
       handler: TimerHandler,
       delay?: number
-    ): ReturnType<typeof setInterval> => {
-      expect(delay).toBe(1000);
-      scheduled.push(handler as () => void);
-      return 7 as unknown as ReturnType<typeof setInterval>;
-    }) as unknown as typeof setInterval);
-    clearIntervalSpy = spyOn(globalThis, 'clearInterval').mockImplementation((): void => undefined);
+    ): ReturnType<typeof setTimeout> => {
+      if (delay === 1000) scheduled.push(handler as () => void);
+      return 7 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
+    const clearSpy = spyOn(globalThis, 'clearTimeout').mockImplementation((): void => undefined);
 
     await act(async () => {
       renderRoom({
@@ -492,15 +544,17 @@ describe('ConsoleNodeRoom', () => {
       });
     });
     await flushUntil('live agent', () => (host.textContent ?? '').includes('first'));
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-    expect(scheduled).toHaveLength(1);
+    expect(scheduled.length).toBeGreaterThan(0);
 
-    const loadsBefore = setIntervalSpy.mock.calls.length;
+    const before = scheduled.length;
     await act(async () => {
       scheduled[0]();
     });
-    await flush();
-    expect(setIntervalSpy.mock.calls.length).toBe(loadsBefore);
+    await flushUntil('fresh snapshot drained', () =>
+      (host.textContent ?? '').includes('fresh-109')
+    );
+    expect(afterSeqs).toEqual([0, 8, 108]);
+    expect(scheduled.length).toBeGreaterThanOrEqual(before);
 
     await act(async () => {
       renderRoom({
@@ -510,7 +564,9 @@ describe('ConsoleNodeRoom', () => {
       });
     });
     await flushUntil('completed agent', () => (host.textContent ?? '').includes('first'));
-    expect(clearIntervalSpy).toHaveBeenCalled();
+    expect(clearSpy).toHaveBeenCalled();
+    timeoutSpy.mockRestore();
+    clearSpy.mockRestore();
   });
 
   test('recovers from a load error through Retry', async () => {
@@ -870,6 +926,7 @@ describe('ConsoleNodeRoom', () => {
       firstTool.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING
     ).not.toBe(0);
     expect(host.textContent).toContain('waiting on you');
+    expect(host.textContent).toContain('Execution scope was not recorded for this interaction.');
     assertNoConversationComposer(host);
   });
 
@@ -940,6 +997,132 @@ describe('ConsoleNodeRoom', () => {
     });
     await flush();
     expect(host.querySelector('form')).toBeNull();
+  });
+
+  test('renders assistant, tool, and lifecycle history with tool ids and expanded details', async () => {
+    const longCmd = `bun test ${'x'.repeat(120)} src/lib/agent-history.test.ts`;
+    await act(async () => {
+      renderRoom({
+        showToolCalls: true,
+        showSystem: true,
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [
+            {
+              id: 't1',
+              seq: 1,
+              kind: 'text',
+              payload: { text: 'hello-md' },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'tool-1',
+              seq: 2,
+              kind: 'tool',
+              payload: {
+                name: 'Bash',
+                id: 'tool-bash',
+                input: { cmd: longCmd },
+                output: { ok: true },
+              },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'st1',
+              seq: 3,
+              kind: 'status',
+              payload: { state: 'completed', detail: 'done' },
+              created_at: CREATED_AT,
+            },
+          ],
+        }),
+      });
+    });
+    await flushUntil('history', () => (host.textContent ?? '').includes('hello-md'));
+    expect(host.textContent).toContain('ASSISTANT');
+    expect(host.textContent).toContain('hello-md');
+    expect(host.textContent).toContain('Bash');
+    expect(host.textContent).toContain(longCmd);
+    expect(host.textContent).toContain('completed');
+    expect(host.querySelector('[data-tool-id="tool-bash"]')).not.toBeNull();
+    expect(host.querySelector('details')?.hasAttribute('open')).toBe(true);
+  });
+
+  test('Tool toggle hides only tool cards and System toggle hides only lifecycle rows', async () => {
+    await act(async () => {
+      renderRoom({
+        showToolCalls: false,
+        showSystem: true,
+        pendingInteractions: [ask()],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [
+            {
+              id: 't1',
+              seq: 1,
+              kind: 'text',
+              payload: { text: 'keep-me' },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'tool-1',
+              seq: 2,
+              kind: 'tool',
+              payload: { name: 'AskHuman', id: 'tool-a', input: {} },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'st1',
+              seq: 3,
+              kind: 'status',
+              payload: { state: 'iteration_started', detail: '1' },
+              created_at: CREATED_AT,
+            },
+          ],
+        }),
+      });
+    });
+    await flushUntil('hidden tools', () => (host.textContent ?? '').includes('keep-me'));
+    expect(host.textContent).toContain('keep-me');
+    expect(host.textContent).not.toContain('AskHuman');
+    expect(host.querySelector('form')).not.toBeNull();
+    expect(host.textContent).toContain('iteration_started');
+
+    await act(async () => {
+      renderRoom({
+        showToolCalls: true,
+        showSystem: false,
+        pendingInteractions: [ask()],
+        loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+          messages: [
+            {
+              id: 't1',
+              seq: 1,
+              kind: 'text',
+              payload: { text: 'keep-me' },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'tool-1',
+              seq: 2,
+              kind: 'tool',
+              payload: { name: 'AskHuman', id: 'tool-a', input: {} },
+              created_at: CREATED_AT,
+            },
+            {
+              id: 'st1',
+              seq: 3,
+              kind: 'status',
+              payload: { state: 'iteration_started', detail: '1' },
+              created_at: CREATED_AT,
+            },
+          ],
+        }),
+      });
+    });
+    await flushUntil('hidden system', () => (host.textContent ?? '').includes('AskHuman'));
+    expect(host.textContent).toContain('keep-me');
+    expect(host.textContent).toContain('AskHuman');
+    expect(host.querySelector('form')).not.toBeNull();
+    expect(host.textContent).not.toContain('iteration_started');
   });
 
   test('close button calls onClose', async () => {

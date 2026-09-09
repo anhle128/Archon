@@ -114,11 +114,40 @@ describe('selectVisibleNodeAskInteractions', () => {
         ASK_NODE_A_PURGED,
       ],
       nodeId: 'review',
+      selection: { kind: 'node' },
       allMessages: [],
       visibleMessages: [],
+      ownsUnscopedInteractions: true,
     });
 
     expect(selected.map(row => row.id)).toEqual(['ask-a-pending', 'ask-a-answered']);
+  });
+
+  test('keeps a scoped Ask out of a different occurrence room', () => {
+    const scoped = interaction({
+      id: 'ask-scoped',
+      node_id: 'review',
+      tool_use_id: 'tool-missing',
+      kind: 'ask',
+      status: 'pending',
+    });
+    scoped.execution_scope = {
+      occurrence_id: '11111111-1111-4111-8111-111111111111',
+      attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    };
+    const selected = selectVisibleNodeAskInteractions({
+      pending: [scoped],
+      nodeId: 'review',
+      selection: {
+        kind: 'occurrence',
+        occurrenceId: '22222222-2222-4222-8222-222222222222',
+        attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      },
+      allMessages: [],
+      visibleMessages: [],
+      ownsUnscopedInteractions: true,
+    });
+    expect(selected).toEqual([]);
   });
 
   test('keeps Asks inside the selected loop slice', () => {
@@ -148,18 +177,50 @@ describe('selectVisibleNodeAskInteractions', () => {
     const historical = selectVisibleNodeAskInteractions({
       pending,
       nodeId: 'review',
+      selection: { kind: 'node' },
       allMessages: FULL_TRANSCRIPT,
       visibleMessages: ITER1_VISIBLE,
+      ownsUnscopedInteractions: true,
     });
     expect(historical.map(row => row.id)).toEqual(['ask-iter-1']);
 
     const current = selectVisibleNodeAskInteractions({
       pending,
       nodeId: 'review',
+      selection: { kind: 'node' },
       allMessages: FULL_TRANSCRIPT,
       visibleMessages: CURRENT_VISIBLE,
+      ownsUnscopedInteractions: true,
     });
     expect(current.map(row => row.id)).toEqual(['ask-iter-2', 'ask-unanchored']);
+  });
+
+  test('assigns an unscoped Ask only to the latest execution when pages are scope-filtered', () => {
+    const scopedPage = [toolMessage('m1', 1, 'tool-a')];
+    const common = {
+      pending: [ASK_NODE_A_PENDING],
+      nodeId: 'review',
+      selection: {
+        kind: 'occurrence' as const,
+        occurrenceId: '11111111-1111-4111-8111-111111111111',
+        attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+      allMessages: scopedPage,
+      visibleMessages: scopedPage,
+    };
+
+    expect(
+      selectVisibleNodeAskInteractions({
+        ...common,
+        ownsUnscopedInteractions: false,
+      })
+    ).toEqual([]);
+    expect(
+      selectVisibleNodeAskInteractions({
+        ...common,
+        ownsUnscopedInteractions: true,
+      }).map(row => row.id)
+    ).toEqual(['ask-a-pending']);
   });
 });
 

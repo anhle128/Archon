@@ -1,0 +1,17 @@
+name: e2e-hitl-two-asks
+description: "E2E — two parallel AskHuman pauses so answered and declined records can coexist."
+mutates_checkout: false
+
+nodes:
+  - id: ask-answer
+    provider: e2e-fake
+    model: e2e-fake-model
+    prompt: |
+      <<E2E_SCENARIO>>{"askHuman":true}<</E2E_SCENARIO>>
+      $ARGUMENTS
+  - id: ask-decline
+    provider: e2e-fake
+    model: e2e-fake-model
+    prompt: |
+      <<E2E_SCENARIO>>{"askHuman":true}<</E2E_SCENARIO>>
+      $ARGUMENTS

@@ -1,15 +1,18 @@
 process.env.NODE_ENV = 'development';
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test';
 import { Window } from 'happy-dom';
 
 import type {
   AskAnswerBody,
   PendingInteraction,
+  WorkflowEventResponse,
   WorkflowNodeMessageResponse,
   WorkflowNodeMessagesResponse,
   WorkflowNodeStateResponse,
 } from '@/lib/api';
+import type { NodeMessageLoader } from '@/lib/node-message-pages';
+import { nodeMessageScopeKey } from '@/lib/node-message-pages';
 import type { WorkflowRunStatus } from '@/lib/types';
 
 import type { LogRow } from './build-log-rows';
@@ -272,6 +275,7 @@ describe('NodeTranscriptPane', () => {
   });
 
   afterEach(async () => {
+    jest.useRealTimers();
     await act(async () => {
       root.unmount();
     });
@@ -289,30 +293,53 @@ describe('NodeTranscriptPane', () => {
   function renderPane(args: {
     row: LogRow | null;
     runStatus?: WorkflowRunStatus;
-    loadMessages: (runId: string, nodeId: string) => Promise<WorkflowNodeMessagesResponse>;
+    loadMessages: NodeMessageLoader;
     pendingInteractions?: readonly PendingInteraction[];
+    ownsUnscopedInteractions?: boolean;
     viewerIsStarter?: boolean;
     starterDisplayName?: string | null;
     actionStates?: Record<string, { phase: 'sending' } | undefined>;
     nodeState?: WorkflowNodeStateResponse;
     onSubmitAsk?: (requestId: string, body: AskAnswerBody) => Promise<void>;
+    events?: readonly WorkflowEventResponse[];
+    scopeKey?: string;
+    initialScrollTop?: number;
+    onScrollTopChange?: (scrollTop: number) => void;
   }): void {
+    const row = args.row;
+    const selection =
+      row?.selection.kind === 'occurrence'
+        ? {
+            kind: 'occurrence' as const,
+            occurrenceId: row.selection.occurrenceId,
+            attemptId: row.selection.attemptId,
+          }
+        : { kind: 'node' as const, rowId: row?.id ?? 'none' };
     root.render(
       createElement(
         reactQuery.QueryClientProvider,
         { client: queryClient },
         createElement(nodeTranscriptPane.NodeTranscriptPane, {
           runId: 'run-1',
-          row: args.row,
+          row,
           runStatus: args.runStatus ?? 'completed',
           loadMessages: args.loadMessages,
           pendingInteractions: args.pendingInteractions ?? [],
+          ownsUnscopedInteractions: args.ownsUnscopedInteractions ?? true,
           viewerIsStarter: args.viewerIsStarter ?? true,
           starterDisplayName:
             args.starterDisplayName === undefined ? 'Avery' : args.starterDisplayName,
           actionStates: args.actionStates ?? {},
           nodeState: args.nodeState,
           onSubmitAsk: args.onSubmitAsk ?? (async (): Promise<void> => undefined),
+          events: args.events ?? [],
+          scopeKey:
+            args.scopeKey ??
+            (row === null
+              ? 'run:run-1|node:none|sel:node:none'
+              : nodeMessageScopeKey('run-1', row.nodeId, selection)),
+          initialScrollTop: args.initialScrollTop,
+          onScrollTopChange: args.onScrollTopChange ?? ((): void => undefined),
         })
       )
     );
@@ -364,7 +391,8 @@ describe('NodeTranscriptPane', () => {
     });
     await flush();
 
-    expect(calls).toEqual([['run-1', 'review']]);
+    expect(calls[0]).toEqual(['run-1', 'review']);
+    expect(calls.every(call => call[0] === 'run-1' && call[1] === 'review')).toBe(true);
     expect(host.querySelectorAll('[role="region"]')).toHaveLength(1);
     expect(host.textContent).toContain('Read');
     expect(host.textContent).toContain('iteration_started');
@@ -594,6 +622,7 @@ describe('NodeTranscriptPane', () => {
     await flushUntil(host, 'unanchored ask', () => (host.textContent ?? '').includes('Ship it?'));
     const text = host.textContent ?? '';
     expect(text.lastIndexOf('Ship it?')).toBeGreaterThan(text.indexOf('Read'));
+    expect(text).toContain('Execution scope was not recorded for this interaction.');
 
     queryClient.clear();
     await act(async () => {
@@ -604,7 +633,7 @@ describe('NodeTranscriptPane', () => {
             ...FIXTURE,
             {
               id: 'm-awaiting',
-              seq: 8,
+              seq: 9,
               kind: 'status',
               payload: { state: 'awaiting', detail: 'waiting' },
               created_at: CREATED_AT,
@@ -710,5 +739,296 @@ describe('NodeTranscriptPane', () => {
     expect(host.textContent).toContain('Waiting for Avery to answer');
     expect(host.textContent).not.toContain('Submit');
     expect(host.textContent).not.toContain('Decline');
+  });
+
+  const SCOPE_B_ROW: LogRow = {
+    id: 'start-other',
+    nodeId: 'other',
+    label: 'Other',
+    status: 'running',
+    order: 1,
+    sourceIndex: 1,
+    selection: { kind: 'node' },
+  };
+
+  function textMessage(id: string, seq: number, body: string): WorkflowNodeMessageResponse {
+    return { id, seq, kind: 'text', payload: { text: body }, created_at: CREATED_AT };
+  }
+
+  test('discards a late page from the previous scope and aborts its signal', async () => {
+    const pageA1 = deferred<WorkflowNodeMessagesResponse>();
+    const pageA2 = deferred<WorkflowNodeMessagesResponse>();
+    const pageB1 = deferred<WorkflowNodeMessagesResponse>();
+    const signals: AbortSignal[] = [];
+    const savedScopeA: number[] = [];
+    const savedScopeB: number[] = [];
+    const loadMessages: NodeMessageLoader = async (runId, nodeId, options) => {
+      expect(runId).toBe('run-1');
+      expect(options.limit).toBe(100);
+      if (options.signal !== undefined) signals.push(options.signal);
+      if (nodeId === 'review' && options.afterSeq === 0) return pageA1.promise;
+      if (nodeId === 'review') return pageA2.promise;
+      return pageB1.promise;
+    };
+
+    await act(async () => {
+      renderPane({
+        row: REVIEW_ROW,
+        runStatus: 'running',
+        loadMessages,
+        onScrollTopChange: (scrollTop: number): void => {
+          savedScopeA.push(scrollTop);
+        },
+      });
+    });
+    await act(async () => {
+      pageA1.resolve({
+        messages: [textMessage('a1', 1, 'scope-a-one')],
+        hasMore: true,
+        nextCursor: '1',
+        highWatermark: 2,
+      });
+    });
+    await flushUntil(host, 'scope a page one', () =>
+      (host.textContent ?? '').includes('scope-a-one')
+    );
+
+    const scopeAScroll = host.querySelector('[data-testid="node-transcript-scroll"]');
+    if (!(scopeAScroll instanceof HTMLElement)) throw new Error('missing scope A scroll host');
+    scopeAScroll.scrollTop = 37;
+    await act(async () => {
+      renderPane({
+        row: SCOPE_B_ROW,
+        runStatus: 'running',
+        loadMessages,
+        onScrollTopChange: (scrollTop: number): void => {
+          savedScopeB.push(scrollTop);
+        },
+      });
+    });
+    await flush();
+    expect(signals[0]?.aborted).toBe(true);
+    expect(savedScopeA).toContain(37);
+    expect(savedScopeB).toEqual([]);
+
+    await act(async () => {
+      pageA2.resolve({
+        messages: [textMessage('a2', 2, 'scope-a-late')],
+        hasMore: false,
+        nextCursor: '2',
+        highWatermark: 2,
+      });
+      pageB1.resolve({
+        messages: [textMessage('b1', 1, 'scope-b-one')],
+        hasMore: false,
+        nextCursor: '1',
+        highWatermark: 1,
+      });
+    });
+    await flushUntil(host, 'scope b', () => (host.textContent ?? '').includes('scope-b-one'));
+    expect(host.textContent).not.toContain('scope-a-late');
+    expect(host.textContent).not.toContain('scope-a-one');
+  });
+
+  test('keeps page-one rows on a later failure and retries from the retained cursor', async () => {
+    const pageOne = deferred<WorkflowNodeMessagesResponse>();
+    const pageTwo = deferred<WorkflowNodeMessagesResponse>();
+    const pageRetry = deferred<WorkflowNodeMessagesResponse>();
+    let calls = 0;
+    const cursors: number[] = [];
+    const loadMessages: NodeMessageLoader = async (_runId, _nodeId, options) => {
+      calls += 1;
+      cursors.push(options.afterSeq);
+      if (calls === 1) return pageOne.promise;
+      if (calls === 2) return pageTwo.promise;
+      return pageRetry.promise;
+    };
+
+    await act(async () => {
+      renderPane({ row: REVIEW_ROW, runStatus: 'completed', loadMessages });
+    });
+    await act(async () => {
+      pageOne.resolve({
+        messages: [textMessage('p1', 1, 'page-one')],
+        hasMore: true,
+        nextCursor: '1',
+        highWatermark: 2,
+      });
+    });
+    await flushUntil(host, 'page one', () => (host.textContent ?? '').includes('page-one'));
+
+    await act(async () => {
+      pageTwo.reject(new Error('page-two-failed'));
+    });
+    await flushUntil(host, 'incomplete', () =>
+      (host.textContent ?? '').includes('Failed to load node transcript')
+    );
+    expect(host.textContent).toContain('page-one');
+    expect(host.textContent).toContain('Retry');
+
+    const retry = Array.from(host.querySelectorAll('button')).find(button =>
+      (button.textContent ?? '').includes('Retry')
+    );
+    if (retry === undefined) throw new Error('missing Retry');
+    await act(async () => {
+      retry.click();
+    });
+    await act(async () => {
+      pageRetry.resolve({
+        messages: [textMessage('p2', 2, 'page-two')],
+        hasMore: false,
+        nextCursor: '2',
+        highWatermark: 2,
+      });
+    });
+    await flushUntil(host, 'retry recovered', () => (host.textContent ?? '').includes('page-two'));
+    expect(cursors).toEqual([0, 1, 1]);
+    expect(host.textContent).toContain('page-one');
+  });
+
+  test('polls a live run from the retained cursor and stops after a terminal drain', async () => {
+    jest.useFakeTimers();
+    type PageDeferred = ReturnType<typeof deferred<WorkflowNodeMessagesResponse>>;
+    const pages: PageDeferred[] = [];
+    const cursors: number[] = [];
+    const loadMessages: NodeMessageLoader = async (_runId, _nodeId, options) => {
+      cursors.push(options.afterSeq);
+      const pending = deferred<WorkflowNodeMessagesResponse>();
+      pages.push(pending);
+      return pending.promise;
+    };
+
+    await act(async () => {
+      renderPane({ row: REVIEW_ROW, runStatus: 'running', loadMessages });
+    });
+    await flush();
+    expect(pages).toHaveLength(1);
+    await act(async () => {
+      pages[0]?.resolve({
+        messages: [textMessage('live-1', 1, 'live-one')],
+        hasMore: false,
+        nextCursor: '1',
+        highWatermark: 1,
+      });
+    });
+    await flushUntil(host, 'live one', () => (host.textContent ?? '').includes('live-one'));
+
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    await flush();
+    expect(pages).toHaveLength(2);
+    expect(cursors).toEqual([0, 1]);
+    await act(async () => {
+      pages[1]?.resolve({
+        messages: [textMessage('live-2', 2, 'live-two')],
+        hasMore: false,
+        nextCursor: '2',
+        highWatermark: 2,
+      });
+    });
+    await flushUntil(host, 'live two', () => (host.textContent ?? '').includes('live-two'));
+
+    await act(async () => {
+      renderPane({ row: REVIEW_ROW, runStatus: 'completed', loadMessages });
+    });
+    await flush();
+    const afterTerminal = pages.length;
+    if (pages.length === afterTerminal) {
+      const latest = pages[pages.length - 1];
+      if (latest !== undefined && pages.length > 2) {
+        await act(async () => {
+          latest.resolve({
+            messages: [],
+            hasMore: false,
+            nextCursor: '2',
+            highWatermark: 2,
+          });
+        });
+        await flush();
+      }
+    }
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    await flush();
+    expect(pages.length).toBe(afterTerminal);
+    expect(host.textContent).toContain('live-two');
+  });
+
+  test('starts completed history at the top and follows running history until the reader scrolls away', async () => {
+    const loadMessages: NodeMessageLoader = async () => ({
+      messages: [textMessage('scroll-1', 1, 'scroll-one')],
+      hasMore: false,
+      nextCursor: '1',
+      highWatermark: 1,
+    });
+
+    await act(async () => {
+      renderPane({
+        row: { ...REVIEW_ROW, status: 'completed' },
+        runStatus: 'completed',
+        loadMessages,
+      });
+    });
+    await flushUntil(host, 'completed scroll', () =>
+      (host.textContent ?? '').includes('scroll-one')
+    );
+    const scroller = host.querySelector('[data-testid="node-transcript-scroll"]');
+    if (scroller === null) throw new Error('missing scroller');
+    const completedScroller = scroller as unknown as HTMLElement;
+    expect(completedScroller.scrollTop).toBe(0);
+
+    const scrolls: number[] = [];
+    await act(async () => {
+      renderPane({
+        row: REVIEW_ROW,
+        runStatus: 'running',
+        loadMessages,
+        onScrollTopChange: (value): void => {
+          scrolls.push(value);
+        },
+      });
+    });
+    await flushUntil(host, 'running scroll', () => (host.textContent ?? '').includes('scroll-one'));
+    const liveScrollerNode = host.querySelector('[data-testid="node-transcript-scroll"]');
+    if (liveScrollerNode === null) throw new Error('missing live scroller');
+    const liveScroller = liveScrollerNode as unknown as HTMLElement;
+    Object.defineProperty(liveScroller, 'scrollHeight', { configurable: true, value: 400 });
+    Object.defineProperty(liveScroller, 'clientHeight', { configurable: true, value: 200 });
+    await act(async () => {
+      liveScroller.scrollTop = 200;
+      liveScroller.dispatchEvent(new win.Event('scroll', { bubbles: true }) as unknown as Event);
+    });
+    await act(async () => {
+      liveScroller.scrollTop = 175;
+      liveScroller.dispatchEvent(new win.Event('scroll', { bubbles: true }) as unknown as Event);
+    });
+    const jump = Array.from(host.querySelectorAll('button')).find(button =>
+      (button.textContent ?? '').includes('Jump to latest')
+    );
+    if (jump === undefined) throw new Error('missing Jump to latest');
+    await act(async () => {
+      jump.click();
+    });
+    expect(liveScroller.scrollTop).toBe(200);
+  });
+
+  test('aborts the active request on unmount', async () => {
+    const pending = deferred<WorkflowNodeMessagesResponse>();
+    let signal: AbortSignal | undefined;
+    const loadMessages: NodeMessageLoader = async (_runId, _nodeId, options) => {
+      signal = options.signal;
+      return pending.promise;
+    };
+    await act(async () => {
+      renderPane({ row: REVIEW_ROW, runStatus: 'running', loadMessages });
+    });
+    await flush();
+    expect(signal?.aborted).toBe(false);
+    await act(async () => {
+      root.unmount();
+    });
+    expect(signal?.aborted).toBe(true);
   });
 });

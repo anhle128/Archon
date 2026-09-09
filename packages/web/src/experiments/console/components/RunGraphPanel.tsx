@@ -11,6 +11,7 @@ import {
   type ReactElement,
 } from 'react';
 
+import { roomOpenerId } from '@/lib/execution-room-model';
 import type { LayoutRoute, RouteOutcome } from '@/lib/run-graph';
 import { NODE_HEIGHT, NODE_WIDTH } from '@/lib/run-graph/constants';
 import type { WorkflowNodeState } from '../skills/runs';
@@ -348,6 +349,7 @@ export function RunGraphPanel({
               return (
                 <button
                   key={node.definition.id}
+                  id={roomOpenerId('console', 'graph', node.definition.id)}
                   type="button"
                   data-node-id={node.definition.id}
                   aria-current={selected ? 'true' : undefined}
@@ -372,7 +374,7 @@ export function RunGraphPanel({
                       {typeGlyph(nodeBodyKind(node.definition))}
                     </span>
                     <span
-                      className={`min-w-0 flex-1 truncate font-mono text-[13px] font-semibold ${
+                      className={`min-w-0 flex-1 truncate font-mono text-[length:var(--rv-node-label-size)] font-semibold ${
                         status === 'failed'
                           ? 'text-error'
                           : dimmed
@@ -383,10 +385,10 @@ export function RunGraphPanel({
                       {label}
                     </span>
                   </span>
-                  <span className="truncate font-mono text-[11px] text-text-tertiary">
+                  <span className="truncate font-mono text-[length:var(--rv-node-meta-size)] text-text-tertiary">
                     {node.definition.id}
                   </span>
-                  <span className="truncate text-[11px] text-text-secondary">
+                  <span className="truncate text-[length:var(--rv-node-meta-size)] text-text-secondary">
                     {inspectStatusLabel(node.nodeState)}
                   </span>
                 </button>

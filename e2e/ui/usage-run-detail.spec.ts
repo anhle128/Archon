@@ -36,16 +36,16 @@ test('[P1] run detail shows the run node-level usage for its AI pass', async ({ 
   await expect(page.getByText('direct', { exact: true })).toBeVisible();
 
   // Node-level usage: the `emit-usage` node divider carries this node's own
-  // recorded cost. Scoped to the node's stable DOM anchor so it is the NODE row
-  // asserted, not the header total.
-  const nodeDivider = page.locator('#node-transition-emit-usage');
+  // recorded cost. Scope to the collision-safe execution-row anchor so this is
+  // the NODE row rather than the header total.
+  const nodeDivider = page.locator('[id^="node-transition-"]', { hasText: 'emit-usage' }).first();
   await expect(nodeDivider).toBeVisible();
   await expect(nodeDivider).toContainText('emit-usage');
   await expect(nodeDivider).toContainText('$0.42');
 
   // Expand the node to prove the per-node provider/model breakdown, not just a
-  // rolled-up number: the node name is the expander button.
-  await nodeDivider.getByRole('button', { name: /emit-usage/ }).click();
+  // rolled-up number: the dedicated disclosure preserves node selection behavior.
+  await nodeDivider.getByRole('button', { name: 'Show usage breakdown for this node' }).click();
   await expect(page.getByText('Usage · emit-usage')).toBeVisible({ timeout: T.medium });
   await expect(page.getByText(/anthropic\/claude-sonnet-4/).first()).toBeVisible();
 });

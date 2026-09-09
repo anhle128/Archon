@@ -22,12 +22,10 @@ export function DagRunTabs(props: DagRunTabsProps): ReactElement {
       <TabsList>
         <TabsTrigger value="graph">Graph</TabsTrigger>
         <TabsTrigger value="logs">Logs</TabsTrigger>
-        {props.parentPlatformId ? (
-          <TabsTrigger value="chat">
-            <MessageSquare className="mr-1 h-3 w-3" />
-            Chat
-          </TabsTrigger>
-        ) : null}
+        <TabsTrigger value="chat">
+          <MessageSquare className="mr-1 h-3 w-3" />
+          Chat
+        </TabsTrigger>
         <TabsTrigger value="source-control">Source Control</TabsTrigger>
         <TabsTrigger value="terminal">Terminal</TabsTrigger>
       </TabsList>

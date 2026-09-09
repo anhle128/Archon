@@ -1,7 +1,19 @@
+import type { ReactElement } from 'react';
+
 import { GripVerticalIcon } from 'lucide-react';
 import * as ResizablePrimitive from 'react-resizable-panels';
 
+import type { PanelPercent } from '@/lib/room-split-layout';
 import { cn } from '@/lib/utils';
+
+type PercentPanelProps = Omit<
+  ResizablePrimitive.PanelProps,
+  'defaultSize' | 'minSize' | 'maxSize'
+> & {
+  defaultSize?: PanelPercent;
+  minSize?: PanelPercent;
+  maxSize?: PanelPercent;
+};
 
 function ResizablePanelGroup({ className, ...props }: ResizablePrimitive.GroupProps) {
   return (
@@ -14,6 +26,10 @@ function ResizablePanelGroup({ className, ...props }: ResizablePrimitive.GroupPr
 }
 
 function ResizablePanel({ ...props }: ResizablePrimitive.PanelProps) {
+  return <ResizablePrimitive.Panel data-slot="resizable-panel" {...props} />;
+}
+
+function PercentResizablePanel(props: PercentPanelProps): ReactElement {
   return <ResizablePrimitive.Panel data-slot="resizable-panel" {...props} />;
 }
 
@@ -42,4 +58,4 @@ function ResizableHandle({
   );
 }
 
-export { ResizableHandle, ResizablePanel, ResizablePanelGroup };
+export { PercentResizablePanel, ResizableHandle, ResizablePanel, ResizablePanelGroup };

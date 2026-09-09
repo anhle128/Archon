@@ -5,6 +5,7 @@ import type { PendingInteraction, WorkflowNodeStateResponse } from '@/lib/api';
 import {
   countPendingAsks,
   firstAwaitingNodeId,
+  firstPendingAskAwaitingInteraction,
   isAskAwaitingRun,
   isAskHumanUnsupportedError,
   nodeStatusLabel,
@@ -82,5 +83,24 @@ describe('awaiting chrome helpers', () => {
     expect(nodeStatusLabel('awaiting')).toBe('waiting on you');
     expect(nodeStatusLabel('running')).toBe('running');
     expect(nodeStatusLabel('failed')).toBe('failed');
+  });
+
+  test('selects a pending Ask instead of an earlier permission awaiting node', () => {
+    const permission = interaction({
+      id: 'permission',
+      node_id: 'approve',
+      tool_use_id: 'tool-permission',
+      kind: 'permission',
+    });
+    const pendingAsk = interaction({ node_id: 'review' });
+    expect(
+      firstPendingAskAwaitingInteraction({
+        pending: [permission, pendingAsk],
+        nodes: [
+          node({ nodeId: 'approve', status: 'awaiting' }),
+          node({ nodeId: 'review', status: 'awaiting' }),
+        ],
+      })
+    ).toBe(pendingAsk);
   });
 });

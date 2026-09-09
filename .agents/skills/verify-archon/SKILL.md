@@ -10,7 +10,24 @@ description: >-
 
 # Verify Archon
 
-Drive this Archon fork (`anhle128/Archon`) the way a user does. CI green and `tsc` are not proof. A CLI/HTTP proof is a real command or `/api/*` request against a live instance, plus the resulting state. A **web-console** proof is a real browser session against `/console`: visible DOM assertions plus screenshots (and video when the harness records it). HTTP-only is not a passing UI claim.
+## Manual Cursor use
+
+Invoke with `/verify-archon` in this repo. No Archon workflow or `$ARTIFACTS_DIR` required.
+
+Typical flow after `/select-verify-archon-targets`:
+
+```bash
+.agents/skills/verify-archon/bin/verify-archon features
+.agents/skills/verify-archon/bin/verify-archon prove <feature-id>
+# UI ids need Chrome (macOS: Google Chrome.app) and often:
+.agents/skills/verify-archon/bin/verify-archon prove web-console
+.agents/skills/verify-archon/bin/verify-archon prove hitl-run-room
+```
+
+Ids come from `.agents/skills/verify-archon/features/`. Prefer proving every id
+the select skill emitted for the change — not only the easiest smoke id.
+
+Drive this Archon fork (`anhle128/Archon`) the way a user does. CI green and `tsc` are not proof. A CLI/HTTP proof is a real command or `/api/*` request against a live instance, plus the resulting state. A **web-console** proof is a real browser session against `/console`: visible DOM assertions plus screenshots (and video when the harness records it). A **hitl-run-room** proof is a real browser session against `/console/p/:projectId/r/:runId` after a live `e2e-hitl-run` (fake provider): room absent, ~40% open/close, history, and `?node=`. HTTP-only is not a passing UI claim.
 
 Primary surfaces: **Archon CLI** (`bun run cli`) and the **server HTTP API** (`bun run dev:server`). The web console (`bun run dev:web`, `/console`) is secondary. Oceanlabs production Mini (PM2 + PostgreSQL over Tailscale) is an optional remote target — never the default, and never started or stopped from here.
 
@@ -133,11 +150,12 @@ Run doctor before the first drive, after any failed drive, and on a fresh sessio
 
 ## Drive
 
-Harness: `verify-archon` wrapping the real Archon CLI and HTTP API. CLI/HTTP features stay curl/CLI. **web-console** must open Playwright (system Chrome, `channel: 'chrome'`) against the Vite origin — see [harness/README.md](harness/README.md). Never click by coordinates.
+Harness: `verify-archon` wrapping the real Archon CLI and HTTP API. CLI/HTTP features stay curl/CLI. **web-console** and **hitl-run-room** must open Playwright (system Chrome, `channel: 'chrome'`) against the Vite origin — see [harness/README.md](harness/README.md). Never click by coordinates.
 
 ```bash
 .agents/skills/verify-archon/bin/verify-archon drive discover-workflows
-.agents/skills/verify-archon/bin/verify-archon drive web-console   # requires launch --with-web
+.agents/skills/verify-archon/bin/verify-archon drive web-console      # requires launch --with-web
+.agents/skills/verify-archon/bin/verify-archon drive hitl-run-room    # requires launch --with-web + e2e-fake run
 ```
 
 Stable handles (use these, not coordinates):
@@ -153,6 +171,9 @@ Stable handles (use these, not coordinates):
 | Console routes   | `/console` (RunsPage), `/console/settings` (SettingsPage)                          |
 | Console rail     | `nav[aria-label="Projects"]`; buttons `All projects`, `Add project`                |
 | Console filters  | chip accessible name `/^All \d+$/` (not the rail "All projects" button)            |
+| Run detail       | `/console/p/:projectId/r/:runId` (codebase id from `GET /api/workflows/runs/:id`)  |
+| Run room         | region `<nodeId> room`; `#console-run-room`; `button[id^="console-log-"]`         |
+| Room divider     | `separator` named `Resize node room`                                               |
 
 CLI rules from this repo:
 
@@ -183,7 +204,7 @@ Proof standards:
 
 Minimum artifacts per drive: `summary.json`, the command transcript, HTTP/CLI JSON, exit codes.
 
-When the claim is **UI** (`web-console`): screenshots are **required**. HTTP 200 on `/console` or `/api/*` is not enough. The Playwright harness writes `console-runs.png`, `console-runs-all.png`, `console-settings.png`, `ui-assertions.json`, and a short `video/*.webm` when Chrome records it. Viewport must be ≥1024px wide (`1440×900` in the harness) because `ProjectRail` is `hidden lg:block`.
+When the claim is **UI** (`web-console` or `hitl-run-room`): screenshots are **required**. HTTP 200 on `/console` or `/api/*` is not enough. `web-console` writes `console-runs.png`, `console-runs-all.png`, `console-settings.png`. `hitl-run-room` writes `hitl-room-open.png`, `hitl-room-closed.png`, `hitl-room-deeplink.png`. Both write `ui-assertions.json` and a short `video/*.webm` when Chrome records it. Console-shell viewport is `1440×900` (`ProjectRail` is `hidden lg:block`). Run-room viewport is `1440×1000` so the split is used.
 
 ## Cleanup
 
@@ -225,10 +246,10 @@ verify-archon status [--json]
 verify-archon features
 ```
 
-`prove web-console` implies `--with-web` (API + Vite + Playwright). `prove discover-workflows` stays API-only.
+`prove web-console` and `prove hitl-run-room` imply `--with-web` (API + Vite + Playwright). `hitl-run-room` also seeds `e2e-hitl-run` into the isolated home and sets `ARCHON_E2E_FAKE_PROVIDER=1` on the CLI. `prove discover-workflows` stays API-only.
 
 `--json` prints one JSON object on stdout (logs on stderr). `--dry-run` on `launch`/`cleanup` prints the planned action and does not start or kill anything.
 
-Features the helper can drive: `diagnose-install`, `discover-workflows`, `run-deterministic-workflow`, `inspect-run`, `web-console`.
+Features the helper can drive: `diagnose-install`, `discover-workflows`, `run-deterministic-workflow`, `inspect-run`, `web-console`, `hitl-run-room`.
 
 Upkeep: `/maintain-verification-skill` when the product changes and this map may be stale.

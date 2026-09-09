@@ -21,6 +21,7 @@ export interface PairableToolMetadata {
   exit_code?: number;
   truncated?: boolean;
   output_state?: 'full' | 'truncated' | 'missing' | 'unknown';
+  full_output_available?: boolean;
 }
 
 export interface PairableMessage {

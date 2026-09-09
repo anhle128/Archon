@@ -1,0 +1,324 @@
+{
+  "feature": "Align Agent History and Responsive Run Room",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Lock the percentage split contract",
+      "description": "As a run-detail engineer, I want percentage-only layout utilities and panel wrappers, so that run rooms never use fixed pixel widths or numeric pixel props in react-resizable-panels v4.",
+      "acceptanceCriteria": [
+        "packages/web/src/lib/room-split-layout.ts exports PanelPercent (`${number}%`), RoomSurface ('legacy' | 'console'), ROOM_SPLIT (defaultRoomRatio 40, minRoomRatio 24, maxRoomRatio 60, minViewRatio 30), clampRoomRatio, roomPanelSizes, readRoomRatio, and writeRoomRatio.",
+        "roomPanelSizes returns view ({ defaultSize, minSize }) and room ({ defaultSize, minSize, maxSize }) containing percentage strings derived from clamped roomRatio.",
+        "readRoomRatio and writeRoomRatio persist and isolate ratios in localStorage under archon.run-room.ratio.legacy and archon.run-room.ratio.console, clamping values and falling back to 40% on invalid/missing entries.",
+        "packages/web/src/components/ui/resizable.tsx exports PercentResizablePanel with public defaultSize, minSize, and maxSize props typed as PanelPercent | undefined while leaving generic ResizablePanel unchanged.",
+        "packages/web/src/experiments/console/primitives/console-resizable.tsx exports ConsolePanelGroup, ConsolePanel (with percent-only size props), and ConsolePanelSeparator importing directly from react-resizable-panels without importing from components/ui/resizable.",
+        "Pure layout tests in packages/web/src/lib/room-split-layout.test.ts pass with bun test src/lib/room-split-layout.test.ts.",
+        "DOM wrapper tests in packages/web/src/experiments/console/primitives/console-resizable.test.tsx verify percent panel rendering and role=separator in happy-dom."
+      ],
+      "technicalNotes": "Follow plan Task 1 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:213-376). Create packages/web/src/lib/room-split-layout.ts, room-split-layout.test.ts, packages/web/src/experiments/console/primitives/console-resizable.tsx, console-resizable.test.tsx; modify packages/web/src/components/ui/resizable.tsx.",
+      "dependsOn": [],
+      "priority": 1,
+      "passes": true,
+      "notes": "Implemented in iteration 1. Files: packages/web/src/lib/room-split-layout.ts, packages/web/src/lib/room-split-layout.test.ts, packages/web/src/components/ui/resizable.tsx, packages/web/src/experiments/console/primitives/console-resizable.tsx, packages/web/src/experiments/console/primitives/console-resizable.test.tsx."
+    },
+    {
+      "id": "US-002",
+      "title": "Make node-message transport lossless and abortable",
+      "description": "As a web client developer, I want node-message routes and client skills to preserve row metadata, mark transport-truncated output, and accept AbortSignal, so that long history is lossless and stale requests can be aborted.",
+      "acceptanceCriteria": [
+        "packages/server/src/routes/api.ts preserves row metadata in compatibility no-query mode (returning { messages } with row metadata and no paging keys).",
+        "In cursor mode, when truncateToolOutput shortens tool output, packages/server/src/routes/api.ts marks response-only metadata with truncated: true and output_state: 'truncated' without writing truncated metadata back to the database.",
+        "GET /api/workflows/runs/{runId}/nodes/{nodeId}/messages/{messageId} returns full stored message output unchanged.",
+        "packages/web/src/lib/api.ts exports getWorkflowNodeMessages(runId, nodeId, options) and getWorkflowNodeMessage(runId, nodeId, messageId, options), forwarding options.signal to fetch without putting signal in URLSearchParams.",
+        "packages/web/src/experiments/console/skills/runs.ts exports getNodeMessages(runId, nodeId, options) and getNodeMessage(runId, nodeId, messageId, options), forwarding options.signal through requestJson.",
+        "Path parameters in detail lookup URLs are safely encoded with encodeURIComponent for slash- and space-containing IDs.",
+        "Server tests in packages/server/src/routes/api.workflow-runs.test.ts and client tests in packages/web/src/lib/get-workflow-node-messages.test.ts and packages/web/src/experiments/console/skills/runs.node-messages.test.ts pass."
+      ],
+      "technicalNotes": "Follow plan Task 2 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:378-490). Modify packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts, packages/web/src/lib/api.ts, packages/web/src/lib/get-workflow-node-messages.test.ts, packages/web/src/experiments/console/skills/runs.ts, packages/web/src/experiments/console/skills/runs.node-messages.test.ts.",
+      "dependsOn": [],
+      "priority": 2,
+      "passes": true,
+      "notes": "Implemented in iteration 2. Files: packages/server/src/routes/api.ts, packages/server/src/routes/api.workflow-runs.test.ts, packages/web/src/lib/api.ts, packages/web/src/lib/get-workflow-node-messages.test.ts, packages/web/src/experiments/console/skills/runs.ts, packages/web/src/experiments/console/skills/runs.node-messages.test.ts."
+    },
+    {
+      "id": "US-003",
+      "title": "Build the shared cursor-page state machine",
+      "description": "As a run-detail architect, I want a pure reducer and driver for cursor-based node message paging, so that all surfaces handle deduplication, scope keys, high-watermark completion, and network retries uniformly.",
+      "acceptanceCriteria": [
+        "packages/web/src/lib/node-message-pages.ts exports nodeMessageScopeKey, createNodeMessageState, reduceNodeMessagePage, reduceNodeMessageFailure, and drainNodeMessages.",
+        "nodeMessageScopeKey formats scope keys incorporating runId, nodeId, and selection (including rowId for kind: 'node' unscoped fallback to isolate historical executions).",
+        "reduceNodeMessagePage deduplicates messages by seq using Map<number, NodeMessageRow>, sorts rows ascending by seq, updates afterSeq, and marks complete only when hasMore is false and afterSeq >= highWatermark.",
+        "reduceNodeMessagePage and reduceNodeMessageFailure discard pages and errors originating from obsolete scope keys.",
+        "reduceNodeMessageFailure retains already-loaded rows in state, records error string, and preserves complete: false for resume/retry.",
+        "drainNodeMessages loops with limit: 100, passes occurrenceId and attemptId from selection, passes AbortSignal, notifies onState on each step, and halts on completion or abort without converting AbortError to retry error.",
+        "Pure tests in packages/web/src/lib/node-message-pages.test.ts cover paging, sorting, watermark completion, obsolete scopes, retry retention, and abort handling, passing with bun test src/lib/node-message-pages.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 3 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:491-630). Create packages/web/src/lib/node-message-pages.ts and packages/web/src/lib/node-message-pages.test.ts. Derive types from components['schemas'] in api.generated.d.ts.",
+      "dependsOn": [
+        "US-002"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "Implemented in iteration 3. Files: packages/web/src/lib/node-message-pages.ts, packages/web/src/lib/node-message-pages.test.ts."
+    },
+    {
+      "id": "US-004",
+      "title": "Project recorded rows into agent history",
+      "description": "As a run-detail engineer, I want a pure projection from node message rows and workflow events into structured agent history items, so that UI renderers receive unified assistant text, tool cards, and lifecycle items.",
+      "acceptanceCriteria": [
+        "packages/web/src/lib/agent-history.ts exports AgentHistoryItem (discriminated union of 'assistant', 'tool', 'lifecycle'), buildAgentHistory(input: AgentHistoryInput), toolContext(input: unknown), and toolRuntime(events, nodeId, toolUseId).",
+        "Assistant text is projected in sequence order reusing projectTextTranscript without duplicating deltas or snapshot text.",
+        "Tool call and result rows are paired using projectToolTranscript; tool card seq is taken from call row; toolUseId is taken from tool payload id.",
+        "toolContext extracts allowlisted keys ('cmd', 'path', 'file_path', 'query', 'url') preserving full trimmed values without slicing.",
+        "Tool outcome is derived strictly as 'running', 'succeeded', 'failed' (from nonzero exit code, error, or failed state), or 'unknown'; canLoadFullOutput is true when metadata indicates truncated: true or output_state === 'truncated'.",
+        "durationMs is joined only when exactly one tool_completed event matches nodeId, data.tool_call_id, and has finite non-negative data.duration_ms; returns null if zero or multiple events match.",
+        "Lifecycle rows are emitted for status messages as secondary items.",
+        "Tests in packages/web/src/lib/agent-history.test.ts pass with bun test src/lib/agent-history.test.ts."
+      ],
+      "technicalNotes": "Follow plan Task 4 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:631-729). Create packages/web/src/lib/agent-history.ts and packages/web/src/lib/agent-history.test.ts. Reuse projectTextTranscript and projectToolTranscript from existing lib.",
+      "dependsOn": [
+        "US-003"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "Implemented in iteration 4. Files: packages/web/src/lib/agent-history.ts, packages/web/src/lib/agent-history.test.ts."
+    },
+    {
+      "id": "US-005",
+      "title": "Model execution identity and header data",
+      "description": "As a run-detail architect, I want execution selection precedence, header view models, and opener IDs modeled in pure functions, so that both Legacy and Console select and display exact executions deterministically.",
+      "acceptanceCriteria": [
+        "packages/web/src/lib/execution-room-model.ts exports chooseExecutionForNode, buildExecutionHeader, runtimeForSelection, roomOpenerId, and askCardId.",
+        "chooseExecutionForNode resolves execution in order: valid lastExplicitRowId > awaiting row > running row > latest row by order; returns null for unknown node.",
+        "buildExecutionHeader derives ExecutionHeaderModel with nodeId, nodeLabel, executionLabel ('Iteration N', 'Attempt N', 'Execution unknown'), status, startedOffsetMs (from run started_at), durationMs (only if selected row has duration), provider/model (only from matching node_started event), and unknownScope boolean.",
+        "roomOpenerId encodes surface ('legacy' | 'console'), kind ('log' | 'graph'), and key with encodeURIComponent and stable prefix.",
+        "askCardId encodes tool_use_id with prefix run-ask-card-.",
+        "packages/web/src/components/workflows/build-log-rows.ts and packages/web/src/experiments/console/components/inspect/build-log-rows.ts derive startedOffsetMs and unknownScope on LogRow.",
+        "Tests in packages/web/src/lib/execution-room-model.test.ts, packages/web/src/components/workflows/build-log-rows.test.ts, and packages/web/src/experiments/console/components/inspect/build-log-rows.test.ts pass."
+      ],
+      "technicalNotes": "Follow plan Task 5 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:730-816). Create packages/web/src/lib/execution-room-model.ts and execution-room-model.test.ts; modify Legacy and Console build-log-rows modules and tests.",
+      "dependsOn": [],
+      "priority": 5,
+      "passes": true,
+      "notes": "Implemented in iteration 5. Files: packages/web/src/lib/execution-room-model.ts, packages/web/src/lib/execution-room-model.test.ts, packages/web/src/components/workflows/build-log-rows.ts, packages/web/src/components/workflows/build-log-rows.test.ts, packages/web/src/experiments/console/components/inspect/build-log-rows.ts, packages/web/src/experiments/console/components/inspect/build-log-rows.test.ts, packages/web/src/components/workflows/resolve-graph-room-row.ts, packages/web/src/experiments/console/components/ConsoleNodeRoom.tsx."
+    },
+    {
+      "id": "US-006",
+      "title": "Model room visits, responsive mode, and scroll following",
+      "description": "As a run-detail developer, I want pure visit state management, scroll follow reducers, and rem-aware container measurement, so that room open/close, deep-linking, follow mode, and single-pane responsiveness are robust.",
+      "acceptanceCriteria": [
+        "packages/web/src/lib/execution-room-model.ts exports RoomVisitState, openRoom, closeRoom, applyRoomDeepLink, rememberRoomScroll, and resetRoomVisit.",
+        "closeRoom clears selection while preserving lastExplicitRowByNode and scrollTopByScope; resetRoomVisit returns fresh state for changed runId.",
+        "applyRoomDeepLink applies deep-link node once per query entry, ignores manual close while query persists, and reopens if query leaves and re-enters.",
+        "packages/web/src/lib/room-scroll-follow.ts exports createScrollFollow, onRoomScroll, and jumpToLatest: completed/failed rows initialize at top (scrollTop: 0), running/awaiting at bottom (follow: true), upward scroll > 24px from bottom disables follow, jumpToLatest reenables follow.",
+        "packages/web/src/lib/use-container-split-mode.ts exports useContainerSplitMode(ref, minRem = 60): 'split' | 'single' measuring container width against root font size (minRem * rootFontPx) using ResizeObserver.",
+        "Unit tests in packages/web/src/lib/execution-room-model.test.ts, packages/web/src/lib/room-scroll-follow.test.ts, and packages/web/src/lib/use-container-split-mode.test.tsx pass."
+      ],
+      "technicalNotes": "Follow plan Task 6 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:817-954). Extend packages/web/src/lib/execution-room-model.ts and tests; create packages/web/src/lib/room-scroll-follow.ts, room-scroll-follow.test.ts, packages/web/src/lib/use-container-split-mode.ts, use-container-split-mode.test.tsx.",
+      "dependsOn": [
+        "US-005"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "Implemented in iteration 6. Files: packages/web/src/lib/execution-room-model.ts, packages/web/src/lib/execution-room-model.test.ts, packages/web/src/lib/room-scroll-follow.ts, packages/web/src/lib/room-scroll-follow.test.ts, packages/web/src/lib/use-container-split-mode.ts, packages/web/src/lib/use-container-split-mode.test.tsx."
+    },
+    {
+      "id": "US-007",
+      "title": "Integrate the legacy room lifecycle",
+      "description": "As a Legacy run user, I want the run room to open on demand with percentage sizing, hide the main view on small screens without losing state, and restore focus on close, so that navigation is predictable.",
+      "acceptanceCriteria": [
+        "LegacyGraphLogsPane.tsx renders room panel and separator only when selectedNodeId is non-null, using PercentResizablePanel with ids legacy-run-view and legacy-run-room.",
+        "In single-pane mode, the main view remains mounted with hidden attribute while the room is open, and a Back button triggers onCloseRoom.",
+        "WorkflowExecution.tsx manages RoomVisitState, deep-link synchronization via applyRoomDeepLink, runId reset, and restores focus to document.getElementById(openerId) on close.",
+        "NodeRunList.tsx sets execution button id to roomOpenerId('legacy', 'log', row.id).",
+        "Unconditional first-node selection is deleted by removing packages/web/src/lib/select-initial-node.ts and its test.",
+        "Component tests in packages/web/src/components/workflows/LegacyGraphLogsPane.test.tsx and WorkflowExecution.test.tsx verify absence by default, split/single transitions, focus restoration, and deep-link lifecycle."
+      ],
+      "technicalNotes": "Follow plan Task 7 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:955-1062). Modify LegacyGraphLogsPane.tsx, WorkflowExecution.tsx, NodeRunList.tsx; delete select-initial-node.ts and select-initial-node.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-005",
+        "US-006"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "Implemented in iteration 7. Files: packages/web/src/components/workflows/LegacyGraphLogsPane.tsx, LegacyGraphLogsPane.test.tsx, WorkflowExecution.tsx, WorkflowExecution.test.tsx, NodeRunList.tsx, NodeRunList.test.tsx; deleted packages/web/src/lib/select-initial-node.ts and select-initial-node.test.ts."
+    },
+    {
+      "id": "US-008",
+      "title": "Render complete legacy execution history",
+      "description": "As a Legacy user, I want the room to render structured agent history with sticky execution header, live cursor polling, full output expansion, and scroll restoration, so that I can inspect exact execution details.",
+      "acceptanceCriteria": [
+        "packages/web/src/components/workflows/NodeRoomHeader.tsx renders sticky header with nodeLabel, executionLabel, execution select dropdown, status, start offset, provider/model, and Close button.",
+        "packages/web/src/components/workflows/RoomIncompleteNotice.tsx renders error and Retry button when cursor paging encounters an error after partial load.",
+        "packages/web/src/components/workflows/NodeTranscriptPane.tsx drives cursor pagination with drainNodeMessages, polls every 1s for live runs, stops polling when terminal run reaches high-watermark, aborts on scope change/unmount, and persists container scrollTop.",
+        "packages/web/src/components/workflows/NodeRoom.tsx renders AssistantHistory, ToolHistory, and LifecycleHistory; tool cards feature details open for Input/Output, inline outcome/duration, data-tool-id, and 'View full output' button calling getWorkflowNodeMessage when truncated.",
+        "When unknownScope is true, NodeRoom displays notice: 'Execution scope was not recorded; this history may include other executions of the same node.'",
+        "Tests in NodeRoomHeader.test.tsx, NodeTranscriptPane.test.tsx, and NodeRoom.test.tsx pass."
+      ],
+      "technicalNotes": "Follow plan Task 8 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:1063-1216). Create NodeRoomHeader.tsx, NodeRoomHeader.test.tsx, RoomIncompleteNotice.tsx; modify NodeTranscriptPane.tsx, NodeTranscriptPane.test.tsx, NodeRoom.tsx, LegacyNodeRoom.tsx, WorkflowExecution.tsx.",
+      "dependsOn": [
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "Implemented in iteration 8. Files: packages/web/src/components/workflows/NodeRoomHeader.tsx, NodeRoomHeader.test.tsx, RoomIncompleteNotice.tsx, NodeTranscriptPane.tsx, NodeTranscriptPane.test.tsx, NodeRoom.tsx, NodeRoom.test.tsx, LegacyNodeRoom.tsx, LegacyGraphLogsPane.tsx, WorkflowExecution.tsx."
+    },
+    {
+      "id": "US-009",
+      "title": "Share legacy Ask drafts across room and chat",
+      "description": "As a workflow operator, I want Ask drafts synchronized between the Legacy room and Chat timeline, with deterministic Ask and gate placement and truthful disabled chat states, so that human interaction is seamless.",
+      "acceptanceCriteria": [
+        "packages/web/src/components/workflows/AskCard.tsx becomes a controlled component receiving draft: AskDraft and onDraftChange, with root element assigned id={askCardId(interaction.tool_use_id)} and tabIndex={-1}.",
+        "packages/web/src/components/workflows/build-chat-timeline.ts maps Ask interactions and approval gates to exact execution positions when execution_scope is present, and to the latest node execution with scopeLimitation when unscoped.",
+        "WorkflowExecution.tsx lifts askDrafts (keyed by tool_use_id) into parent state, sharing drafts between NodeRoom and ChatTimeline and resetting them on runId change.",
+        "packages/web/src/components/workflows/source-control/dag-run-tabs.tsx keeps Chat tab visible even when parentPlatformId is null.",
+        "packages/web/src/components/workflows/RunChatComposer.tsx renders factual disabled copy ('This run has no parent conversation, so replies cannot be delivered.') when delivery is impossible.",
+        "Tests in AskCard.test.tsx, build-chat-timeline.test.ts, ChatTimeline.test.tsx, dag-run-tabs.test.tsx, RunChatComposer.test.tsx, and WorkflowExecution.test.tsx pass."
+      ],
+      "technicalNotes": "Follow plan Task 9 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:1217-1359). Modify AskCard.tsx, build-chat-timeline.ts, ChatTimeline.tsx, dag-run-tabs.tsx, RunChatComposer.tsx, WorkflowExecution.tsx, and respective tests.",
+      "dependsOn": [
+        "US-007",
+        "US-008"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "Implemented in iteration 9. Files: packages/web/src/components/workflows/AskCard.tsx, AskCard.test.tsx, parse-ask-envelope.ts, build-chat-timeline.ts, build-chat-timeline.test.ts, ChatTimeline.tsx, ChatTimeline.test.tsx, source-control/dag-run-tabs.tsx, dag-run-tabs.test.tsx, RunChatComposer.test.tsx, WorkflowExecution.tsx, WorkflowExecution.test.tsx, LegacyGraphLogsPane.tsx, LegacyNodeRoom.tsx, NodeTranscriptPane.tsx."
+    },
+    {
+      "id": "US-010",
+      "title": "Integrate the console room and shared history renderer",
+      "description": "As a Command Center user, I want a percentage-sized responsive room with Console-owned execution headers and agent history list, while keeping Artifacts docked and Console code strictly isolated, so that run inspection is consistent.",
+      "acceptanceCriteria": [
+        "ConsoleInspectPane.tsx replaces fixed-width aside with ConsolePanelGroup, ConsolePanel, and ConsolePanelSeparator, defaulting to 60/40 split and persisting ratio under archon.run-room.ratio.console.",
+        "In single mode, ConsoleInspectPane keeps the active main pane mounted with hidden; Back closes the room; selecting Artifacts keeps the room docked alongside the artifact panel.",
+        "ConsoleRoomHeader.tsx renders Console-owned sticky identity header and execution select dropdown without importing Legacy components.",
+        "ConsoleAgentHistoryList.tsx renders assistant text, tool cards (with data-tool-id and expanded details), and lifecycle rows, supporting Tool and System toggles and getNodeMessage for full output.",
+        "RunDetailPage.tsx manages RoomVisitState, applies deep links, clears on runId change, and restores focus to NodeDivider opener id={roomOpenerId('console', 'log', rowId)}.",
+        "packages/web/src/experiments/console/console-isolation.test.ts allows only approved @/lib pure imports and continues to pass with zero legacy component imports.",
+        "Tests in ConsoleInspectPane.test.tsx, ConsoleRoomHeader.test.tsx, ConsoleNodeRoom.test.tsx, NodeDivider.test.tsx, and RunDetailPage.test.tsx pass."
+      ],
+      "technicalNotes": "Follow plan Task 10 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:1360-1490). Create ConsoleRoomHeader.tsx, ConsoleRoomHeader.test.tsx, ConsoleAgentHistoryList.tsx; modify ConsoleInspectPane.tsx, ConsoleNodeRoom.tsx, NodeDivider.tsx, RunDetailPage.tsx, console-isolation.test.ts.",
+      "dependsOn": [
+        "US-001",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "Implemented in iteration 10. Files: packages/web/src/experiments/console/components/inspect/ConsoleRoomHeader.tsx, ConsoleRoomHeader.test.tsx, ConsoleAgentHistoryList.tsx; ConsoleInspectPane.tsx/.test.tsx; ConsoleNodeRoom.tsx/.test.tsx; NodeDivider.tsx/.test.tsx; routes/RunDetailPage.tsx/.test.tsx; console-isolation.test.ts; ask/parse-ask-envelope.ts."
+    },
+    {
+      "id": "US-011",
+      "title": "Render one console log section per exact execution",
+      "description": "As a Console user, I want each log row rendered in its own execution section with scoped interactions and controlled Ask drafts, so that repeated loop and attempt executions never collide or misassign history.",
+      "acceptanceCriteria": [
+        "packages/web/src/experiments/console/components/inspect/execution-interactions.ts exports interactionsForExecution, matching Ask interactions to exact occurrence_id and attempt_id, and placing unscoped interactions on the latest entry with scopeLimitation.",
+        "ConsoleExecutionHistory.tsx loads messages for entry.row.selection with limit 100 and AbortSignal, polling live runs every 1s, rendering ConsoleAgentHistoryList and scoped Ask cards.",
+        "RunStream.tsx renders one semantic <section data-execution-row-id={entry.row.id}> per log entry when logEntries is provided, rendering NodeDivider and renderExecutionBody inside it without sharing bodies.",
+        "ConsoleAskCard.tsx becomes controlled with draft: AskDraft and onDraftChange, with root element assigned id={askCardId(interaction.tool_use_id)} and tabIndex={-1}.",
+        "RunDetailPage.tsx owns AskDraftByRequest, sharing drafts between the room and execution sections and resetting on runId change.",
+        "Tests in execution-interactions.test.ts, ConsoleExecutionHistory.test.tsx, RunStream.test.tsx, ConsoleAskCard.test.tsx, and RunDetailPage.test.tsx pass."
+      ],
+      "technicalNotes": "Follow plan Task 11 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:1491-1626). Create execution-interactions.ts, execution-interactions.test.ts, ConsoleExecutionHistory.tsx, ConsoleExecutionHistory.test.tsx; modify RunStream.tsx, ConsoleAskCard.tsx, RunDetailPage.tsx.",
+      "dependsOn": [
+        "US-004",
+        "US-005",
+        "US-010"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": "Implemented in iteration 11. Files: packages/web/src/experiments/console/components/inspect/execution-interactions.ts/.test.ts, ConsoleExecutionHistory.tsx/.test.tsx; RunStream.tsx/.test.tsx; ask/ConsoleAskCard.tsx/.test.tsx; ConsoleInspectPane.tsx/.test.tsx; ConsoleNodeRoom.tsx; routes/RunDetailPage.tsx/.test.tsx; console-isolation.test.ts."
+    },
+    {
+      "id": "US-012",
+      "title": "Add a safe console reply composer",
+      "description": "As a Console user, I want the Reply composer to send messages only to an existing parent conversation whose platform_type is 'web', and show clear disabled states otherwise, so that messages are never delivered to wrong destinations.",
+      "acceptanceCriteria": [
+        "packages/web/src/experiments/console/skills/runs.ts maps parent_platform_id from GET run response into ConsoleRunDetail.parentPlatformId.",
+        "packages/web/src/experiments/console/skills/conversations.ts exports getConversation(platformId, options) calling GET /api/conversations/:id with AbortSignal.",
+        "packages/web/src/experiments/console/store/keys.ts exports K.parentConversation(platformId: string | null) with distinct encoding.",
+        "ConsoleReplyComposer.tsx accepts ReplyDestinationState ('loading' | 'ready' | 'missing' | 'non_web' | 'error'), enabling Send only for ready state and displaying factual disabled copy for missing/non-web/error states.",
+        "RunDetailPage.tsx validates parent conversation via getConversation, mapping platformType === 'web' to ready and sending messages via skill.sendMessage without creating fallback conversations.",
+        "Tests in runs.node-messages.test.ts, conversations.test.ts, ConsoleReplyComposer.test.tsx, and RunDetailPage.test.tsx pass."
+      ],
+      "technicalNotes": "Follow plan Task 12 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:1627-1788). Create conversations.test.ts, ConsoleReplyComposer.tsx, ConsoleReplyComposer.test.tsx; modify runs.ts, conversations.ts, keys.ts, RunDetailPage.tsx.",
+      "dependsOn": [
+        "US-010"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": "Implemented in iteration 12. Files: packages/web/src/experiments/console/skills/runs.ts, runs.node-messages.test.ts, conversations.ts, conversations.test.ts, store/keys.ts, components/ConsoleReplyComposer.tsx/.test.tsx, routes/RunDetailPage.tsx/.test.tsx."
+    },
+    {
+      "id": "US-013",
+      "title": "Align header, tabs, graph, tokens, and focus openers",
+      "description": "As a frontend engineer, I want run view CSS tokens, graph opener IDs, and an actionable Awaiting input header button aligned across Legacy and Console, so that presentation and keyboard accessibility are cohesive.",
+      "acceptanceCriteria": [
+        "packages/web/src/index.css defines --rv-node-kind-size (0.625rem), --rv-node-label-size (0.8125rem), --rv-node-meta-size (0.6875rem), --rv-tab-size (0.6875rem), and --rv-tool-card-border (1px solid var(--border)) under both .legacy-run-view and .console-run-view.",
+        "packages/docs-web/src/content/docs/brand/index.md documents the new presentation tokens.",
+        "ExecutionDagNode.tsx and build-workflow-dag-view-model.ts supply openerId (roomOpenerId('legacy', 'graph', nodeId)) and tabIndex={-1} on Legacy graph node root.",
+        "RunGraphPanel.tsx sets id={roomOpenerId('console', 'graph', node.id)} on the focusable node button.",
+        "RunDetailHeader.tsx renders 'Awaiting input' as an interactive button when askAwaiting is true and onAwaitingInput is supplied, opening the awaiting execution.",
+        "StreamToolbar.tsx uses relative tab typography without horizontal page overflow.",
+        "Tests in ExecutionDagNode.test.tsx, build-workflow-dag-view-model.test.ts, RunGraphPanel.test.tsx, and RunDetailHeader.test.tsx pass."
+      ],
+      "technicalNotes": "Follow plan Task 13 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:1789-1906). Modify index.css, brand docs, ExecutionDagNode.tsx, build-workflow-dag-view-model.ts, RunGraphPanel.tsx, RunDetailHeader.tsx, StreamToolbar.tsx.",
+      "dependsOn": [
+        "US-005",
+        "US-007",
+        "US-010"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": "Implemented in iteration 13. Files: packages/web/src/index.css, packages/docs-web/src/content/docs/brand/index.md, ExecutionDagNode.tsx/.test.tsx, build-workflow-dag-view-model.ts/.test.ts, RunGraphPanel.tsx/.test.tsx, RunDetailHeader.tsx/.test.tsx, StreamToolbar.tsx, RunDetailPage.tsx."
+    },
+    {
+      "id": "US-014",
+      "title": "Add a deterministic multi-page provider fixture",
+      "description": "As a test engineer, I want a multi-page e2e fixture generating over 100 tool calls deterministically, so that Playwright can verify real cursor pagination without external LLM dependencies.",
+      "acceptanceCriteria": [
+        "packages/providers/src/e2e-fake/provider.ts adds repeatTool (optional integer between 1 and 200) to scenario schema, generating distinct sequential tool call/result pairs suffixing IDs with -1 through -N while preserving exact legacy trace when omitted.",
+        "packages/providers/src/e2e-fake/provider.test.ts verifies repeatTool behavior, boundaries (rejecting 0, 201, non-integers), and backwards compatibility.",
+        "e2e/fixtures/workflows/e2e-hitl-long-history.yaml defines workflow e2e-hitl-long-history using repeatTool: 120 on e2e-fake provider.",
+        "e2e/lib/playwright/archon-runtime.ts exports E2E_HITL_LONG_WORKFLOW_NAME, HITL_LONG_NODE, and runHitlLongHistoryWorkflow().",
+        "Tests in packages/providers/src/e2e-fake/provider.test.ts and e2e typecheck pass."
+      ],
+      "technicalNotes": "Follow plan Task 14 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:1907-2013). Modify packages/providers/src/e2e-fake/provider.ts, e2e-fake/provider.test.ts, e2e/lib/playwright/archon-runtime.ts; create e2e/fixtures/workflows/e2e-hitl-long-history.yaml.",
+      "dependsOn": [],
+      "priority": 14,
+      "passes": true,
+      "notes": "Implemented in iteration 14. Files: packages/providers/src/e2e-fake/provider.ts, packages/providers/src/e2e-fake/provider.test.ts, e2e/fixtures/workflows/e2e-hitl-long-history.yaml, e2e/lib/playwright/archon-runtime.ts."
+    },
+    {
+      "id": "US-015",
+      "title": "Prove the end-to-end room contract and close the story",
+      "description": "As the release manager, I want Playwright end-to-end acceptance tests, visual comparison assertions, and an honest acceptance report, so that Story 5.6 is proven across desktop and mobile viewports before marking done.",
+      "acceptanceCriteria": [
+        "e2e/lib/playwright/run-detail.ts exports observeNodeMessagePages(page, runId, nodeId) to capture URL query params across pages without route mocking.",
+        "e2e/ui/workflow-run-hitl-room.spec.ts implements all 17 specified P1 acceptance scenarios covering room open/close, percentage ratio, focus restore, execution selection, shared Ask drafts, mobile Back, deep-link re-entry, and multi-page cursor draining (> 100 tools rendered).",
+        "e2e/ui/workflow-run-hitl-visual.spec.ts removes vacuous mockup catch blocks and captures honest screenshots at 1440x1000, 1024x900, 768x900, and 390x844.",
+        "plans/reports/acceptance-260908-story-5-6.md records actual viewport evidence, ratio measurements, reachability notes, and explicit limitations.",
+        "_bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md and sprint-status.yaml are updated, marking Story 5.6 done only after bun run validate and Playwright suites pass."
+      ],
+      "technicalNotes": "Follow plan Task 15 (docs/superpowers/plans/2026-09-08-align-agent-history-responsive-run-room.md:2014-2223). Create e2e/ui/workflow-run-hitl-room.spec.ts, plans/reports/acceptance-260908-story-5-6.md; modify run-detail.ts, workflow-run-hitl-visual.spec.ts, epics.md, sprint-status.yaml.",
+      "dependsOn": [
+        "US-008",
+        "US-009",
+        "US-010",
+        "US-011",
+        "US-012",
+        "US-013",
+        "US-014"
+      ],
+      "priority": 15,
+      "passes": true,
+      "notes": "Implemented in iteration 15. Files: e2e/lib/playwright/run-detail.ts, e2e/lib/playwright/archon-runtime.ts, e2e/fixtures/workflows/e2e-hitl-two-asks.yaml, e2e/ui/workflow-run-hitl-room.spec.ts, e2e/ui/workflow-run-hitl-visual.spec.ts, e2e/ui/workflow-run-hitl.spec.ts, packages/providers/src/e2e-fake/provider.ts, packages/providers/src/e2e-fake/provider.test.ts, packages/web/src/experiments/console/routes/RunDetailPage.tsx, packages/web/src/experiments/console/components/ask/ConsoleAskCard.tsx, packages/web/src/experiments/console/components/ask/ConsoleAskCard.test.tsx, plans/reports/acceptance-260908-story-5-6.md, _bmad-output/planning-artifacts/epics-workflow-run-view-hitl/epics.md, _bmad-output/implementation-artifacts/workflow-run-view-hitl/sprint-status.yaml."
+    }
+  ]
+}

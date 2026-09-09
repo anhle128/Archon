@@ -174,6 +174,7 @@ function renderStatic(args: {
       onApprove={async (): Promise<void> => undefined}
       onReject={async (): Promise<void> => undefined}
       pendingInteractions={[]}
+      ownsUnscopedInteractions
       viewerIsStarter={false}
       starterDisplayName={null}
       actionStates={{}}
@@ -330,6 +331,7 @@ describe('LegacyNodeRoom static rooms', () => {
         onApprove={async (): Promise<void> => undefined}
         onReject={async (): Promise<void> => undefined}
         pendingInteractions={[]}
+        ownsUnscopedInteractions
         viewerIsStarter={false}
         starterDisplayName={null}
         actionStates={{}}
@@ -687,6 +689,7 @@ describe('LegacyNodeRoom dispatcher', () => {
           onApprove: async (): Promise<void> => undefined,
           onReject: async (): Promise<void> => undefined,
           pendingInteractions: [],
+          ownsUnscopedInteractions: true,
           viewerIsStarter: false,
           starterDisplayName: null,
           actionStates: {},

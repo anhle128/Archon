@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { MarkerType } from '@xyflow/react';
 import type { DagNode } from '@/lib/api';
+import { roomOpenerId } from '@/lib/execution-room-model';
 import type { DagNodeState } from '@/lib/types';
 import { layoutRunGraph } from './build-run-graph-input';
 import { buildWorkflowDagViewModel } from './build-workflow-dag-view-model';
@@ -29,6 +30,22 @@ describe('buildWorkflowDagViewModel', () => {
     expect(model.nodes.map(node => node.id)).toEqual(['a', 'b']);
     expect(model.nodes[0].position).toEqual(layout.positions.a);
     expect(model.nodes[1].position).toEqual(layout.positions.b);
+  });
+
+  test('each node data receives a legacy graph opener id', () => {
+    const dagNodes: DagNode[] = [
+      { id: 'a', prompt: 'n' },
+      { id: 'review/1', prompt: 'n' },
+    ];
+    const model = buildWorkflowDagViewModel({
+      dagNodes,
+      liveStatus: [],
+      selectedNodeId: null,
+    });
+    expect(model.nodes.map(node => node.data.openerId)).toEqual([
+      roomOpenerId('legacy', 'graph', 'a'),
+      roomOpenerId('legacy', 'graph', 'review/1'),
+    ]);
   });
 
   test('missing live status remains pending without changing the definition label', () => {
