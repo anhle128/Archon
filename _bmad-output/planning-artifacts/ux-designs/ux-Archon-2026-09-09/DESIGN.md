@@ -314,6 +314,8 @@ The row is already subordinate through its tertiary `todo updated` headline and 
 Only Claude ever produces the outcome, from the `PostToolUseFailure` hook when `is_interrupt` is true (`packages/providers/src/claude/provider.ts:952-959`) — a hook that already writes the same glyph into the output text, so the row and its body agree without extra work.
 Codex cannot produce it at all: its union is `success`/`error`/`unknown` (`codex/provider.ts:644-650`).
 
+One collision is worth naming. On Legacy, `--warning` and `--node-bash` are the same value — `oklch(0.75 0.15 75)` at `index.css:24` and `:30` — so an interrupted **shell** row draws its `⚠` in the same amber as its own chip, the one case where the glyph does not out-shout the chip beside it. The shape still separates them, the case is rare (Claude only, and only on a true interrupt), and the alternative is a new token this track has ruled out. Recorded, not redesigned.
+
 **Surfaces** — three tonal steps and no more.
 `surface` is the panel.
 `surface-elevated` lifts chips and subtask cards off it.
@@ -329,7 +331,7 @@ Codex cannot produce it at all: its union is `success`/`error`/`unknown` (`codex
 **Inside body boxes**, four accents reuse the palette so the eye learns one vocabulary: `$` sigil in `{colors.node-bash}`, paths in `{colors.node-command}`, keywords in `{colors.node-prompt}`, strings in `{colors.success-legacy}` / `{colors.success-console}` — the same green the diff and pass lines already use.
 Diff lines use success for `+` and error for `−`; `FAILED`/`ok` markers use error/success bold.
 
-**Measured contrast** (sRGB approximation of the oklch tokens; target 4.5:1 for all transcript text, which is 10–12px):
+**Measured contrast** — every cell converted oklch → sRGB → relative luminance from the two token files, not estimated. Target 4.5:1 for all transcript text, which is 10–12px.
 
 | Pair                                                                      | Legacy    | Console   |
 | ------------------------------------------------------------------------- | --------- | --------- |
@@ -343,8 +345,9 @@ Diff lines use success for `+` and error for `−`; `FAILED`/`ok` markers use er
 | node-command chip on surface-elevated                                     | 4.8:1     | 4.9:1     |
 | node-prompt chip on surface-elevated                                      | **3.8:1** | **3.9:1** |
 | node-approval chip on surface-elevated                                    | 6.5:1     | 6.8:1     |
-| text-secondary on surface-hover (the state a pointer reader is in)        | 5.4:1     | 7.7:1     |
+| text-secondary on surface-hover (the state a pointer reader is in)        | 5.1:1     | 7.5:1     |
 | text-secondary on surface-inset (raw box, key column)                     | 6.3:1     | 8.9:1     |
+| warning glyph on surface (`⚠`)                                            | 8.3:1     | 10.1:1    |
 | node-prompt on surface-inset (code-body keywords)                         | **4.4:1** | **4.4:1** |
 | focus ring on surface — `--accent-ring`, the token Console ships          | **1.4:1** | **1.4:1** |
 | focus ring on surface — `--accent-bright`, the token this spine specifies | 7.4:1     | 4.9:1     |
