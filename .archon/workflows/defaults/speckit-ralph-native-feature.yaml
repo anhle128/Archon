@@ -659,9 +659,9 @@ nodes:
       Return FAIL when it added one or more tasks to tasks.md .
     depends_on:
       - ralph-sync-back
-    provider: codex
+    provider: omp
     effort: xhigh
-    model: gpt-5.6-sol
+    model: cursor/gpt-5.6-sol
     context: fresh
     output_format:
       type: object
