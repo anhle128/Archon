@@ -20,6 +20,7 @@ export interface NodeRoomHeaderProps {
   selectedRowId: string;
   onSelectRow: (rowId: string) => void;
   onClose: () => void;
+  closeLabel?: 'Close' | 'Back';
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -47,21 +48,22 @@ export function NodeRoomHeader({
   selectedRowId,
   onSelectRow,
   onClose,
+  closeLabel = 'Close',
 }: NodeRoomHeaderProps): React.ReactElement {
   const started = startedOffsetLabel(model.startedOffsetMs);
   const duration = model.durationMs === null ? null : formatDurationMs(model.durationMs);
   const statusClass = STATUS_COLORS[model.status] ?? 'bg-surface text-text-secondary';
 
   return (
-    <header className="sticky top-0 z-10 border-b border-border bg-surface">
-      <div className="flex items-center gap-2 px-4 py-2">
-        <div className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+    <header className="sticky top-0 z-10 min-w-0 overflow-hidden border-b border-border bg-surface">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2">
+        <div className="min-w-[8rem] flex-1 truncate text-sm font-medium text-text-primary">
           {model.nodeLabel}
         </div>
         <div className="shrink-0 text-xs text-text-secondary">{model.executionLabel}</div>
         <select
           aria-label="Execution"
-          className="max-w-[10rem] truncate rounded border border-border bg-surface-elevated px-2 py-0.5 text-xs text-text-primary"
+          className="min-w-0 max-w-[10rem] flex-[0_1_10rem] truncate rounded border border-border bg-surface-elevated px-2 py-0.5 text-xs text-text-primary"
           value={selectedRowId}
           onChange={(event): void => {
             onSelectRow(event.currentTarget.value);
@@ -83,17 +85,21 @@ export function NodeRoomHeader({
           <span className="shrink-0 text-xs text-text-secondary">{duration}</span>
         ) : null}
         {model.provider !== null ? (
-          <span className="shrink-0 text-xs text-text-secondary">{model.provider}</span>
+          <span className="min-w-0 max-w-[10rem] truncate text-xs text-text-secondary">
+            {model.provider}
+          </span>
         ) : null}
         {model.model !== null ? (
-          <span className="shrink-0 truncate text-xs text-text-secondary">{model.model}</span>
+          <span className="min-w-0 max-w-[12rem] truncate text-xs text-text-secondary">
+            {model.model}
+          </span>
         ) : null}
         <button
           type="button"
-          className="shrink-0 text-xs text-primary hover:text-accent-bright"
+          className="ml-auto shrink-0 text-xs text-primary hover:text-accent-bright"
           onClick={onClose}
         >
-          Close
+          {closeLabel}
         </button>
       </div>
     </header>

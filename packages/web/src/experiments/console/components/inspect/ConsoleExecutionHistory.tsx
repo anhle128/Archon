@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type ReactElement, type ReactNode } from '
 
 import { buildAgentHistory, type AgentHistoryItem } from '@/lib/agent-history';
 import {
+  beginNodeMessageRefresh,
   createNodeMessageState,
   drainNodeMessages,
   nodeMessageScopeKey,
@@ -33,6 +34,28 @@ import type { ConsoleLogEntry } from './build-console-log-entries';
 import type { LogRow } from './build-log-rows';
 import { interactionsForExecution } from './execution-interactions';
 import { readApprovalContext } from './read-approval-context';
+import { selectNodeRoomMessages } from './select-node-room-messages';
+
+export function shouldPollExecutionHistory(
+  runIsLive: boolean,
+  status: WorkflowNodeState['status']
+): boolean {
+  return runIsLive && (status === 'running' || status === 'awaiting');
+}
+
+function ownsUnscopedHistory(row: LogRow, entries: readonly ConsoleLogEntry[]): boolean {
+  if (row.selection.kind !== 'route_iteration') return true;
+  const routeRows = entries.filter(
+    candidate =>
+      candidate.row.nodeId === row.nodeId && candidate.row.selection.kind === 'route_iteration'
+  );
+  const latest = routeRows.reduce<ConsoleLogEntry | null>(
+    (current, candidate) =>
+      current === null || candidate.row.order > current.row.order ? candidate : current,
+    null
+  );
+  return latest?.row.id === row.id;
+}
 
 export interface ConsoleExecutionHistoryProps {
   entry: ConsoleLogEntry;
@@ -40,6 +63,7 @@ export interface ConsoleExecutionHistoryProps {
   run: Run;
   events: readonly WorkflowEvent[];
   isLive: boolean;
+  suspended?: boolean;
   loadMessages: (
     runId: string,
     nodeId: string,
@@ -90,6 +114,7 @@ export function ConsoleExecutionHistory({
   run,
   events,
   isLive,
+  suspended = false,
   loadMessages,
   loadMessage = getNodeMessage,
   pendingInteractions,
@@ -107,6 +132,7 @@ export function ConsoleExecutionHistory({
   const row = entry.row;
   const selection = selectionFromRow(row);
   const resolvedScopeKey = nodeMessageScopeKey(run.id, row.nodeId, selection);
+  const ownsHistory = ownsUnscopedHistory(row, allEntries);
   const [pageState, setPageState] = useState<NodeMessageState>(() =>
     createNodeMessageState(resolvedScopeKey)
   );
@@ -125,6 +151,11 @@ export function ConsoleExecutionHistory({
   }, [resolvedScopeKey]);
 
   useEffect(() => {
+    if (!ownsHistory) {
+      setPageState({ ...createNodeMessageState(resolvedScopeKey), complete: true });
+      return;
+    }
+    if (suspended) return;
     const controller = new AbortController();
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -151,14 +182,14 @@ export function ConsoleExecutionHistory({
       if (cancelled || controller.signal.aborted) return;
       if (isLive && next.error === null) {
         timer = setTimeout(() => {
-          void runDrain({ ...next, complete: false });
+          void runDrain(beginNodeMessageRefresh(next));
         }, 1000);
       }
     };
 
     const startState =
       pageStateRef.current.scopeKey === resolvedScopeKey
-        ? { ...pageStateRef.current, complete: false }
+        ? beginNodeMessageRefresh(pageStateRef.current)
         : createNodeMessageState(resolvedScopeKey);
     void runDrain(startState);
 
@@ -167,10 +198,11 @@ export function ConsoleExecutionHistory({
       controller.abort();
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [isLive, resolvedScopeKey, retryNonce, row.nodeId, run.id]);
+  }, [isLive, ownsHistory, resolvedScopeKey, retryNonce, row.nodeId, run.id, suspended]);
 
+  const visibleRows = ownsHistory ? selectNodeRoomMessages(pageState.rows, row.selection) : [];
   const items: AgentHistoryItem[] = buildAgentHistory({
-    rows: pageState.rows,
+    rows: visibleRows,
     events,
     nodeId: row.nodeId,
   });
@@ -238,6 +270,7 @@ export function ConsoleExecutionHistory({
   };
 
   const waitingForFirstPage =
+    !suspended &&
     pageState.rows.length === 0 &&
     pageState.error === null &&
     (pageState.loading || !pageState.complete);

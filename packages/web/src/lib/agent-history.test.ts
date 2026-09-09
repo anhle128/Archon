@@ -17,6 +17,7 @@ type WorkflowEvent = components['schemas']['WorkflowEvent'];
 type ToolMetadata = NonNullable<Extract<NodeMessageRow, { kind: 'tool' }>['metadata']> & {
   outcome?: 'success' | 'error' | 'interrupted' | 'unknown';
   exit_code?: number;
+  full_output_available?: boolean;
 };
 
 function textRow(
@@ -280,6 +281,7 @@ describe('buildAgentHistory', () => {
       outcome: 'failed',
       durationMs: 18,
       canLoadFullOutput: false,
+      outputState: 'full',
       messageId: 'tool-result-bash',
       context: [{ label: 'cmd', value: 'ls' }],
     });
@@ -298,7 +300,8 @@ describe('buildAgentHistory', () => {
       toolUseId: 'read-1',
       outcome: 'succeeded',
       durationMs: null,
-      canLoadFullOutput: true,
+      canLoadFullOutput: false,
+      outputState: 'truncated',
       messageId: 'tool-result-read',
     });
   });
@@ -332,6 +335,7 @@ describe('buildAgentHistory', () => {
       outcome: 'running',
       seq: 1,
       canLoadFullOutput: false,
+      outputState: 'missing',
       messageId: 'pending-call',
     });
     expect(items[1]).toMatchObject({
@@ -339,7 +343,80 @@ describe('buildAgentHistory', () => {
       outcome: 'unknown',
       seq: 2,
       canLoadFullOutput: false,
+      outputState: 'full',
       messageId: 'orphan-result',
+    });
+  });
+
+  test('distinguishes retrievable response truncation and preserves interrupted outcomes', () => {
+    const items = buildAgentHistory({
+      nodeId: NODE_ID,
+      events: [],
+      rows: [
+        toolRow({
+          id: 'source-call',
+          seq: 1,
+          name: 'Read',
+          toolUseId: 'source',
+          metadata: { tool_phase: 'call' },
+        }),
+        toolRow({
+          id: 'source-result',
+          seq: 2,
+          name: 'Read',
+          toolUseId: 'source',
+          output: 'provider-truncated',
+          metadata: { tool_phase: 'result', truncated: true, output_state: 'truncated' },
+        }),
+        toolRow({
+          id: 'response-call',
+          seq: 3,
+          name: 'Read',
+          toolUseId: 'response',
+          metadata: { tool_phase: 'call' },
+        }),
+        toolRow({
+          id: 'response-result',
+          seq: 4,
+          name: 'Read',
+          toolUseId: 'response',
+          output: 'response-truncated',
+          metadata: {
+            tool_phase: 'result',
+            truncated: true,
+            output_state: 'truncated',
+            full_output_available: true,
+          },
+        }),
+        toolRow({
+          id: 'interrupted-call',
+          seq: 5,
+          name: 'Bash',
+          toolUseId: 'interrupted',
+          metadata: { tool_phase: 'call' },
+        }),
+        toolRow({
+          id: 'interrupted-result',
+          seq: 6,
+          name: 'Bash',
+          toolUseId: 'interrupted',
+          output: 'partial',
+          metadata: { tool_phase: 'result', outcome: 'interrupted' },
+        }),
+      ],
+    });
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({
+      canLoadFullOutput: false,
+      outputState: 'truncated',
+    });
+    expect(items[1]).toMatchObject({
+      canLoadFullOutput: true,
+      outputState: 'truncated',
+    });
+    expect(items[2]).toMatchObject({
+      outcome: 'interrupted',
+      outputState: 'full',
     });
   });
 });

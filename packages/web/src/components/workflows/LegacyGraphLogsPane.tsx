@@ -56,12 +56,18 @@ export interface LegacyGraphLogsPaneProps {
   selectedNodeId: string | null;
   selectedLogRowId: string | null;
   lastExplicitRowByNode?: Record<string, string>;
-  onOpenRoom: (rowId: string, nodeId: string, openerId: string | null) => void;
+  onOpenRoom: (
+    rowId: string,
+    nodeId: string,
+    openerId: string | null,
+    rememberExplicit: boolean
+  ) => void;
   onCloseRoom: () => void;
   roomRatio: number;
   onRoomRatioChange: (ratio: number) => void;
   splitMode?: ContainerSplitMode;
   runId: string;
+  runStartedAt: string;
   nodeStates: readonly WorkflowNodeStateResponse[];
   events: readonly WorkflowEventResponse[];
   nodeExecutions?: readonly NodeExecution[];
@@ -187,6 +193,7 @@ export function LegacyGraphLogsPane({
   onRoomRatioChange,
   splitMode: splitModeOverride,
   runId,
+  runStartedAt,
   nodeStates,
   events,
   nodeExecutions,
@@ -226,8 +233,8 @@ export function LegacyGraphLogsPane({
     [approval, events, nodeStates, runStatus]
   );
   const rows = useMemo(
-    () => buildLogRows(visibleNodeStates, events, nodeExecutions),
-    [events, nodeExecutions, visibleNodeStates]
+    () => buildLogRows(visibleNodeStates, events, nodeExecutions, runStartedAt),
+    [events, nodeExecutions, runStartedAt, visibleNodeStates]
   );
   const [selectedTimelineEntryId, setSelectedTimelineEntryId] = useState<string | null>(null);
   const [chatDraft, setChatDraft] = useState('');
@@ -251,6 +258,9 @@ export function LegacyGraphLogsPane({
             liveStatus: visibleNodeStates,
           });
   const roomOpen = selectedRow !== null;
+  const ownsUnscopedInteractions =
+    selectedRow !== null &&
+    !rows.some(row => row.nodeId === selectedRow.nodeId && row.order > selectedRow.order);
 
   const parentMessagesQuery = useQuery({
     queryKey: ['runChatMessages', parentPlatformId],
@@ -341,12 +351,12 @@ export function LegacyGraphLogsPane({
         liveStatus: visibleNodeStates,
       });
     if (row === null) return;
-    onOpenRoom(row.id, nodeId, roomOpenerId('legacy', 'graph', nodeId));
+    onOpenRoom(row.id, nodeId, roomOpenerId('legacy', 'graph', nodeId), false);
   };
 
   const handleLogRowSelect = (row: LogRow): void => {
     setSelectedTimelineEntryId(null);
-    onOpenRoom(row.id, row.nodeId, roomOpenerId('legacy', 'log', row.id));
+    onOpenRoom(row.id, row.nodeId, roomOpenerId('legacy', 'log', row.id), true);
   };
 
   const handleNodeStatusSelect = (
@@ -358,7 +368,7 @@ export function LegacyGraphLogsPane({
       liveStatus: visibleNodeStates,
     });
     setSelectedTimelineEntryId(entry.id);
-    onOpenRoom(row.id, row.nodeId, null);
+    onOpenRoom(row.id, row.nodeId, null, true);
   };
 
   const handleChatSubmit = (): void => {
@@ -470,24 +480,13 @@ export function LegacyGraphLogsPane({
       </div>
     );
 
-  const wrappedLeft = (
-    <div
-      id={mode === 'single' ? 'legacy-run-view' : undefined}
-      hidden={mode === 'single' && roomOpen}
-    >
-      {leftPane}
-    </div>
-  );
+  const wrappedLeft = <div className="flex h-full min-h-0 flex-col">{leftPane}</div>;
 
   const roomPane = (
     <div
       data-testid="legacy-node-room"
-      id={mode === 'single' ? 'legacy-run-room' : undefined}
       className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
     >
-      <button type="button" onClick={onCloseRoom}>
-        {mode === 'single' ? 'Back' : 'Close'}
-      </button>
       {roomHeader}
       <LegacyNodeRoom
         runId={runId}
@@ -501,6 +500,7 @@ export function LegacyGraphLogsPane({
         onApprove={onApprove}
         onReject={onReject}
         pendingInteractions={pendingInteractions}
+        ownsUnscopedInteractions={ownsUnscopedInteractions}
         viewerIsStarter={viewerIsStarter}
         starterDisplayName={starterDisplayName}
         actionStates={actionStates}
@@ -514,6 +514,7 @@ export function LegacyGraphLogsPane({
         headerOptions={headerOptions}
         onSelectRow={onSelectExecution}
         onClose={onCloseRoom}
+        closeLabel={mode === 'single' ? 'Back' : 'Close'}
         scopeKey={scopeKey}
         initialScrollTop={initialScrollTop}
         onScrollTopChange={onScrollTopChange}
@@ -525,6 +526,7 @@ export function LegacyGraphLogsPane({
   );
 
   const handleLayoutChanged = (layout: Record<string, number>): void => {
+    if (mode !== 'split') return;
     const roomSize = layout['legacy-run-room'];
     if (typeof roomSize !== 'number') return;
     onRoomRatioChange(clampRoomRatio(roomSize));
@@ -532,47 +534,48 @@ export function LegacyGraphLogsPane({
 
   return (
     <div ref={paneRef} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      {mode === 'single' ? (
-        <>
-          {wrappedLeft}
-          {roomOpen ? roomPane : null}
-        </>
-      ) : (
-        <ResizablePanelGroup
-          orientation={stacked ? 'vertical' : 'horizontal'}
-          className="min-h-0 flex-1"
-          defaultLayout={
-            roomOpen
+      <ResizablePanelGroup
+        orientation={mode === 'split' && stacked ? 'vertical' : 'horizontal'}
+        className="min-h-0 flex-1"
+        defaultLayout={
+          mode === 'single'
+            ? roomOpen
+              ? { 'legacy-run-view': 0, 'legacy-run-room': 100 }
+              : { 'legacy-run-view': 100 }
+            : roomOpen
               ? {
                   'legacy-run-view': 100 - clampRoomRatio(roomRatio),
                   'legacy-run-room': clampRoomRatio(roomRatio),
                 }
               : { 'legacy-run-view': 100 }
+        }
+        onLayoutChanged={handleLayoutChanged}
+      >
+        <PercentResizablePanel
+          id="legacy-run-view"
+          className="flex min-h-0 flex-col"
+          hidden={mode === 'single' && roomOpen}
+          defaultSize={
+            mode === 'single' && roomOpen ? '0%' : roomOpen ? sizes.view.defaultSize : '100%'
           }
-          onLayoutChanged={handleLayoutChanged}
+          minSize={mode === 'single' && roomOpen ? '0%' : sizes.view.minSize}
         >
-          <PercentResizablePanel
-            id="legacy-run-view"
-            defaultSize={roomOpen ? sizes.view.defaultSize : '100%'}
-            minSize={sizes.view.minSize}
-          >
-            {wrappedLeft}
-          </PercentResizablePanel>
-          {roomOpen ? (
-            <>
-              <ResizableHandle withHandle aria-label="Resize node room" />
-              <PercentResizablePanel
-                id="legacy-run-room"
-                defaultSize={sizes.room.defaultSize}
-                minSize={sizes.room.minSize}
-                maxSize={sizes.room.maxSize}
-              >
-                {roomPane}
-              </PercentResizablePanel>
-            </>
-          ) : null}
-        </ResizablePanelGroup>
-      )}
+          {wrappedLeft}
+        </PercentResizablePanel>
+        {roomOpen ? (
+          <>
+            {mode === 'split' ? <ResizableHandle withHandle aria-label="Resize node room" /> : null}
+            <PercentResizablePanel
+              id="legacy-run-room"
+              defaultSize={mode === 'single' ? '100%' : sizes.room.defaultSize}
+              minSize={mode === 'single' ? '100%' : sizes.room.minSize}
+              maxSize={mode === 'single' ? '100%' : sizes.room.maxSize}
+            >
+              {roomPane}
+            </PercentResizablePanel>
+          </>
+        ) : null}
+      </ResizablePanelGroup>
     </div>
   );
 }

@@ -14,6 +14,7 @@ import {
   type WorkflowNodeStateResponse,
 } from '@/lib/api';
 import {
+  beginNodeMessageRefresh,
   createNodeMessageState,
   drainNodeMessages,
   nodeMessageScopeKey,
@@ -28,7 +29,10 @@ import { AskCard, InvalidAskCard } from './AskCard';
 import type { AskActionStateByRequest } from './ask-answer-controller';
 import { resolveAskCardPresentation } from './ask-card-presentation';
 import type { LogRow } from './build-log-rows';
-import { selectVisibleNodeAskInteractions } from './merge-agent-room-items';
+import {
+  selectVisibleNodeAskInteractions,
+  UNSCOPED_INTERACTION_LIMITATION,
+} from './merge-agent-room-items';
 import { NodeRoom, selectNodeRoomMessages } from './NodeRoom';
 import { parseAskEnvelope, type AskDraft, type AskDraftByRequest } from './parse-ask-envelope';
 
@@ -69,6 +73,7 @@ export interface NodeTranscriptPaneProps {
   runStatus: WorkflowRunStatus;
   loadMessages: NodeMessageLoader;
   pendingInteractions: readonly PendingInteraction[];
+  ownsUnscopedInteractions: boolean;
   viewerIsStarter: boolean;
   starterDisplayName: string | null;
   actionStates: AskActionStateByRequest;
@@ -99,6 +104,7 @@ export function NodeTranscriptPane({
   runStatus,
   loadMessages,
   pendingInteractions,
+  ownsUnscopedInteractions,
   viewerIsStarter,
   starterDisplayName,
   actionStates,
@@ -117,7 +123,6 @@ export function NodeTranscriptPane({
     (row === null
       ? 'run:none|node:none|sel:node:none'
       : nodeMessageScopeKey(runId, row.nodeId, selectionFromRow(row)));
-  const handleScrollTopChange = onScrollTopChange ?? ((): void => undefined);
   const [pageState, setPageState] = useState<NodeMessageState>(() =>
     createNodeMessageState(resolvedScopeKey)
   );
@@ -129,11 +134,9 @@ export function NodeTranscriptPane({
 
   const pageStateRef = useRef(pageState);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const onScrollTopChangeRef = useRef(handleScrollTopChange);
   const loadMessagesRef = useRef(loadMessages);
   const prevScopeRef = useRef(resolvedScopeKey);
   pageStateRef.current = pageState;
-  onScrollTopChangeRef.current = handleScrollTopChange;
   loadMessagesRef.current = loadMessages;
 
   const nodeId = row?.nodeId ?? null;
@@ -181,14 +184,14 @@ export function NodeTranscriptPane({
       if (cancelled || controller.signal.aborted) return;
       if (live && next.error === null) {
         timer = setTimeout(() => {
-          void runDrain({ ...next, complete: false });
+          void runDrain(beginNodeMessageRefresh(next));
         }, 1000);
       }
     };
 
     const startState =
       pageStateRef.current.scopeKey === resolvedScopeKey
-        ? { ...pageStateRef.current, complete: false }
+        ? beginNodeMessageRefresh(pageStateRef.current)
         : createNodeMessageState(resolvedScopeKey);
     void runDrain(startState);
 
@@ -197,13 +200,14 @@ export function NodeTranscriptPane({
       controller.abort();
       if (timer !== undefined) clearTimeout(timer);
       const el = scrollRef.current;
-      if (el !== null) onScrollTopChangeRef.current(el.scrollTop);
+      if (el !== null) onScrollTopChange?.(el.scrollTop);
     };
   }, [
     attemptId,
     loadMessages,
     nodeId,
     occurrenceId,
+    onScrollTopChange,
     resolvedScopeKey,
     retryNonce,
     row,
@@ -240,8 +244,10 @@ export function NodeTranscriptPane({
       : selectVisibleNodeAskInteractions({
           pending: pendingInteractions,
           nodeId: row.nodeId,
+          selection: row.selection,
           allMessages,
           visibleMessages,
+          ownsUnscopedInteractions,
         });
   const visibleToolIds = collectToolIds(visibleMessages);
   const anchoredAsks = visibleAsks.filter(interaction =>
@@ -281,14 +287,20 @@ export function NodeTranscriptPane({
 
   const renderAskCard = (interaction: PendingInteraction): React.ReactElement => {
     const questions = parseAskEnvelope(interaction.envelope);
+    const limitation =
+      interaction.execution_scope == null ? (
+        <p className="text-xs text-warning">{UNSCOPED_INTERACTION_LIMITATION}</p>
+      ) : null;
     if (questions === null) {
       return (
-        <InvalidAskCard
-          key={interaction.id}
-          interaction={interaction}
-          agentDisplayName={agentDisplayName}
-          nodeId={displayNodeId}
-        />
+        <div key={interaction.id}>
+          {limitation}
+          <InvalidAskCard
+            interaction={interaction}
+            agentDisplayName={agentDisplayName}
+            nodeId={displayNodeId}
+          />
+        </div>
       );
     }
     const requestId = interaction.tool_use_id;
@@ -306,27 +318,29 @@ export function NodeTranscriptPane({
       setLocalAskDrafts(current => ({ ...current, [requestId]: next }));
     };
     return (
-      <AskCard
-        key={interaction.id}
-        interaction={interaction}
-        questions={questions}
-        presentation={presentation}
-        viewerIsStarter={viewerIsStarter}
-        starterDisplayName={starterDisplayName}
-        agentDisplayName={agentDisplayName}
-        nodeId={displayNodeId}
-        autoFocus={interaction.id === firstActionableId}
-        nowMs={nowMs}
-        mountContext="room"
-        draft={(onAskDraftChange === undefined ? localAskDrafts : askDrafts)?.[requestId] ?? {}}
-        onDraftChange={updateDraft}
-        onSubmit={(body): void => {
-          void onSubmitAsk(requestId, body);
-        }}
-        onDecline={(): void => {
-          void onSubmitAsk(requestId, { decline: true });
-        }}
-      />
+      <div key={interaction.id}>
+        {limitation}
+        <AskCard
+          interaction={interaction}
+          questions={questions}
+          presentation={presentation}
+          viewerIsStarter={viewerIsStarter}
+          starterDisplayName={starterDisplayName}
+          agentDisplayName={agentDisplayName}
+          nodeId={displayNodeId}
+          autoFocus={interaction.id === firstActionableId}
+          nowMs={nowMs}
+          mountContext="room"
+          draft={(onAskDraftChange === undefined ? localAskDrafts : askDrafts)?.[requestId] ?? {}}
+          onDraftChange={updateDraft}
+          onSubmit={(body): void => {
+            void onSubmitAsk(requestId, body);
+          }}
+          onDecline={(): void => {
+            void onSubmitAsk(requestId, { decline: true });
+          }}
+        />
+      </div>
     );
   };
 
@@ -338,7 +352,7 @@ export function NodeTranscriptPane({
       clientHeight: target.clientHeight,
     });
     setFollow(next);
-    handleScrollTopChange(target.scrollTop);
+    onScrollTopChange?.(target.scrollTop);
   };
 
   const handleJump = (): void => {
@@ -346,7 +360,7 @@ export function NodeTranscriptPane({
     setFollow(jumpToLatest(follow));
     if (el !== null) {
       el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-      handleScrollTopChange(el.scrollTop);
+      onScrollTopChange?.(el.scrollTop);
     }
   };
 

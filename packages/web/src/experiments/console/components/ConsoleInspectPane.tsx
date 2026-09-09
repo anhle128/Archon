@@ -40,7 +40,10 @@ import { ConsoleNodeRoom } from './ConsoleNodeRoom';
 import { RunGraphPanel } from './RunGraphPanel';
 import { RunStream } from './RunStream';
 import type { ConsoleLogEntry } from './inspect/build-console-log-entries';
-import { ConsoleExecutionHistory } from './inspect/ConsoleExecutionHistory';
+import {
+  ConsoleExecutionHistory,
+  shouldPollExecutionHistory,
+} from './inspect/ConsoleExecutionHistory';
 import type { LogRow } from './inspect/build-log-rows';
 import type { ConsoleExecutionHeaderOption } from './inspect/ConsoleRoomHeader';
 import { isInspectRunLive } from './inspect/inspect-status';
@@ -215,6 +218,11 @@ export function ConsoleInspectPane({
     () => resolveSelectedRow(logEntries, selectedNodeId, selectedLogRowId),
     [logEntries, selectedNodeId, selectedLogRowId]
   );
+  const ownsUnscopedInteractions =
+    selectedRow !== null &&
+    !logEntries.some(
+      entry => entry.row.nodeId === selectedRow.nodeId && entry.row.order > selectedRow.order
+    );
   const roomOpen = selectedNodeId !== null;
   const ratio = clampRoomRatio(roomRatio);
   const sizes = roomPanelSizes(ratio);
@@ -233,7 +241,11 @@ export function ConsoleInspectPane({
 
   const mainPane: ReactElement =
     view === 'log' ? (
-      <div ref={logScrollRef} className="min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={logScrollRef}
+        data-testid="console-run-log-scroll"
+        className="min-h-0 flex-1 overflow-y-auto"
+      >
         {logHeader}
         <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
           <RunStream
@@ -254,7 +266,8 @@ export function ConsoleInspectPane({
                 allEntries={logEntries}
                 run={run}
                 events={rawEvents}
-                isLive={isInspectRunLive(run.status)}
+                isLive={shouldPollExecutionHistory(isInspectRunLive(run.status), entry.row.status)}
+                suspended={entry.row.id === selectedLogRowId}
                 loadMessages={loadMessages}
                 loadMessage={loadMessage}
                 pendingInteractions={pendingInteractions}
@@ -295,7 +308,6 @@ export function ConsoleInspectPane({
     selectedNodeId === null ? null : (
       <div
         data-testid="console-inspect-room"
-        id={mode === 'single' ? 'console-run-room' : undefined}
         className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
       >
         <ConsoleNodeRoom
@@ -313,6 +325,7 @@ export function ConsoleInspectPane({
           loadMessage={loadMessage}
           onClose={onCloseRoom}
           pendingInteractions={pendingInteractions}
+          ownsUnscopedInteractions={ownsUnscopedInteractions}
           viewerIsStarter={viewerIsStarter}
           starterDisplayName={starterDisplayName}
           actionStates={actionStates}
@@ -335,6 +348,7 @@ export function ConsoleInspectPane({
     );
 
   const handleLayoutChanged = (layout: Record<string, number>): void => {
+    if (mode !== 'split') return;
     const roomSize = layout['console-run-room'];
     if (typeof roomSize !== 'number') return;
     onRoomRatioChange?.(clampRoomRatio(roomSize));
@@ -346,49 +360,48 @@ export function ConsoleInspectPane({
       data-testid="console-inspect-pane"
       className="flex min-h-0 min-w-0 flex-1 flex-col"
     >
-      {mode === 'single' ? (
-        <>
-          <div id="console-run-view" hidden={roomOpen}>
-            {mainPane}
-          </div>
-          {roomOpen ? roomPane : null}
-        </>
-      ) : (
-        <ConsolePanelGroup
-          orientation="horizontal"
-          className="min-h-0 flex-1"
-          defaultLayout={
-            roomOpen
+      <ConsolePanelGroup
+        orientation="horizontal"
+        className="min-h-0 flex-1"
+        defaultLayout={
+          mode === 'single'
+            ? roomOpen
+              ? { 'console-run-view': 0, 'console-run-room': 100 }
+              : { 'console-run-view': 100 }
+            : roomOpen
               ? {
                   'console-run-view': 100 - ratio,
                   'console-run-room': ratio,
                 }
               : { 'console-run-view': 100 }
+        }
+        onLayoutChanged={handleLayoutChanged}
+      >
+        <ConsolePanel
+          id="console-run-view"
+          className="flex min-h-0 flex-col"
+          hidden={mode === 'single' && roomOpen}
+          defaultSize={
+            mode === 'single' && roomOpen ? '0%' : roomOpen ? sizes.view.defaultSize : '100%'
           }
-          onLayoutChanged={handleLayoutChanged}
+          minSize={mode === 'single' && roomOpen ? '0%' : sizes.view.minSize}
         >
-          <ConsolePanel
-            id="console-run-view"
-            defaultSize={roomOpen ? sizes.view.defaultSize : '100%'}
-            minSize={sizes.view.minSize}
-          >
-            {mainPane}
-          </ConsolePanel>
-          {roomOpen ? (
-            <>
-              <ConsolePanelSeparator aria-label="Resize node room" />
-              <ConsolePanel
-                id="console-run-room"
-                defaultSize={sizes.room.defaultSize}
-                minSize={sizes.room.minSize}
-                maxSize={sizes.room.maxSize}
-              >
-                {roomPane}
-              </ConsolePanel>
-            </>
-          ) : null}
-        </ConsolePanelGroup>
-      )}
+          {mainPane}
+        </ConsolePanel>
+        {roomOpen ? (
+          <>
+            {mode === 'split' ? <ConsolePanelSeparator aria-label="Resize node room" /> : null}
+            <ConsolePanel
+              id="console-run-room"
+              defaultSize={mode === 'single' ? '100%' : sizes.room.defaultSize}
+              minSize={mode === 'single' ? '100%' : sizes.room.minSize}
+              maxSize={mode === 'single' ? '100%' : sizes.room.maxSize}
+            >
+              {roomPane}
+            </ConsolePanel>
+          </>
+        ) : null}
+      </ConsolePanelGroup>
     </div>
   );
 }

@@ -927,7 +927,9 @@ describe('WorkflowExecution room visit', () => {
       (host.querySelector('[data-testid="legacy-node-room"]')?.textContent ?? '').includes('Notes')
     );
 
-    const roomCard = host.querySelector('[data-testid="legacy-node-room"] #run-ask-card-tool-ask');
+    const roomCard = host.querySelector(
+      '[data-testid="legacy-node-room"] #run-ask-card-tool-ask-room'
+    );
     const roomField = roomCard?.querySelector('textarea');
     if (roomField === null || roomField === undefined) throw new Error('missing room textarea');
     await act(async () => {
@@ -942,9 +944,7 @@ describe('WorkflowExecution room visit', () => {
       () =>
         (host.textContent ?? '').includes('ask-slot') || (host.textContent ?? '').includes('Notes')
     );
-    const chatCard = Array.from(host.querySelectorAll('#run-ask-card-tool-ask')).find(
-      card => !card.closest('[data-testid="legacy-node-room"]')
-    );
+    const chatCard = host.querySelector('#run-ask-card-tool-ask-chat');
     const chatField = chatCard?.querySelector('textarea');
     if (chatField === null || chatField === undefined) throw new Error('missing chat textarea');
     expect((chatField as unknown as HTMLTextAreaElement).value).toBe('shared-from-room');
@@ -958,7 +958,7 @@ describe('WorkflowExecution room visit', () => {
 
     await clickNamed('switch-run');
     await flushUntil('run switched', () => (host.textContent ?? '').includes('demo'));
-    const fields = Array.from(host.querySelectorAll('#run-ask-card-tool-ask textarea'));
+    const fields = Array.from(host.querySelectorAll('[id^="run-ask-card-tool-ask-"] textarea'));
     for (const field of fields) {
       expect((field as unknown as HTMLTextAreaElement).value).toBe('');
     }
@@ -977,8 +977,9 @@ describe('WorkflowExecution room visit', () => {
     await flushUntil(
       'opened from chrome',
       () =>
-        host.querySelector('[data-testid="legacy-node-room"] #run-ask-card-tool-ask textarea') !==
-        null
+        host.querySelector(
+          '[data-testid="legacy-node-room"] #run-ask-card-tool-ask-room textarea'
+        ) !== null
     );
     expect(host.querySelector('[data-testid="legacy-node-room"]')?.textContent ?? '').toContain(
       'Notes'
@@ -994,17 +995,11 @@ describe('WorkflowExecution room visit', () => {
         stillGraph?.getAttribute('aria-selected') === 'true'
     ).toBe(true);
     const active = win.document.activeElement as { tagName?: string; id?: string } | null;
-    const focusedAsk =
-      active?.id === 'run-ask-card-tool-ask' ||
-      ((active as { closest?: (selector: string) => Element | null } | null)?.closest?.(
-        '#run-ask-card-tool-ask'
-      ) !== null &&
-        (active as { closest?: (selector: string) => Element | null }).closest !== undefined);
+    const roomAsk = win.document.getElementById('run-ask-card-tool-ask-room');
     expect(
-      active?.tagName === 'TEXTAREA' ||
-        active?.tagName === 'INPUT' ||
-        active?.id === 'run-ask-card-tool-ask' ||
-        focusedAsk
+      roomAsk !== null &&
+        active !== null &&
+        (active === roomAsk || (active instanceof win.Node && roomAsk.contains(active)))
     ).toBe(true);
   });
 });

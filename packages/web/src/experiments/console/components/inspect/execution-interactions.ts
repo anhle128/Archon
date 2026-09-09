@@ -64,15 +64,12 @@ export function interactionsForExecution(
 
   for (const interaction of interactions) {
     if (interaction.node_id !== entry.row.nodeId) continue;
-    if (interaction.kind !== 'ask' && interaction.kind !== 'permission') continue;
+    if (interaction.kind !== 'ask') continue;
+    if (interaction.status !== 'pending' && interaction.status !== 'answered') continue;
     const target = assignedEntry(interaction.node_id, interaction.execution_scope, allEntries);
     if (target?.entry.row.id !== entry.row.id) continue;
     if (target.limitation !== null) limitation = target.limitation;
-    if (interaction.kind === 'ask') {
-      assignedAsks.push(interaction);
-    } else {
-      showApproval = true;
-    }
+    assignedAsks.push(interaction);
   }
 
   if (approvalNodeId !== null && approvalNodeId === entry.row.nodeId) {

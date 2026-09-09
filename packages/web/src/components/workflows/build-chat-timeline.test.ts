@@ -454,6 +454,48 @@ describe('buildChatTimeline Ask and gate placement', () => {
     expect(entries.some(entry => entry.kind === 'ask' && entry.rowId === 'row-1')).toBe(false);
   });
 
+  test('anchors a scoped Ask to its start when completion events are interleaved', () => {
+    const scopedStartFirst = event({
+      id: 'scoped-start-1',
+      created_at: '2026-09-06T00:00:01.000Z',
+      data: { occurrence_id: OCC_1, attempt_id: ATTEMPT_1 },
+    });
+    const scopedCompleteFirst = event({
+      id: 'scoped-complete-1',
+      event_type: 'node_completed',
+      created_at: '2026-09-06T00:00:01.500Z',
+      data: { occurrence_id: OCC_1, attempt_id: ATTEMPT_1 },
+    });
+    const scopedStartSecond = event({
+      id: 'scoped-start-2',
+      created_at: '2026-09-06T00:00:02.000Z',
+      data: { occurrence_id: OCC_2, attempt_id: ATTEMPT_2 },
+    });
+    const scopedCompleteSecond = event({
+      id: 'scoped-complete-2',
+      event_type: 'node_completed',
+      created_at: '2026-09-06T00:00:02.500Z',
+      data: { occurrence_id: OCC_2, attempt_id: ATTEMPT_2 },
+    });
+    const entries = build({
+      events: [scopedStartFirst, scopedCompleteFirst, scopedStartSecond, scopedCompleteSecond],
+      rows: [first, second],
+      pendingInteractions: [
+        pendingAsk({
+          execution_scope: { occurrence_id: OCC_2, attempt_id: ATTEMPT_2 },
+        }),
+      ],
+    });
+    const ask = entries.find(entry => entry.kind === 'ask');
+    if (ask === undefined || ask.kind !== 'ask') throw new Error('missing ask');
+    expect(entries.indexOf(ask)).toBeGreaterThan(
+      entries.findIndex(entry => entry.kind === 'node_status' && entry.id === 'scoped-start-2')
+    );
+    expect(entries.indexOf(ask)).toBeLessThan(
+      entries.findIndex(entry => entry.kind === 'node_status' && entry.id === 'scoped-complete-2')
+    );
+  });
+
   test('places an unscoped Ask after the latest execution with a limitation', () => {
     const entries = build({
       events: [startFirst, startSecond],

@@ -373,7 +373,7 @@ describe('ConsoleInspectPane', () => {
     const formBefore = host.querySelector('form');
     expect(roomBefore).not.toBeNull();
     expect(formBefore).not.toBeNull();
-    expect(calls.some(call => call[0] === 'run-1' && call[1] === 'plan')).toBe(true);
+    expect(calls.filter(call => call[0] === 'run-1' && call[1] === 'plan')).toHaveLength(1);
     expect(host.textContent).toContain('Log header');
     expect(host.querySelector('[data-testid="console-run-graph-scroller"]')).toBeNull();
 
@@ -605,6 +605,15 @@ describe('ConsoleInspectPane', () => {
   test('single mode keeps the main pane mounted with hidden and Back closes the room', async () => {
     const closes: number[] = [];
     await act(async () => {
+      renderPane({ view: 'log', splitMode: 'split' });
+    });
+    await flushUntil('split room', () => (host.textContent ?? '').includes(PLAN_TEXT));
+    const splitMain = requireHtmlElement(
+      host.querySelector('#console-run-view'),
+      'split main pane'
+    );
+
+    await act(async () => {
       renderPane({
         view: 'log',
         splitMode: 'single',
@@ -615,6 +624,7 @@ describe('ConsoleInspectPane', () => {
     });
     await flushUntil('single room', () => (host.textContent ?? '').includes(PLAN_TEXT));
     const main = requireHtmlElement(host.querySelector('#console-run-view'), 'main pane');
+    expect(main).toBe(splitMain);
     expect(main.hasAttribute('hidden')).toBe(true);
     expect(host.textContent).toContain('Log header');
     expect(host.querySelector('[role="separator"]')).toBeNull();

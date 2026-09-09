@@ -36,6 +36,7 @@ export const nodeTranscriptMetadataSchema = z
     tool_phase: nodeTranscriptToolPhaseSchema.optional(),
     truncated: z.boolean().optional(),
     output_state: z.enum(['full', 'truncated', 'missing', 'unknown']).optional(),
+    full_output_available: z.boolean().optional(),
     outcome: z.enum(['success', 'error', 'interrupted', 'unknown']).optional(),
     exit_code: z.number().int().optional(),
   })

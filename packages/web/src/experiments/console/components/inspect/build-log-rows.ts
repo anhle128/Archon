@@ -20,6 +20,7 @@ export type LogRowSelection =
       attemptId?: string;
       retryEpoch?: number;
       iteration?: number;
+      routeActivationSeq?: number;
     };
 
 export interface LogRow {
@@ -113,6 +114,9 @@ function occurrenceSelection(exec: NodeExecution): LogRowSelection {
     attemptId: exec.attempt_id,
     ...(exec.retry_epoch !== undefined ? { retryEpoch: exec.retry_epoch } : {}),
     ...(lastLoop !== undefined ? { iteration: lastLoop.iteration } : {}),
+    ...(exec.route_activation_seq !== undefined
+      ? { routeActivationSeq: exec.route_activation_seq }
+      : {}),
   };
 }
 
@@ -124,7 +128,7 @@ function buildFromOccurrences(
   return nodeExecutions.map((exec, order) => {
     const nodeId = exec.node_id;
     const baseName = nameById.get(nodeId) ?? nodeId;
-    const rowId = exec.attempt_id ?? exec.occurrence_id ?? `exec:${nodeId}:${String(order)}`;
+    const rowId = `exec:${nodeId}:${exec.occurrence_id ?? 'unscoped'}:${exec.attempt_id ?? 'no-attempt'}:${String(order)}`;
     return {
       id: rowId,
       nodeId,
@@ -135,9 +139,40 @@ function buildFromOccurrences(
       selection: occurrenceSelection(exec),
       startedAt: exec.started_at,
       durationMs: exec.duration_ms,
-      ...derivedTiming(exec.occurrence_id === undefined, exec.started_at, runStartedAt),
+      ...derivedTiming(
+        exec.unknown_scope === true || exec.occurrence_id === undefined,
+        exec.started_at,
+        runStartedAt
+      ),
+      ...(exec.start_offset_ms !== undefined ? { startedOffsetMs: exec.start_offset_ms } : {}),
     };
   });
+}
+
+function appendUnrepresentedStates(
+  rows: readonly LogRow[],
+  nodeStates: readonly WorkflowNodeState[]
+): LogRow[] {
+  const represented = new Set(rows.map(row => row.nodeId));
+  const missing = nodeStates.flatMap((state, sourceIndex) =>
+    represented.has(state.nodeId)
+      ? []
+      : [
+          {
+            id: `node:${state.nodeId}`,
+            nodeId: state.nodeId,
+            label: state.name,
+            status: state.status,
+            order: rows.length + sourceIndex,
+            sourceIndex,
+            selection: { kind: 'node' } as const,
+            unknownScope: true,
+          },
+        ]
+  );
+  return [...rows, ...missing].sort((left, right) =>
+    left.order === right.order ? left.sourceIndex - right.sourceIndex : left.order - right.order
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +187,10 @@ export function buildLogRows(
 ): LogRow[] {
   if (nodeExecutions && nodeExecutions.length > 0) {
     const nameById = new Map<string, string>(nodeStates.map(s => [s.nodeId, s.name]));
-    return buildFromOccurrences(nodeExecutions, nameById, runStartedAt);
+    return appendUnrepresentedStates(
+      buildFromOccurrences(nodeExecutions, nameById, runStartedAt),
+      nodeStates
+    );
   }
 
   const statesById = new Map<string, { state: WorkflowNodeState; index: number }>();

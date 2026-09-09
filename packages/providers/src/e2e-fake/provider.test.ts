@@ -125,6 +125,19 @@ describe('E2eFakeProvider', () => {
       expect(chunks[2 + index * 2]?.type).toBe('tool_result');
     }
   });
+  test('largeLastToolOutput expands only the final repeated result', async () => {
+    const prompt =
+      '<<E2E_SCENARIO>>{"emitTool":true,"repeatTool":2,"largeLastToolOutput":true}<</E2E_SCENARIO>>';
+    const chunks = await collect(provider.sendQuery(prompt, '/tmp', 'sess'));
+    const results = chunks.filter(chunk => chunk.type === 'tool_result');
+    expect(results).toHaveLength(2);
+    expect(results[0]?.type === 'tool_result' ? results[0].toolOutput : '').toBe(
+      E2E_FAKE_TOOL_OUTPUT
+    );
+    const lastOutput = results[1]?.type === 'tool_result' ? results[1].toolOutput : '';
+    expect(lastOutput.length).toBeGreaterThan(16_384);
+    expect(lastOutput).toContain('[e2e-fake] full output tail');
+  });
 
   test('rejects 0, 201, non-integer, and non-number repeatTool', async () => {
     const invalid = [

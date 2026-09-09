@@ -204,6 +204,7 @@ function ToolHistory({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const displayedOutput = fullOutput === undefined ? item.output : fullOutput;
+  const displayedOutputState = fullOutput === undefined ? item.outputState : 'full';
 
   const loadFull = (): void => {
     setLoading(true);
@@ -229,6 +230,13 @@ function ToolHistory({
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="text-[11.5px] font-bold text-accent-bright">{item.name}</span>
         <span className="text-[11px] text-text-secondary">{toolOutcomeLabel(item)}</span>
+        {displayedOutputState === 'truncated' ? (
+          <span className="text-[11px] text-status-warning">truncated</span>
+        ) : displayedOutputState === 'missing' ? (
+          <span className="text-[11px] text-text-muted">output missing</span>
+        ) : displayedOutputState === 'unknown' ? (
+          <span className="text-[11px] text-text-muted">output unknown</span>
+        ) : null}
         {item.durationMs !== null ? (
           <span className="text-[11px] text-text-secondary">
             {formatDurationMs(item.durationMs)}

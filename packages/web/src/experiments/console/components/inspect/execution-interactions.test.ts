@@ -96,6 +96,27 @@ describe('interactionsForExecution', () => {
     expect(onSecond.scopeLimitation).toBe(UNSCOPED_INTERACTION_LIMITATION);
   });
 
+  test('does not resurrect a purged Ask as actionable history', () => {
+    const purged = ask({
+      status: 'purged',
+      execution_scope: { occurrence_id: OCC_2, attempt_id: ATTEMPT_2 },
+    });
+    expect(interactionsForExecution([purged], second, all).interactions).toEqual([]);
+  });
+
+  test('does not render a permission interaction as a workflow approval gate', () => {
+    const permission = ask({
+      id: 'permission-1',
+      tool_use_id: 'tool-permission',
+      kind: 'permission',
+      execution_scope: { occurrence_id: OCC_2, attempt_id: ATTEMPT_2 },
+    });
+    const assigned = interactionsForExecution([permission], second, all);
+    expect(assigned.interactions).toEqual([]);
+    expect(assigned.showApproval).toBe(false);
+    expect(assigned.scopeLimitation).toBeNull();
+  });
+
   test('attaches an unscoped approval node id only to the greatest-order entry', () => {
     const onFirst = interactionsForExecution([], first, all, 'review');
     const onSecond = interactionsForExecution([], second, all, 'review');

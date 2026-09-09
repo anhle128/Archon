@@ -97,6 +97,7 @@ function toolItem(
     outcome: 'succeeded',
     durationMs: 1500,
     canLoadFullOutput: true,
+    outputState: 'truncated',
     messageId: 'msg-tool-1',
     ...overrides,
   };
@@ -223,6 +224,7 @@ describe('NodeRoom', () => {
     expect(loaded).toContain('Input');
     expect(loaded).toContain('Output');
     expect(loaded).toContain('View full output');
+    expect(loaded).toContain('truncated');
     expect(loaded).toContain('started');
     expect(loaded).toContain('failed');
     expect(loaded.indexOf('first')).toBeLessThan(loaded.indexOf('Read'));

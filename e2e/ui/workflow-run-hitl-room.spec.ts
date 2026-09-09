@@ -13,7 +13,6 @@ import {
 import {
   answerAskViaApi,
   createIdentityContext,
-  declineAskViaApi,
   getRunDetail,
   listNodeMessages,
   observeNodeMessagePages,
@@ -71,6 +70,12 @@ async function waitForRunTitle(page: Page, workflowName: string): Promise<void> 
   await expect(page.getByText(new RegExp(workflowName, 'i')).first()).toBeVisible({
     timeout: T.medium,
   });
+}
+
+function formatRecordedDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${String(durationMs)}ms`;
+  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1)}s`;
+  return `${(durationMs / 60_000).toFixed(1)}m`;
 }
 
 async function openConsoleLogRow(page: Page, nodeId: string, index = 0): Promise<void> {
@@ -174,7 +179,30 @@ test('[P1] Agent history shows role, tool context, and outcome', async ({ page, 
   await expect(room.getByText('Input', { exact: true }).first()).toBeVisible();
   await expect(room.getByText('Output', { exact: true }).first()).toBeVisible();
   await expect(room.getByText(HITL_TOOL_OUTPUT)).toBeVisible();
-  await expect(room.getByText(/succeeded|pending|failed|missing-call/)).toBeVisible();
+  const messages = await listNodeMessages(page, started.runId, HITL_INSPECT_NODE);
+  const recordedTool = messages.find(
+    message => message.kind === 'tool' && message.payload.output === HITL_TOOL_OUTPUT
+  );
+  const toolUseId =
+    recordedTool !== undefined && typeof recordedTool.payload.id === 'string'
+      ? recordedTool.payload.id
+      : null;
+  expect(toolUseId).toBeTruthy();
+  const detail = await getRunDetail(page, started.runId);
+  const completions = detail.events.filter(
+    event =>
+      event.event_type === 'tool_completed' &&
+      event.step_name === HITL_INSPECT_NODE &&
+      event.data.tool_call_id === toolUseId
+  );
+  expect(completions).toHaveLength(1);
+  const recordedDuration = completions[0]?.data.duration_ms;
+  expect(typeof recordedDuration).toBe('number');
+  const toolCard = room.locator(`[data-tool-id="${toolUseId ?? ''}"]`);
+  await expect(toolCard.getByText('succeeded', { exact: true })).toBeVisible();
+  await expect(
+    toolCard.getByText(formatRecordedDuration(Number(recordedDuration)), { exact: true })
+  ).toBeVisible();
 });
 
 test('[P1] Execution selector requests the selected scope', async ({ page, archon }) => {
@@ -227,6 +255,11 @@ test('[P1] Ask draft is shared across room and execution section', async ({ brow
     await room.getByLabel(/Other answer for/).fill(DRAFT_OTHER);
     const section = executionSection(page, HITL_ASK_NODE);
     await expect(section.getByLabel(/Other answer for/)).toHaveValue(DRAFT_OTHER);
+    const roomCardId = await room.locator('form').first().getAttribute('id');
+    const sectionCardId = await section.locator('form').first().getAttribute('id');
+    expect(roomCardId).toBeTruthy();
+    expect(sectionCardId).toBeTruthy();
+    expect(roomCardId).not.toBe(sectionCardId);
   });
 });
 
@@ -262,7 +295,11 @@ test('[P1] Answered and declined Ask records remain in place', async ({ browser,
     expect(declineId).toBeTruthy();
     if (!answerId || !declineId) throw new Error('missing two-ask request ids');
     expect(await answerAskViaApi(page, started.runId, answerId)).toBe(200);
-    expect(await declineAskViaApi(page, started.runId, declineId)).toBe(200);
+    await openConsoleLogRow(page, HITL_ASK_DECLINE_NODE);
+    const pendingDeclineRoom = await waitForRoom(page, HITL_ASK_DECLINE_NODE);
+    await pendingDeclineRoom.getByRole('button', { name: 'Decline', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Decline this ask?' })).toBeVisible();
+    await page.getByRole('button', { name: 'Decline', exact: true }).last().click();
     await expect
       .poll(async () => {
         const next = await getRunDetail(page, started.runId);
@@ -271,6 +308,13 @@ test('[P1] Answered and declined Ask records remain in place', async ({ browser,
         return answered?.status !== 'pending' && declined?.status !== 'pending';
       })
       .toBe(true);
+    const resolvedDetail = await getRunDetail(page, started.runId);
+    expect(
+      resolvedDetail.pending_interactions.find(row => row.tool_use_id === answerId)?.answer
+    ).toEqual({ answers: [{ questionId: 'proceed', value: 'yes' }] });
+    expect(
+      resolvedDetail.pending_interactions.find(row => row.tool_use_id === declineId)?.answer
+    ).toEqual({ decline: true });
     await page.reload();
     await waitForRunTitle(page, 'e2e-hitl-two-asks');
 
@@ -309,7 +353,7 @@ test('[P1] Awaiting input focuses the matching Ask', async ({ browser, archon })
     )?.tool_use_id;
     expect(requestId).toBeTruthy();
     await page.getByRole('button', { name: 'Awaiting input', exact: true }).click();
-    const expectedId = `run-ask-card-${encodeURIComponent(requestId ?? '')}`;
+    const expectedId = `run-ask-card-${encodeURIComponent(requestId ?? '')}-room`;
     await expect
       .poll(async () =>
         page.evaluate(id => {
@@ -330,12 +374,20 @@ test('[P1] Narrow room uses Back without losing Log state', async ({ browser, ar
     const started = await archon.runHitlWorkflow();
     await openRunDetail(page, started.runId);
     await waitForRunTitle(page, 'e2e-hitl-run');
-    const logPane = page.locator('#console-run-view');
+    const logPane = page.getByTestId('console-run-log-scroll');
+    await expect(logPane).toBeVisible();
     await logPane.evaluate((el: HTMLElement) => {
-      el.scrollTop = 48;
+      el.scrollTop = el.scrollHeight;
     });
     const scrollBefore = await logPane.evaluate((el: HTMLElement) => el.scrollTop);
-    await openConsoleLogRow(page, HITL_ASK_NODE);
+    expect(scrollBefore).toBeGreaterThan(0);
+    const logOpener = page
+      .locator('button[id^="console-log-"]')
+      .filter({ hasText: HITL_ASK_NODE })
+      .first();
+    const logOpenerId = await logOpener.getAttribute('id');
+    expect(logOpenerId).toBeTruthy();
+    await logOpener.dispatchEvent('click');
     await waitForRoom(page, HITL_ASK_NODE);
     await expect(logPane).toBeHidden();
     expect(await logPane.count()).toBeGreaterThan(0);
@@ -344,15 +396,45 @@ test('[P1] Narrow room uses Back without losing Log state', async ({ browser, ar
     await room.getByLabel(/Other answer for/).fill(DRAFT_OTHER);
     await page.getByRole('button', { name: 'Back' }).click();
     await expect(page.getByRole('button', { name: 'Log' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(
-      page.locator('button[id^="console-log-"]').filter({ hasText: HITL_ASK_NODE })
-    ).toBeVisible();
+    await expect(logOpener).toBeVisible();
     await expect(logPane).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.id ?? ''))
+      .toBe(logOpenerId ?? '');
     const scrollAfter = await logPane.evaluate((el: HTMLElement) => el.scrollTop);
     expect(scrollAfter).toBe(scrollBefore);
     await expect(executionSection(page, HITL_ASK_NODE).getByLabel(/Other answer for/)).toHaveValue(
       DRAFT_OTHER
     );
+  });
+});
+test('[P1] Legacy narrow room restores Logs focus and Ask draft', async ({ browser, archon }) => {
+  await pageWaitStarter(browser, archon, async page => {
+    await page.setViewportSize(NARROW_VIEWPORT);
+    const started = await archon.runHitlWorkflow();
+    await openLegacyRunDetail(page, started.runId);
+    await waitForRunTitle(page, 'e2e-hitl-run');
+    await openLegacyLogRow(page, HITL_ASK_NODE);
+    const room = await waitForRoom(page, HITL_ASK_NODE);
+    const opener = page
+      .locator('button[id^="legacy-log-"]')
+      .filter({ hasText: HITL_ASK_NODE })
+      .first();
+    const openerId = await opener.getAttribute('id');
+    expect(openerId).toBeTruthy();
+    await room.getByLabel('Other').check();
+    await room.getByLabel(/Other answer for/).fill(DRAFT_OTHER);
+    await page.getByRole('button', { name: 'Back', exact: true }).click();
+
+    await expect(page.getByRole('tab', { name: 'Logs' })).toHaveAttribute('aria-selected', 'true');
+    await expect(opener).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.id ?? ''))
+      .toBe(openerId ?? '');
+
+    await opener.dispatchEvent('click');
+    const reopened = await waitForRoom(page, HITL_ASK_NODE);
+    await expect(reopened.getByLabel(/Other answer for/)).toHaveValue(DRAFT_OTHER);
   });
 });
 
@@ -409,6 +491,7 @@ test('[P1] Reload restores the chosen ratio', async ({ page, archon }) => {
   await openConsoleLogRow(page, HITL_INSPECT_NODE);
   await waitForRoom(page, HITL_INSPECT_NODE);
   const separator = page.getByRole('separator', { name: 'Resize node room' });
+  const before = await roomRatio(page, 'console');
   const box = await separator.boundingBox();
   expect(box).toBeTruthy();
   if (!box) throw new Error('missing separator');
@@ -417,6 +500,7 @@ test('[P1] Reload restores the chosen ratio', async ({ page, archon }) => {
   await page.mouse.move(box.x - 120, box.y + box.height / 2, { steps: 8 });
   await page.mouse.up();
   const stored = await roomRatio(page, 'console');
+  expect(stored).toBeGreaterThan(before + 0.02);
   expect(stored).toBeGreaterThanOrEqual(0.24);
   expect(stored).toBeLessThanOrEqual(0.6);
 
@@ -479,6 +563,13 @@ test('[P1] Complete history renders every distinct tool call', async ({ page, ar
       )
   ).sort();
   expect(visibleIds).toEqual(storedIds);
+  const viewFullOutput = room.getByRole('button', { name: 'View full output' });
+  await expect(viewFullOutput).toHaveCount(1);
+  await expect(room.getByText('[e2e-fake] full output tail', { exact: false })).toHaveCount(0);
+  await viewFullOutput.click();
+  await expect(room.getByText('[e2e-fake] full output tail', { exact: false })).toBeVisible({
+    timeout: T.medium,
+  });
 });
 
 test('[P1] Console Reply rejects a missing parent', async ({ page, archon }) => {

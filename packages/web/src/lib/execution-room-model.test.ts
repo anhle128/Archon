@@ -5,9 +5,11 @@ import {
   applyRoomDeepLink,
   askCardId,
   buildExecutionHeader,
+  chooseExecutionForInteraction,
   chooseExecutionForNode,
   closeRoom,
   openRoom,
+  openExplicitRoom,
   rememberRoomScroll,
   resetRoomVisit,
   roomOpenerId,
@@ -92,8 +94,59 @@ describe('chooseExecutionForNode', () => {
   });
 });
 
+describe('chooseExecutionForInteraction', () => {
+  const first = row({
+    id: 'first',
+    status: 'completed',
+    order: 0,
+    selection: {
+      kind: 'occurrence',
+      occurrenceId: '11111111-1111-4111-8111-111111111111',
+      attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    },
+  });
+  const second = row({
+    id: 'second',
+    status: 'awaiting',
+    order: 1,
+    selection: {
+      kind: 'occurrence',
+      occurrenceId: '22222222-2222-4222-8222-222222222222',
+      attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    },
+  });
+
+  test('selects the exact recorded occurrence and attempt', () => {
+    expect(
+      chooseExecutionForInteraction([first, second], {
+        node_id: NODE_ID,
+        execution_scope: {
+          occurrence_id: '11111111-1111-4111-8111-111111111111',
+          attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        },
+      })
+    ).toBe(first);
+  });
+
+  test('does not fall back to a different row for an unknown recorded scope', () => {
+    expect(
+      chooseExecutionForInteraction([first, second], {
+        node_id: NODE_ID,
+        execution_scope: {
+          occurrence_id: '33333333-3333-4333-8333-333333333333',
+          attempt_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        },
+      })
+    ).toBeNull();
+  });
+
+  test('places an unscoped interaction on the latest execution', () => {
+    expect(chooseExecutionForInteraction([first, second], { node_id: NODE_ID })).toBe(second);
+  });
+});
+
 describe('buildExecutionHeader', () => {
-  test('labels iteration, attempt, and unknown executions from selection data', () => {
+  test('labels iteration, route, attempt, and unknown executions from selection data', () => {
     expect(
       buildExecutionHeader({
         row: row({
@@ -107,6 +160,20 @@ describe('buildExecutionHeader', () => {
         runStartedAt: RUN_STARTED_AT,
       }).executionLabel
     ).toBe('Iteration 2');
+
+    expect(
+      buildExecutionHeader({
+        row: row({
+          id: 'route',
+          status: 'completed',
+          order: 0,
+          selection: { kind: 'route_iteration', executionSeq: 2 },
+          unknownScope: true,
+        }),
+        events: [],
+        runStartedAt: RUN_STARTED_AT,
+      }).executionLabel
+    ).toBe('Route 2');
 
     expect(
       buildExecutionHeader({
@@ -126,6 +193,45 @@ describe('buildExecutionHeader', () => {
         runStartedAt: RUN_STARTED_AT,
       }).executionLabel
     ).toBe('Attempt 3');
+    expect(
+      buildExecutionHeader({
+        row: row({
+          id: 'scoped-route',
+          status: 'completed',
+          order: 0,
+          selection: {
+            kind: 'occurrence',
+            occurrenceId: 'occ-route',
+            attemptId: 'att-route',
+            retryEpoch: 0,
+            routeActivationSeq: 4,
+          },
+          unknownScope: false,
+        }),
+        events: [],
+        runStartedAt: RUN_STARTED_AT,
+      }).executionLabel
+    ).toBe('Route 4');
+
+    expect(
+      buildExecutionHeader({
+        row: row({
+          id: 'retried-iteration',
+          status: 'completed',
+          order: 0,
+          selection: {
+            kind: 'occurrence',
+            occurrenceId: 'occ-loop',
+            attemptId: 'att-loop',
+            retryEpoch: 1,
+            iteration: 2,
+          },
+          unknownScope: false,
+        }),
+        events: [],
+        runStartedAt: RUN_STARTED_AT,
+      }).executionLabel
+    ).toBe('Iteration 2 · Attempt 2');
 
     expect(
       buildExecutionHeader({
@@ -275,6 +381,8 @@ describe('roomOpenerId and askCardId', () => {
 
   test('encodes Ask request ids with the run-ask-card- prefix', () => {
     expect(askCardId('tool/use 1')).toBe('run-ask-card-tool%2Fuse%201');
+    expect(askCardId('tool/use 1', 'room')).toBe('run-ask-card-tool%2Fuse%201-room');
+    expect(askCardId('tool/use 1', 'log:row/1')).toBe('run-ask-card-tool%2Fuse%201-log%3Arow%2F1');
   });
 });
 
@@ -284,7 +392,7 @@ describe('room visit transitions', () => {
   const rows = [completed, awaiting];
   const openerId = 'legacy-log-awaiting';
 
-  test('opening stores the explicit row and opener', () => {
+  test('implicit opening preserves selection without changing explicit memory', () => {
     const opened = openRoom(resetRoomVisit('run-1'), {
       nodeId: NODE_ID,
       rowId: awaiting.id,
@@ -295,11 +403,20 @@ describe('room visit transitions', () => {
       rowId: awaiting.id,
       openerId,
     });
+    expect(opened.lastExplicitRowByNode).toEqual({});
+  });
+
+  test('explicit opening stores the selected execution', () => {
+    const opened = openExplicitRoom(resetRoomVisit('run-1'), {
+      nodeId: NODE_ID,
+      rowId: awaiting.id,
+      openerId,
+    });
     expect(opened.lastExplicitRowByNode).toEqual({ [NODE_ID]: awaiting.id });
   });
 
   test('closing clears only selection', () => {
-    const opened = openRoom(resetRoomVisit('run-1'), {
+    const opened = openExplicitRoom(resetRoomVisit('run-1'), {
       nodeId: NODE_ID,
       rowId: awaiting.id,
       openerId,
@@ -340,15 +457,39 @@ describe('room visit transitions', () => {
     expect(state.appliedDeepLinkNode).toBe(NODE_ID);
   });
 
-  test('an unknown query node leaves the room closed', () => {
+  test('an unresolved query stays unapplied so a later execution row can open it', () => {
+    const initial = resetRoomVisit('run-1');
+    const waiting = applyRoomDeepLink(initial, NODE_ID, []);
+    expect(waiting).toBe(initial);
+    expect(waiting.selection).toBeNull();
+    expect(waiting.appliedDeepLinkNode).toBeNull();
+
+    const opened = applyRoomDeepLink(waiting, NODE_ID, rows);
+    expect(opened.selection?.rowId).toBe(awaiting.id);
+    expect(opened.appliedDeepLinkNode).toBe(NODE_ID);
+  });
+
+  test('an unknown query node is marked applied without opening a room', () => {
     const state = applyRoomDeepLink(resetRoomVisit('run-1'), 'missing', rows);
     expect(state.selection).toBeNull();
     expect(state.appliedDeepLinkNode).toBe('missing');
   });
 
+  test('a valid query reopens after the URL passes through an invalid node', () => {
+    let state = applyRoomDeepLink(resetRoomVisit('run-1'), NODE_ID, rows);
+    state = closeRoom(state);
+    state = applyRoomDeepLink(state, 'missing', rows);
+    expect(state.selection).toBeNull();
+    expect(state.appliedDeepLinkNode).toBe('missing');
+
+    state = applyRoomDeepLink(state, NODE_ID, rows);
+    expect(state.selection?.rowId).toBe(awaiting.id);
+    expect(state.appliedDeepLinkNode).toBe(NODE_ID);
+  });
+
   test('a changed run id returns a fresh state with every map empty', () => {
     const previous = rememberRoomScroll(
-      openRoom(resetRoomVisit('run-1'), {
+      openExplicitRoom(resetRoomVisit('run-1'), {
         nodeId: NODE_ID,
         rowId: awaiting.id,
         openerId,

@@ -78,19 +78,30 @@ function printableRouteField(value: unknown): string {
   return 'unknown';
 }
 
+function lifecycleSelection(event: WorkflowEventResponse): LogRowSelection {
+  const occurrenceId = event.data.occurrence_id;
+  if (typeof occurrenceId !== 'string' || occurrenceId.length === 0) return { kind: 'node' };
+  const attemptId = event.data.attempt_id;
+  return {
+    kind: 'occurrence',
+    occurrenceId,
+    ...(typeof attemptId === 'string' && attemptId.length > 0 ? { attemptId } : {}),
+  };
+}
+
 function mapNodeEvent(event: WorkflowEventResponse): MappedNodeStatus | null {
   switch (event.event_type) {
     case 'node_started':
-      return { status: 'running', detail: 'started', selection: { kind: 'node' } };
+      return { status: 'running', detail: 'started', selection: lifecycleSelection(event) };
     case 'node_completed':
-      return { status: 'completed', detail: 'completed', selection: { kind: 'node' } };
+      return { status: 'completed', detail: 'completed', selection: lifecycleSelection(event) };
     case 'node_failed':
-      return { status: 'failed', detail: 'failed', selection: { kind: 'node' } };
+      return { status: 'failed', detail: 'failed', selection: lifecycleSelection(event) };
     case 'node_skipped':
     case 'node_skipped_prior_success':
-      return { status: 'skipped', detail: 'skipped', selection: { kind: 'node' } };
+      return { status: 'skipped', detail: 'skipped', selection: lifecycleSelection(event) };
     case 'approval_requested':
-      return { status: 'running', detail: 'gate requested', selection: { kind: 'node' } };
+      return { status: 'running', detail: 'gate requested', selection: lifecycleSelection(event) };
     case 'loop_iteration_started':
     case 'loop_iteration_completed':
     case 'loop_iteration_failed': {
@@ -181,6 +192,32 @@ function nodeStatusEntriesForNode(
     (entry): entry is Extract<ChatTimelineEntry, { kind: 'node_status' }> =>
       entry.kind === 'node_status' && entry.nodeId === nodeId
   );
+}
+
+type NodeStatusEntry = Extract<ChatTimelineEntry, { kind: 'node_status' }>;
+
+function statusMatchesRow(status: NodeStatusEntry, row: LogRow): boolean {
+  const left = status.selection;
+  const right = row.selection;
+  if (left.kind !== right.kind) return false;
+  switch (right.kind) {
+    case 'node':
+      return true;
+    case 'loop_iteration':
+      return left.kind === 'loop_iteration' && left.iteration === right.iteration;
+    case 'route_iteration':
+      return left.kind === 'route_iteration' && left.executionSeq === right.executionSeq;
+    case 'occurrence':
+      return (
+        left.kind === 'occurrence' &&
+        left.occurrenceId === right.occurrenceId &&
+        (right.attemptId === undefined || left.attemptId === right.attemptId)
+      );
+  }
+}
+
+function isExecutionStart(status: NodeStatusEntry): boolean {
+  return status.detail === 'started' || status.detail.endsWith(' started');
 }
 
 export function buildChatTimeline(input: {
@@ -302,8 +339,13 @@ export function buildChatTimeline(input: {
   const anchorByRowId = new Map<string, string>();
   for (const [nodeId, nodeRows] of rowsByNode) {
     const statuses = nodeStatusEntriesForNode(base, nodeId);
+    const starts = statuses.filter(isExecutionStart);
     for (const [index, row] of nodeRows.entries()) {
-      const anchor = statuses[index] ?? statuses[statuses.length - 1];
+      const exact =
+        statuses.find(status => statusMatchesRow(status, row) && isExecutionStart(status)) ??
+        statuses.find(status => statusMatchesRow(status, row));
+      const anchor =
+        exact ?? starts[index] ?? starts[starts.length - 1] ?? statuses[statuses.length - 1];
       if (anchor !== undefined) anchorByRowId.set(row.id, anchor.id);
     }
   }

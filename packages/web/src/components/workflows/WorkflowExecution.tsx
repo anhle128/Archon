@@ -40,9 +40,11 @@ import {
 import {
   applyRoomDeepLink,
   buildExecutionHeader,
+  chooseExecutionForInteraction,
   chooseExecutionForNode,
   closeRoom,
   openRoom,
+  openExplicitRoom,
   askCardId,
   rememberRoomScroll,
   resetRoomVisit,
@@ -603,8 +605,18 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
 
   const executionRows = useMemo(
     () =>
-      buildLogRows(queryData?.nodeStates ?? [], queryData?.events ?? [], queryData?.nodeExecutions),
-    [queryData?.events, queryData?.nodeExecutions, queryData?.nodeStates]
+      buildLogRows(
+        queryData?.nodeStates ?? [],
+        queryData?.events ?? [],
+        queryData?.nodeExecutions,
+        queryData?.workflowState.startedAt
+      ),
+    [
+      queryData?.events,
+      queryData?.nodeExecutions,
+      queryData?.nodeStates,
+      queryData?.workflowState.startedAt,
+    ]
   );
 
   useEffect(() => {
@@ -730,8 +742,11 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     : null;
 
   const handleOpenRoom = useCallback(
-    (rowId: string, nodeId: string, openerId: string | null): void => {
-      setRoom(previous => openRoom(previous, { nodeId, rowId, openerId }));
+    (rowId: string, nodeId: string, openerId: string | null, rememberExplicit: boolean): void => {
+      const selection = { nodeId, rowId, openerId };
+      setRoom(previous =>
+        rememberExplicit ? openExplicitRoom(previous, selection) : openRoom(previous, selection)
+      );
       setNodeScrollTrigger(prev => prev + 1);
     },
     []
@@ -741,7 +756,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     const openerId = room.selection?.openerId ?? null;
     setRoom(closeRoom);
     requestAnimationFrame(() => {
-      if (openerId !== null) document.getElementById(openerId)?.focus();
+      if (openerId !== null) document.getElementById(openerId)?.focus({ preventScroll: true });
     });
   }, [room.selection?.openerId]);
 
@@ -774,7 +789,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
       const next = executionRows.find(candidate => candidate.id === rowId);
       if (next === undefined) return;
       setRoom(previous =>
-        openRoom(previous, {
+        openExplicitRoom(previous, {
           nodeId: next.nodeId,
           rowId: next.id,
           openerId: previous.selection?.openerId ?? null,
@@ -1002,6 +1017,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           roomRatio={roomRatio}
           onRoomRatioChange={handleRoomRatioChange}
           runId={runId}
+          runStartedAt={runStartedAtIso}
           nodeStates={queryData?.nodeStates ?? []}
           events={queryData?.events ?? []}
           nodeExecutions={queryData?.nodeExecutions}
@@ -1077,19 +1093,14 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             pendingInteractions={queryData?.pendingInteractions ?? []}
             nodeStates={queryData?.nodeStates ?? []}
             runError={queryData?.runError ?? null}
-            onSelectAwaitingNode={(nodeId): void => {
-              handleNodeClick(nodeId);
-              const pending = (queryData?.pendingInteractions ?? []).find(
-                interaction =>
-                  interaction.kind === 'ask' &&
-                  interaction.status === 'pending' &&
-                  interaction.node_id === nodeId
-              );
-              const requestId = pending?.tool_use_id;
-              if (requestId === undefined) return;
+            onSelectAwaitingNode={(nodeId, interaction): void => {
+              const row = chooseExecutionForInteraction(executionRows, interaction);
+              if (row === null) return;
+              handleOpenRoom(row.id, nodeId, null, false);
+              const requestId = interaction.tool_use_id;
               let attempts = 0;
               const focusAsk = (): void => {
-                const card = document.getElementById(askCardId(requestId));
+                const card = document.getElementById(askCardId(requestId, 'room'));
                 if (card === null) {
                   if (attempts < 30) {
                     attempts += 1;

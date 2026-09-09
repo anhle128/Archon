@@ -6976,6 +6976,26 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const eventTypes = store.createWorkflowEvent.mock.calls.map(call => call[0].event_type);
       expect(eventTypes.filter(type => type === 'loop_iteration_started')).toHaveLength(1);
       expect(eventTypes.filter(type => type === 'loop_iteration_completed')).toHaveLength(1);
+      const persistedEvents = store.createWorkflowEvent.mock.calls.map(
+        call =>
+          call[0] as {
+            event_type: string;
+            step_name?: string;
+            data: Record<string, unknown>;
+          }
+      );
+      const loopEvents = persistedEvents.filter(event => event.step_name === 'ralph-loop-run');
+      const nodeStarted = loopEvents.find(event => event.event_type === 'node_started');
+      const iterationStarted = loopEvents.find(
+        event => event.event_type === 'loop_iteration_started'
+      );
+      const iterationCompleted = loopEvents.find(
+        event => event.event_type === 'loop_iteration_completed'
+      );
+      const nodeCompleted = loopEvents.find(event => event.event_type === 'node_completed');
+      expect(nodeStarted?.data.occurrence_id).toBe(nodeCompleted?.data.occurrence_id);
+      expect(iterationStarted?.data.occurrence_id).toBe(iterationCompleted?.data.occurrence_id);
+      expect(nodeStarted?.data.occurrence_id).not.toBe(iterationStarted?.data.occurrence_id);
     });
 
     it('fails the native Ralph loop on exhaustion and does not run the downstream node', async () => {
@@ -7218,6 +7238,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         name: 'read_file',
         id: 'anonymous-1',
         output: 'contents',
+      });
+      expect(toolRows[1]?.metadata).toMatchObject({
+        tool_phase: 'result',
+        outcome: 'success',
       });
     });
 

@@ -133,6 +133,7 @@ export async function appendNodeMessage(input: AppendNodeMessageInput): Promise<
 
 export interface ListNodeMessagesQuery {
   afterSeq?: number;
+  throughSeq?: number;
   limit?: number;
   occurrenceId?: string;
   attemptId?: string;
@@ -154,6 +155,10 @@ function nodeMessageFilterSql(query: ListNodeMessagesQuery | undefined): {
   if (query?.afterSeq !== undefined) {
     params.push(query.afterSeq);
     clauses.push(`seq > $${String(params.length + 2)}`);
+  }
+  if (query?.throughSeq !== undefined) {
+    params.push(query.throughSeq);
+    clauses.push(`seq <= $${String(params.length + 2)}`);
   }
   if (query?.occurrenceId !== undefined) {
     params.push(query.occurrenceId);

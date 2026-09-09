@@ -435,7 +435,7 @@ describe('buildLogRows', () => {
 
     expect(rows).toEqual([
       {
-        id: 'att-1',
+        id: 'exec:review:occ-1:att-1:0',
         nodeId: 'review',
         label: 'Review',
         status: 'completed',
@@ -453,6 +453,32 @@ describe('buildLogRows', () => {
         unknownScope: false,
       },
     ]);
+  });
+
+  test('keeps a pending node row when other server occurrences already exist', () => {
+    const rows = buildLogRows(
+      [
+        nodeState({ nodeId: 'review', name: 'Review', status: 'completed' }),
+        nodeState({ nodeId: 'ship', name: 'Ship', status: 'pending' }),
+      ],
+      [],
+      [
+        {
+          node_id: 'review',
+          status: 'completed',
+          occurrence_id: 'occ-1',
+          attempt_id: 'att-1',
+        },
+      ]
+    );
+
+    expect(rows.map(row => row.id)).toEqual(['exec:review:occ-1:att-1:0', 'node:ship']);
+    expect(rows[1]).toMatchObject({
+      nodeId: 'ship',
+      status: 'pending',
+      selection: { kind: 'node' },
+      unknownScope: true,
+    });
   });
 
   test('event fallback rows are unknown scope and offset from the originating event', () => {
@@ -474,6 +500,46 @@ describe('buildLogRows', () => {
       id: 'start-1',
       startedOffsetMs: 4000,
       unknownScope: true,
+    });
+  });
+  test('server lifecycle rows keep unique identities and recorded scope metadata', () => {
+    const executions = [
+      {
+        node_id: 'router',
+        status: 'running',
+        occurrence_id: 'occ-1',
+        attempt_id: 'att-1',
+        retry_epoch: 0,
+        route_activation_seq: 3,
+        unknown_scope: true,
+        start_offset_ms: 250,
+      },
+      {
+        node_id: 'router',
+        status: 'completed',
+        occurrence_id: 'occ-1',
+        attempt_id: 'att-1',
+        retry_epoch: 0,
+        route_activation_seq: 3,
+        unknown_scope: true,
+        start_offset_ms: 250,
+      },
+    ];
+
+    const rows = buildLogRows(
+      [nodeState({ nodeId: 'router', name: 'Router', status: 'completed' })],
+      [],
+      executions
+    );
+
+    expect(new Set(rows.map(row => row.id)).size).toBe(2);
+    expect(rows.every(row => row.unknownScope === true)).toBe(true);
+    expect(rows.every(row => row.startedOffsetMs === 250)).toBe(true);
+    expect(rows[0]?.selection).toMatchObject({
+      kind: 'occurrence',
+      occurrenceId: 'occ-1',
+      attemptId: 'att-1',
+      routeActivationSeq: 3,
     });
   });
 });

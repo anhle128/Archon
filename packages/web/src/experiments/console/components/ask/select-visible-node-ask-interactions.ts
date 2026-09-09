@@ -1,4 +1,5 @@
 import type { PendingInteraction, WorkflowNodeMessage } from '../../skills/runs';
+import type { LogRowSelection } from '../inspect/build-log-rows';
 
 function collectToolIds(messages: readonly WorkflowNodeMessage[]): Set<string> {
   const ids = new Set<string>();
@@ -32,8 +33,10 @@ function visibleReachesTranscriptTail(
 export function selectVisibleNodeAskInteractions(input: {
   pending: readonly PendingInteraction[];
   nodeId: string;
+  selection: LogRowSelection;
   allMessages: readonly WorkflowNodeMessage[];
   visibleMessages: readonly WorkflowNodeMessage[];
+  ownsUnscopedInteractions: boolean;
 }): PendingInteraction[] {
   const allToolIds = collectToolIds(input.allMessages);
   const visibleToolIds = collectToolIds(input.visibleMessages);
@@ -48,6 +51,17 @@ export function selectVisibleNodeAskInteractions(input: {
       continue;
     }
     if (interaction.status !== 'pending' && interaction.status !== 'answered') {
+      continue;
+    }
+    if (interaction.execution_scope == null && !input.ownsUnscopedInteractions) {
+      continue;
+    }
+    if (
+      interaction.execution_scope != null &&
+      (input.selection.kind !== 'occurrence' ||
+        interaction.execution_scope.occurrence_id !== input.selection.occurrenceId ||
+        interaction.execution_scope.attempt_id !== input.selection.attemptId)
+    ) {
       continue;
     }
     const anchored = allToolIds.has(interaction.tool_use_id);

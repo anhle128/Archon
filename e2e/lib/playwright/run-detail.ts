@@ -96,18 +96,6 @@ export function observeNodeMessagePages(
   };
 }
 
-export async function declineAskViaApi(
-  page: Page,
-  runId: string,
-  requestId: string
-): Promise<number> {
-  const res = await page.request.post(
-    `/api/workflows/runs/${encodeURIComponent(runId)}/ask/${encodeURIComponent(requestId)}/answer`,
-    { data: { decline: true } }
-  );
-  return res.status();
-}
-
 export async function getRunDetail(
   page: Page,
   runId: string
@@ -115,12 +103,22 @@ export async function getRunDetail(
   status?: string;
   user_id?: string | null;
   parent_platform_id?: string;
-  pending_interactions: { tool_use_id: string; status: string; node_id: string }[];
+  pending_interactions: {
+    tool_use_id: string;
+    status: string;
+    node_id: string;
+    answer?: unknown;
+  }[];
   nodeExecutions: {
     node_id: string;
     occurrence_id?: string;
     attempt_id?: string;
     loop_ancestry?: { node_id: string; iteration: number }[];
+  }[];
+  events: {
+    event_type: string;
+    step_name: string | null;
+    data: Record<string, unknown>;
   }[];
 }> {
   const res = await page.request.get(`/api/workflows/runs/${encodeURIComponent(runId)}`);
@@ -131,12 +129,22 @@ export async function getRunDetail(
       user_id?: string | null;
       parent_platform_id?: string;
     };
-    pending_interactions?: { tool_use_id: string; status: string; node_id: string }[];
+    pending_interactions?: {
+      tool_use_id: string;
+      status: string;
+      node_id: string;
+      answer?: unknown;
+    }[];
     nodeExecutions?: {
       node_id: string;
       occurrence_id?: string;
       attempt_id?: string;
       loop_ancestry?: { node_id: string; iteration: number }[];
+    }[];
+    events?: {
+      event_type: string;
+      step_name: string | null;
+      data: Record<string, unknown>;
     }[];
   };
   return {
@@ -145,6 +153,7 @@ export async function getRunDetail(
     parent_platform_id: body.run?.parent_platform_id,
     pending_interactions: body.pending_interactions ?? [],
     nodeExecutions: body.nodeExecutions ?? [],
+    events: body.events ?? [],
   };
 }
 

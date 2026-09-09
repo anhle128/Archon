@@ -295,6 +295,7 @@ describe('NodeTranscriptPane', () => {
     runStatus?: WorkflowRunStatus;
     loadMessages: NodeMessageLoader;
     pendingInteractions?: readonly PendingInteraction[];
+    ownsUnscopedInteractions?: boolean;
     viewerIsStarter?: boolean;
     starterDisplayName?: string | null;
     actionStates?: Record<string, { phase: 'sending' } | undefined>;
@@ -324,6 +325,7 @@ describe('NodeTranscriptPane', () => {
           runStatus: args.runStatus ?? 'completed',
           loadMessages: args.loadMessages,
           pendingInteractions: args.pendingInteractions ?? [],
+          ownsUnscopedInteractions: args.ownsUnscopedInteractions ?? true,
           viewerIsStarter: args.viewerIsStarter ?? true,
           starterDisplayName:
             args.starterDisplayName === undefined ? 'Avery' : args.starterDisplayName,
@@ -620,6 +622,7 @@ describe('NodeTranscriptPane', () => {
     await flushUntil(host, 'unanchored ask', () => (host.textContent ?? '').includes('Ship it?'));
     const text = host.textContent ?? '';
     expect(text.lastIndexOf('Ship it?')).toBeGreaterThan(text.indexOf('Read'));
+    expect(text).toContain('Execution scope was not recorded for this interaction.');
 
     queryClient.clear();
     await act(async () => {
@@ -757,6 +760,8 @@ describe('NodeTranscriptPane', () => {
     const pageA2 = deferred<WorkflowNodeMessagesResponse>();
     const pageB1 = deferred<WorkflowNodeMessagesResponse>();
     const signals: AbortSignal[] = [];
+    const savedScopeA: number[] = [];
+    const savedScopeB: number[] = [];
     const loadMessages: NodeMessageLoader = async (runId, nodeId, options) => {
       expect(runId).toBe('run-1');
       expect(options.limit).toBe(100);
@@ -767,7 +772,14 @@ describe('NodeTranscriptPane', () => {
     };
 
     await act(async () => {
-      renderPane({ row: REVIEW_ROW, runStatus: 'running', loadMessages });
+      renderPane({
+        row: REVIEW_ROW,
+        runStatus: 'running',
+        loadMessages,
+        onScrollTopChange: (scrollTop: number): void => {
+          savedScopeA.push(scrollTop);
+        },
+      });
     });
     await act(async () => {
       pageA1.resolve({
@@ -781,11 +793,23 @@ describe('NodeTranscriptPane', () => {
       (host.textContent ?? '').includes('scope-a-one')
     );
 
+    const scopeAScroll = host.querySelector('[data-testid="node-transcript-scroll"]');
+    if (!(scopeAScroll instanceof HTMLElement)) throw new Error('missing scope A scroll host');
+    scopeAScroll.scrollTop = 37;
     await act(async () => {
-      renderPane({ row: SCOPE_B_ROW, runStatus: 'running', loadMessages });
+      renderPane({
+        row: SCOPE_B_ROW,
+        runStatus: 'running',
+        loadMessages,
+        onScrollTopChange: (scrollTop: number): void => {
+          savedScopeB.push(scrollTop);
+        },
+      });
     });
     await flush();
     expect(signals[0]?.aborted).toBe(true);
+    expect(savedScopeA).toContain(37);
+    expect(savedScopeB).toEqual([]);
 
     await act(async () => {
       pageA2.resolve({

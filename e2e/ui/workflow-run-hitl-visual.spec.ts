@@ -75,6 +75,35 @@ async function measureProductRatio(
   return roomBox.width / total;
 }
 
+async function captureAtTwoHundredPercentZoom(
+  page: Page,
+  surface: 'console' | 'legacy',
+  roomName: string
+): Promise<void> {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const normalWidth = await page.evaluate(() => window.innerWidth);
+  const chrome = await page.context().newCDPSession(page);
+  try {
+    await chrome.send('Emulation.setDeviceMetricsOverride', {
+      width: normalWidth / 2,
+      height: 500,
+      deviceScaleFactor: 2,
+      mobile: false,
+      screenWidth: normalWidth,
+      screenHeight: 1000,
+    });
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(normalWidth / 2);
+    await expect(page.getByRole('region', { name: roomName })).toBeVisible();
+    await page.screenshot({
+      path: join(CAPTURE_DIR, `${surface}-actual-200-percent-zoom.png`),
+      fullPage: true,
+    });
+  } finally {
+    await chrome.send('Emulation.clearDeviceMetricsOverride');
+    await chrome.detach();
+  }
+}
+
 test('[P1] HITL visual: Console and Legacy vs canonical mockup at required viewports', async ({
   page,
   archon,
@@ -104,6 +133,7 @@ test('[P1] HITL visual: Console and Legacy vs canonical mockup at required viewp
       fullPage: true,
     });
   }
+  await captureAtTwoHundredPercentZoom(page, 'console', `${HITL_INSPECT_NODE} room`);
 
   await page.setViewportSize({ width: 1440, height: 1000 });
   await openLegacyRunDetail(page, started.runId);
@@ -130,9 +160,21 @@ test('[P1] HITL visual: Console and Legacy vs canonical mockup at required viewp
       fullPage: true,
     });
   }
+  await captureAtTwoHundredPercentZoom(page, 'legacy', `${HITL_INSPECT_NODE} room`);
 
   await page.goto(pathToFileURL(MOCKUP_CONSOLE).href);
-  await expect(page.locator('body')).toBeVisible({ timeout: T.short });
+  await expect(page).toHaveTitle('Archon Console — Workflow Run (HITL mockup)');
+  await expect(page.locator('#cc-app')).toBeVisible({ timeout: T.short });
+  await expect(page.getByRole('button', { name: 'Log', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Graph', exact: true })).toBeVisible();
+  await expect(page.locator('#cc-composer input')).toBeVisible();
+  await expect.poll(async () => page.locator('#cc-stream .cc-node').count()).toBeGreaterThan(0);
+  await page.getByRole('button', { name: 'Log', exact: true }).click();
+  const consoleMockupRow = page.locator('#cc-stream section[data-node="clarify"] .cc-divider');
+  await expect(consoleMockupRow).toBeVisible({ timeout: T.medium });
+  await consoleMockupRow.click();
+  await expect(page.locator('#node-panel:not(.closed)')).toBeVisible();
+  await expect(page.locator('#panel-header .ph-name')).toHaveText('clarify');
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await expect(page.locator('body')).toBeVisible();
@@ -143,7 +185,19 @@ test('[P1] HITL visual: Console and Legacy vs canonical mockup at required viewp
   }
 
   await page.goto(pathToFileURL(MOCKUP_LEGACY).href);
-  await expect(page.locator('body')).toBeVisible({ timeout: T.short });
+  await expect(page).toHaveTitle('Archon — Workflow Run View (HITL mockup)');
+  await expect(page.locator('#app')).toBeVisible({ timeout: T.short });
+  await expect(page.getByRole('button', { name: 'starter', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'teammate', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Logs', exact: true })).toBeVisible();
+  await expect(page.locator('#chat-input')).toHaveCount(1);
+  await expect.poll(async () => page.locator('#graph-world .gnode').count()).toBeGreaterThan(10);
+  await page.getByRole('button', { name: 'Logs', exact: true }).click();
+  const legacyMockupRow = page.locator('#logs-list .logrun', { hasText: 'clarify' }).first();
+  await expect(legacyMockupRow).toBeVisible({ timeout: T.medium });
+  await legacyMockupRow.click();
+  await expect(page.locator('#node-panel:not(.closed)')).toBeVisible();
+  await expect(page.locator('#panel-header .ph-name')).toHaveText('clarify');
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await expect(page.locator('body')).toBeVisible();

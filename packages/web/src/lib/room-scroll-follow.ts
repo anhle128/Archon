@@ -39,11 +39,12 @@ export function onRoomScroll(
   metrics: ScrollFollowMetrics
 ): ScrollFollowState {
   const distance = metrics.scrollHeight - metrics.clientHeight - metrics.scrollTop;
+  const follow = distance <= FOLLOW_THRESHOLD_PX;
   return {
     ...state,
-    follow: distance <= FOLLOW_THRESHOLD_PX,
+    follow,
     scrollTop: metrics.scrollTop,
-    pinToBottom: false,
+    pinToBottom: follow,
   };
 }
 

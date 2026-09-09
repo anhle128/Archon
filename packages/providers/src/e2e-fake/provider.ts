@@ -49,6 +49,7 @@ const scenarioSchema = z
     delayMs: z.number().int().nonnegative().optional(),
     doneWhenPromptIncludes: z.string().min(1).optional(),
     repeatTool: z.number().int().min(1).max(200).optional(),
+    largeLastToolOutput: z.boolean().optional(),
   })
   .strict();
 
@@ -330,10 +331,14 @@ export class E2eFakeProvider implements IAgentProvider {
           toolInput: { ...E2E_FAKE_TOOL_INPUT },
           toolCallId,
         };
+        const toolOutput =
+          scenario.largeLastToolOutput === true && index === repeat - 1
+            ? `${E2E_FAKE_TOOL_OUTPUT}\n${'x'.repeat(20_000)}\n[e2e-fake] full output tail`
+            : E2E_FAKE_TOOL_OUTPUT;
         yield {
           type: 'tool_result',
           toolName: E2E_FAKE_TOOL_NAME,
-          toolOutput: E2E_FAKE_TOOL_OUTPUT,
+          toolOutput,
           toolCallId,
           toolOutcome: 'success',
         };

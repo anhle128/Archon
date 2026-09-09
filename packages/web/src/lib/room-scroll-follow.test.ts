@@ -58,7 +58,11 @@ describe('onRoomScroll', () => {
   });
 
   test('a scroll within 24 pixels of bottom preserves follow', () => {
-    expect(onRoomScroll(following, AT_THRESHOLD).follow).toBe(true);
+    expect(onRoomScroll(following, AT_THRESHOLD)).toEqual({
+      follow: true,
+      scrollTop: 176,
+      pinToBottom: true,
+    });
   });
 });
 

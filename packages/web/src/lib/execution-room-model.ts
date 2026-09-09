@@ -20,6 +20,7 @@ export type ExecutionRowSelection =
       attemptId?: string;
       retryEpoch?: number;
       iteration?: number;
+      routeActivationSeq?: number;
     };
 
 export interface ExecutionRow {
@@ -82,11 +83,21 @@ function executionLabel(selection: ExecutionRowSelection): string {
   if (selection.kind === 'loop_iteration') {
     return `Iteration ${String(selection.iteration)}`;
   }
+  if (selection.kind === 'route_iteration') {
+    return `Route ${String(selection.executionSeq)}`;
+  }
   if (selection.kind === 'occurrence') {
-    if (selection.iteration !== undefined) {
-      return `Iteration ${String(selection.iteration)}`;
+    const context: string[] = [];
+    if (selection.routeActivationSeq !== undefined) {
+      context.push(`Route ${String(selection.routeActivationSeq)}`);
     }
-    return `Attempt ${String((selection.retryEpoch ?? 0) + 1)}`;
+    if (selection.iteration !== undefined) {
+      context.push(`Iteration ${String(selection.iteration)}`);
+    }
+    if (selection.retryEpoch !== undefined && selection.retryEpoch > 0) {
+      context.push(`Attempt ${String(selection.retryEpoch + 1)}`);
+    }
+    return context.length > 0 ? context.join(' · ') : 'Attempt 1';
   }
   return 'Execution unknown';
 }
@@ -136,6 +147,28 @@ export function chooseExecutionForNode<T extends ExecutionChoiceRow>(
   return latestByOrder(forNode);
 }
 
+export function chooseExecutionForInteraction<
+  T extends ExecutionChoiceRow & { selection: ExecutionRowSelection },
+>(
+  rows: readonly T[],
+  interaction: {
+    node_id: string;
+    execution_scope?: { occurrence_id: string; attempt_id: string } | null;
+  }
+): T | null {
+  const forNode = rows.filter(row => row.nodeId === interaction.node_id);
+  if (forNode.length === 0) return null;
+  if (interaction.execution_scope == null) return latestByOrder(forNode);
+  return (
+    forNode.find(
+      row =>
+        row.selection.kind === 'occurrence' &&
+        row.selection.occurrenceId === interaction.execution_scope?.occurrence_id &&
+        row.selection.attemptId === interaction.execution_scope.attempt_id
+    ) ?? null
+  );
+}
+
 export function runtimeForSelection(
   events: readonly WorkflowEvent[],
   row: ExecutionRow
@@ -171,8 +204,11 @@ export function roomOpenerId(surface: RoomSurface, kind: RoomOpenerKind, key: st
   return `${surface}-${kind}-${encodeURIComponent(key)}`;
 }
 
-export function askCardId(requestId: string): string {
-  return `run-ask-card-${encodeURIComponent(requestId)}`;
+export function askCardId(requestId: string, mountContext?: string): string {
+  const base = `run-ask-card-${encodeURIComponent(requestId)}`;
+  return mountContext === undefined || mountContext === 'default'
+    ? base
+    : `${base}-${encodeURIComponent(mountContext)}`;
 }
 
 export interface RoomVisitSelection {
@@ -200,9 +236,15 @@ export function resetRoomVisit(runId: string): RoomVisitState {
 }
 
 export function openRoom(state: RoomVisitState, selection: RoomVisitSelection): RoomVisitState {
+  return { ...state, selection };
+}
+
+export function openExplicitRoom(
+  state: RoomVisitState,
+  selection: RoomVisitSelection
+): RoomVisitState {
   return {
-    ...state,
-    selection,
+    ...openRoom(state, selection),
     lastExplicitRowByNode: {
       ...state.lastExplicitRowByNode,
       [selection.nodeId]: selection.rowId,
@@ -237,7 +279,7 @@ export function applyRoomDeepLink(
   if (state.appliedDeepLinkNode === queryNode) return state;
   const row = chooseExecutionForNode(rows, queryNode, state.lastExplicitRowByNode[queryNode]);
   if (row === null) {
-    return { ...state, appliedDeepLinkNode: queryNode };
+    return rows.length === 0 ? state : { ...state, appliedDeepLinkNode: queryNode };
   }
   return openRoom(
     { ...state, appliedDeepLinkNode: queryNode },

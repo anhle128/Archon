@@ -45,6 +45,7 @@ export interface LegacyNodeRoomProps {
   onApprove: () => Promise<void>;
   onReject: (reason?: string) => Promise<void>;
   pendingInteractions: readonly PendingInteraction[];
+  ownsUnscopedInteractions: boolean;
   viewerIsStarter: boolean;
   starterDisplayName: string | null;
   actionStates: AskActionStateByRequest;
@@ -54,6 +55,7 @@ export interface LegacyNodeRoomProps {
   headerOptions?: readonly ExecutionHeaderOption[];
   onSelectRow?: (rowId: string) => void;
   onClose?: () => void;
+  closeLabel?: 'Close' | 'Back';
   scopeKey?: string;
   initialScrollTop?: number;
   onScrollTopChange?: (scrollTop: number) => void;
@@ -100,6 +102,7 @@ export function LegacyNodeRoom({
   onApprove,
   onReject,
   pendingInteractions,
+  ownsUnscopedInteractions,
   viewerIsStarter,
   starterDisplayName,
   actionStates,
@@ -109,6 +112,7 @@ export function LegacyNodeRoom({
   headerOptions,
   onSelectRow,
   onClose,
+  closeLabel = 'Close',
   scopeKey,
   initialScrollTop,
   onScrollTopChange,
@@ -132,6 +136,7 @@ export function LegacyNodeRoom({
         selectedRowId={row.id}
         onSelectRow={onSelectRow}
         onClose={onClose}
+        closeLabel={closeLabel}
       />
     ) : (
       <div className="flex items-center gap-2 border-b border-border px-4 py-2">
@@ -144,6 +149,15 @@ export function LegacyNodeRoom({
         <span className={cn('rounded-full px-2 py-0.5 text-xs', STATUS_COLORS[row.status])}>
           {nodeStatusLabel(row.status)}
         </span>
+        {onClose !== undefined ? (
+          <button
+            type="button"
+            className="ml-auto shrink-0 text-xs text-primary hover:text-accent-bright"
+            onClick={onClose}
+          >
+            {closeLabel}
+          </button>
+        ) : null}
       </div>
     );
 
@@ -165,6 +179,7 @@ export function LegacyNodeRoom({
             runStatus={runStatus}
             loadMessages={loadMessages}
             pendingInteractions={pendingInteractions}
+            ownsUnscopedInteractions={ownsUnscopedInteractions}
             viewerIsStarter={viewerIsStarter}
             starterDisplayName={starterDisplayName}
             actionStates={actionStates}

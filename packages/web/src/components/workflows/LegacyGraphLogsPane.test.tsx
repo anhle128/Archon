@@ -414,6 +414,7 @@ describe('LegacyGraphLogsPane', () => {
         props.onSelectNode(null);
       },
       runId: props.runId,
+      runStartedAt: CREATED_AT,
       nodeStates: props.nodeStates,
       events: props.events,
       loadMessages: props.loadMessages,
@@ -544,6 +545,7 @@ describe('LegacyGraphLogsPane', () => {
       roomRatio: 40,
       onRoomRatioChange: (): void => undefined,
       runId: 'run-1',
+      runStartedAt: CREATED_AT,
       nodeStates: [REVIEW_STATE],
       events: [REVIEW_STARTED],
       loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({ messages: [] }),
@@ -645,7 +647,7 @@ describe('LegacyGraphLogsPane', () => {
     });
     await flush();
     const mainView = host.querySelector('#legacy-run-view');
-    expect(mainView).not.toBeNull();
+    expect(mainView).toBe(viewPanel);
     expect((mainView as HTMLElement).hidden).toBe(true);
     const back = Array.from(host.querySelectorAll('button')).find(candidate =>
       (candidate.textContent ?? '').includes('Back')

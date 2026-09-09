@@ -669,6 +669,11 @@ describe('RunDetailPage inspect selection', () => {
     );
     expect(host.textContent).toContain('Waiting for approval');
     expect(host.textContent).not.toContain('Awaiting input (');
+    const streamApprovalActions = Array.from(host.querySelectorAll('[data-keymap-approve]')).filter(
+      action => action.closest('[aria-label="review room"]') === null
+    );
+    expect(streamApprovalActions).toHaveLength(1);
+    expect(streamApprovalActions[0]?.closest('[data-execution-row-id]')).not.toBeNull();
   });
 
   test('an invalid ?node= query does not open a room', async () => {
@@ -1025,7 +1030,7 @@ describe('RunDetailPage inspect selection', () => {
     });
     await flushUntil(
       'shared ask',
-      () => host.querySelectorAll('form[id="run-ask-card-tool-1"]').length >= 2
+      () => host.querySelectorAll('form[id^="run-ask-card-tool-1-"]').length >= 2
     );
     expect(host.querySelector('[data-ask-draft-count]')?.getAttribute('data-ask-draft-count')).toBe(
       '0'

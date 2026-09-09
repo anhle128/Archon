@@ -33,9 +33,10 @@ export type AgentHistoryItem =
       context: { label: string; value: string }[];
       input: unknown;
       output: unknown;
-      outcome: 'running' | 'succeeded' | 'failed' | 'unknown';
+      outcome: 'running' | 'succeeded' | 'failed' | 'interrupted' | 'unknown';
       durationMs: number | null;
       canLoadFullOutput: boolean;
+      outputState: 'full' | 'truncated' | 'missing' | 'unknown';
       messageId: string;
     }
   | {
@@ -75,10 +76,29 @@ function recordedDurationMs(value: unknown): number | null {
   return value;
 }
 
-function isTruncatedMetadata(metadata: unknown): boolean {
-  const record = asRecord(metadata);
-  if (record === null) return false;
-  return record.truncated === true || record.output_state === 'truncated';
+function fullOutputAvailable(metadata: unknown): boolean {
+  return asRecord(metadata)?.full_output_available === true;
+}
+
+function recordedOutputState(
+  metadata: unknown
+): 'full' | 'truncated' | 'missing' | 'unknown' | null {
+  const state = asRecord(metadata)?.output_state;
+  if (state === 'full' || state === 'truncated' || state === 'missing' || state === 'unknown') {
+    return state;
+  }
+  return null;
+}
+
+function deriveOutputState(card: ToolCard): 'full' | 'truncated' | 'missing' | 'unknown' {
+  const recorded =
+    recordedOutputState(card.result?.metadata) ?? recordedOutputState(card.call?.metadata);
+  if (recorded !== null) return recorded;
+  if (fullOutputAvailable(card.result?.metadata) || fullOutputAvailable(card.call?.metadata)) {
+    return 'truncated';
+  }
+  if (card.result === null || card.output === undefined || card.output === null) return 'missing';
+  return 'full';
 }
 
 function extraToolFields(row: ToolRow | null): {
@@ -110,8 +130,8 @@ function deriveOutcome(card: ToolCard): ToolOutcome {
   if (recordedOutcome === 'error' || recordedOutcome === 'failed') return 'failed';
   if (typeof error === 'string' && error.length > 0) return 'failed';
   if (recordedOutcome === 'success') return 'succeeded';
-  if (card.call === null) return 'unknown';
-  if (recordedOutcome === 'interrupted' || recordedOutcome === 'unknown') return 'unknown';
+  if (recordedOutcome === 'interrupted') return 'interrupted';
+  if (card.call === null || recordedOutcome === 'unknown') return 'unknown';
   return 'succeeded';
 }
 
@@ -142,10 +162,8 @@ function toToolItem(
     outcome: deriveOutcome(card),
     durationMs: toolRuntime(events, nodeId, toolUseId).durationMs,
     canLoadFullOutput:
-      card.truncated === true ||
-      card.outputState === 'truncated' ||
-      isTruncatedMetadata(card.call?.metadata) ||
-      isTruncatedMetadata(card.result?.metadata),
+      fullOutputAvailable(card.call?.metadata) || fullOutputAvailable(card.result?.metadata),
+    outputState: deriveOutputState(card),
     messageId: card.result?.id ?? card.call?.id ?? card.id,
   };
 }

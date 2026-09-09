@@ -7,6 +7,7 @@ import type {
   NodeMessageState,
 } from './node-message-pages';
 import {
+  beginNodeMessageRefresh,
   createNodeMessageState,
   drainNodeMessages,
   nodeMessageScopeKey,
@@ -65,6 +66,25 @@ describe('nodeMessageScopeKey', () => {
     expect(withoutAttempt).not.toBe(withAttempt);
   });
 });
+describe('beginNodeMessageRefresh', () => {
+  test('keeps loaded rows and cursor while capturing a fresh snapshot boundary', () => {
+    const loaded: NodeMessageState = {
+      scopeKey: 'scope-a',
+      rows: [message(1), message(2)],
+      afterSeq: 2,
+      highWatermark: 2,
+      complete: true,
+      loading: false,
+      error: null,
+    };
+
+    expect(beginNodeMessageRefresh(loaded)).toEqual({
+      ...loaded,
+      highWatermark: null,
+      complete: false,
+    });
+  });
+});
 
 describe('reduceNodeMessagePage', () => {
   test('sorts by seq and keeps one row for duplicate seq values', () => {
@@ -92,6 +112,25 @@ describe('reduceNodeMessagePage', () => {
       nextCursor: '3',
     });
     expect(second.complete).toBe(true);
+  });
+
+  test('keeps the first watermark stable when newer rows arrive during a drain', () => {
+    const first = reduceNodeMessagePage(createNodeMessageState('scope-a'), 'scope-a', {
+      messages: [message(1)],
+      hasMore: false,
+      highWatermark: 2,
+      nextCursor: '1',
+    });
+    expect(first.complete).toBe(false);
+    const second = reduceNodeMessagePage(first, 'scope-a', {
+      messages: [message(2)],
+      hasMore: true,
+      highWatermark: 3,
+      nextCursor: '2',
+    });
+    expect(second.highWatermark).toBe(2);
+    expect(second.complete).toBe(true);
+    expect(second.rows.map(row => row.seq)).toEqual([1, 2]);
   });
 
   test('ignores a page and a failure from an obsolete scope', () => {
@@ -193,7 +232,7 @@ describe('drainNodeMessages', () => {
     expect(states.at(-1)?.complete).toBe(true);
   });
 
-  test('reaches the watermark after a terminal empty poll', async () => {
+  test('stops when the first page reaches its watermark despite a stale hasMore flag', async () => {
     const afterSeqs: number[] = [];
     const loader: NodeMessageLoader = async (_runId, _nodeId, options) => {
       afterSeqs.push(options.afterSeq);
@@ -220,10 +259,45 @@ describe('drainNodeMessages', () => {
       loader,
       onState(): void {},
     });
-    expect(afterSeqs).toEqual([0, 2]);
+    expect(afterSeqs).toEqual([0]);
     expect(result.complete).toBe(true);
     expect(result.rows.map(row => row.seq)).toEqual([1, 2]);
     expect(result.error).toBeNull();
+  });
+
+  test('stops at the first watermark while a live transcript keeps growing', async () => {
+    const afterSeqs: number[] = [];
+    const loader: NodeMessageLoader = async (_runId, _nodeId, options) => {
+      afterSeqs.push(options.afterSeq);
+      if (options.afterSeq === 0) {
+        return {
+          messages: [message(1)],
+          hasMore: false,
+          highWatermark: 2,
+          nextCursor: '1',
+        };
+      }
+      if (options.afterSeq === 1) {
+        return {
+          messages: [message(2)],
+          hasMore: true,
+          highWatermark: 3,
+          nextCursor: '2',
+        };
+      }
+      throw new Error('drain chased messages beyond its first watermark');
+    };
+    const result = await drainNodeMessages({
+      runId: 'run-1',
+      nodeId: 'review',
+      selection: { kind: 'node', rowId: 'row-1' },
+      loader,
+      onState(): void {},
+    });
+    expect(afterSeqs).toEqual([0, 1]);
+    expect(result.highWatermark).toBe(2);
+    expect(result.complete).toBe(true);
+    expect(result.rows.map(row => row.seq)).toEqual([1, 2]);
   });
 
   test('halts on abort without converting AbortError to retry error', async () => {

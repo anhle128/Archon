@@ -340,4 +340,123 @@ describe('ConsoleExecutionHistory', () => {
     expect(host.textContent).toContain('Retry');
     expect(host.textContent).toContain('Failed to load node transcript');
   });
+
+  test('slices fallback loop transcripts to the selected iteration', async () => {
+    const loopEntry: ConsoleLogEntry = {
+      ...second,
+      row: {
+        ...second.row,
+        selection: { kind: 'loop_iteration', iteration: 2 },
+        unknownScope: true,
+      },
+    };
+    renderHistory({
+      entry: loopEntry,
+      allEntries: [loopEntry],
+      loadMessages: async (): Promise<WorkflowNodeMessagesResponse> => ({
+        messages: [
+          {
+            id: 'iteration-1-start',
+            seq: 1,
+            kind: 'status',
+            payload: { state: 'iteration_started', detail: '1' },
+            created_at: CREATED_AT,
+          },
+          {
+            id: 'iteration-1-text',
+            seq: 2,
+            kind: 'text',
+            payload: { text: 'iteration-one' },
+            created_at: CREATED_AT,
+          },
+          {
+            id: 'iteration-2-start',
+            seq: 3,
+            kind: 'status',
+            payload: { state: 'iteration_started', detail: '2' },
+            created_at: CREATED_AT,
+          },
+          {
+            id: 'iteration-2-text',
+            seq: 4,
+            kind: 'text',
+            payload: { text: 'iteration-two' },
+            created_at: CREATED_AT,
+          },
+          {
+            id: 'iteration-2-end',
+            seq: 5,
+            kind: 'status',
+            payload: { state: 'iteration_completed', detail: '2' },
+            created_at: CREATED_AT,
+          },
+        ],
+      }),
+    });
+    await flushUntil('iteration two', () => (host.textContent ?? '').includes('iteration-two'));
+    expect(host.textContent).not.toContain('iteration-one');
+  });
+
+  test('assigns an unscoped route transcript only to the latest route section', async () => {
+    const firstRoute: ConsoleLogEntry = {
+      ...first,
+      row: {
+        ...first.row,
+        selection: { kind: 'route_iteration', executionSeq: 1 },
+        unknownScope: true,
+      },
+    };
+    const secondRoute: ConsoleLogEntry = {
+      ...second,
+      row: {
+        ...second.row,
+        selection: { kind: 'route_iteration', executionSeq: 2 },
+        unknownScope: true,
+      },
+    };
+    let loads = 0;
+    const loadMessages = async (): Promise<WorkflowNodeMessagesResponse> => {
+      loads += 1;
+      return {
+        messages: [
+          {
+            id: 'route-text',
+            seq: 1,
+            kind: 'text',
+            payload: { text: 'shared-route-history' },
+            created_at: CREATED_AT,
+          },
+        ],
+      };
+    };
+    renderHistory({
+      entry: firstRoute,
+      allEntries: [firstRoute, secondRoute],
+      loadMessages,
+    });
+    await flush();
+    expect(loads).toBe(0);
+    expect(host.textContent).not.toContain('shared-route-history');
+
+    renderHistory({
+      entry: secondRoute,
+      allEntries: [firstRoute, secondRoute],
+      loadMessages,
+    });
+    await flushUntil('latest route history', () =>
+      (host.textContent ?? '').includes('shared-route-history')
+    );
+    expect(loads).toBe(1);
+    expect(host.textContent).toContain(
+      'Execution scope was not recorded; this history may include other executions of the same node.'
+    );
+  });
+
+  test('polls only active execution rows in a live run', () => {
+    expect(historyModule.shouldPollExecutionHistory(true, 'running')).toBe(true);
+    expect(historyModule.shouldPollExecutionHistory(true, 'awaiting')).toBe(true);
+    expect(historyModule.shouldPollExecutionHistory(true, 'completed')).toBe(false);
+    expect(historyModule.shouldPollExecutionHistory(true, 'failed')).toBe(false);
+    expect(historyModule.shouldPollExecutionHistory(false, 'running')).toBe(false);
+  });
 });

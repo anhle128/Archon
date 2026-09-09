@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type ReactElement } from 'react';
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
 
 export type ReplyDestinationState =
   | { kind: 'loading' }
@@ -27,6 +27,10 @@ function disabledCopy(state: ReplyDestinationState): string | null {
   }
 }
 
+function destinationKey(state: ReplyDestinationState): string {
+  return state.kind === 'ready' ? `ready:${state.parentPlatformId}` : state.kind;
+}
+
 /**
  * Reply composer that sends only to a verified parent web conversation.
  * Disabled states stay factual so messages are never posted to a fallback chat.
@@ -35,6 +39,19 @@ export function ConsoleReplyComposer({ state, onSend }: ConsoleReplyComposerProp
   const [value, setValue] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const currentDestinationKey = destinationKey(state);
+  const previousDestinationKeyRef = useRef(currentDestinationKey);
+  const destinationGenerationRef = useRef(0);
+  const draftRevisionRef = useRef(0);
+  useLayoutEffect(() => {
+    if (previousDestinationKeyRef.current === currentDestinationKey) return;
+    previousDestinationKeyRef.current = currentDestinationKey;
+    destinationGenerationRef.current += 1;
+    draftRevisionRef.current += 1;
+    setValue('');
+    setSending(false);
+    setSendError(null);
+  }, [currentDestinationKey]);
   const ready = state.kind === 'ready';
   const reason = disabledCopy(state);
   const canSend = ready && !sending && value.trim().length > 0;
@@ -43,15 +60,24 @@ export function ConsoleReplyComposer({ state, onSend }: ConsoleReplyComposerProp
     if (!ready || sending) return;
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
+    const generation = destinationGenerationRef.current;
+    const draftRevision = draftRevisionRef.current;
     setSending(true);
     setSendError(null);
     try {
       await onSend(trimmed);
-      setValue('');
+      if (
+        destinationGenerationRef.current === generation &&
+        draftRevisionRef.current === draftRevision
+      ) {
+        setValue('');
+      }
     } catch (error) {
-      setSendError(error instanceof Error ? error.message : String(error));
+      if (destinationGenerationRef.current === generation) {
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
     } finally {
-      setSending(false);
+      if (destinationGenerationRef.current === generation) setSending(false);
     }
   }
 
@@ -84,6 +110,7 @@ export function ConsoleReplyComposer({ state, onSend }: ConsoleReplyComposerProp
           rows={1}
           className="min-h-[36px] flex-1 resize-none rounded-[10px] border border-border bg-transparent px-3 py-2 text-[14px] text-text-primary placeholder:text-text-tertiary focus:outline-none disabled:opacity-50"
           onChange={(event): void => {
+            draftRevisionRef.current += 1;
             setValue(event.target.value);
           }}
           onKeyDown={onKeyDown}

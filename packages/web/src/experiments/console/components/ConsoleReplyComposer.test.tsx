@@ -163,4 +163,43 @@ describe('ConsoleReplyComposer', () => {
     expect(field().value).toBe('keep me');
     expect(host.textContent).toContain('delivery failed');
   });
+
+  test('clears a draft when the verified destination changes', async () => {
+    await renderComposer({ kind: 'ready', parentPlatformId: 'web-parent-1' });
+    await act(async () => {
+      setDraft('draft for parent one');
+    });
+    await flush();
+    await renderComposer({ kind: 'ready', parentPlatformId: 'web-parent-2' });
+    expect(field().value).toBe('');
+  });
+
+  test('an old send completion cannot erase a newer destination draft', async () => {
+    let resolveSend: (() => void) | undefined;
+    const pending = new Promise<void>(resolve => {
+      resolveSend = resolve;
+    });
+    const onSend = async (): Promise<void> => pending;
+    await renderComposer({ kind: 'ready', parentPlatformId: 'web-parent-1' }, onSend);
+    await act(async () => {
+      setDraft('parent one message');
+    });
+    await flush();
+    await act(async () => {
+      sendButton().click();
+    });
+    await flush();
+
+    await renderComposer({ kind: 'ready', parentPlatformId: 'web-parent-2' }, onSend);
+    await act(async () => {
+      setDraft('parent two draft');
+    });
+    await flush();
+    await act(async () => {
+      resolveSend?.();
+      await pending;
+    });
+    await flush();
+    expect(field().value).toBe('parent two draft');
+  });
 });

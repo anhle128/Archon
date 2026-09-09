@@ -244,6 +244,7 @@ describe('ConsoleNodeRoom', () => {
           closed += 1;
         },
         pendingInteractions: [],
+        ownsUnscopedInteractions: true,
         viewerIsStarter: true,
         starterDisplayName: 'Avery',
         actionStates: {},
@@ -289,6 +290,8 @@ describe('ConsoleNodeRoom', () => {
 
   test('rekeys loadMessages when the selected agent node changes', async () => {
     const calls: [string, string][] = [];
+    const savedReview: number[] = [];
+    const savedPlan: number[] = [];
     const loadMessages = (runId: string, nodeId: string): Promise<WorkflowNodeMessagesResponse> => {
       calls.push([runId, nodeId]);
       if (nodeId === 'plan') return Promise.resolve({ messages: [...PLAN_MESSAGES] });
@@ -304,11 +307,17 @@ describe('ConsoleNodeRoom', () => {
         run: run({ id: 'run-switch' }),
         definitionNodes,
         loadMessages,
+        onScrollTopChange: (scrollTop: number): void => {
+          savedReview.push(scrollTop);
+        },
       });
     });
     await flushUntil('first agent', () => (host.textContent ?? '').includes('first'));
     expect(calls).toEqual([['run-switch', 'review']]);
 
+    const reviewScroll = host.querySelector('[data-testid="console-node-room-scroll"]');
+    if (!(reviewScroll instanceof HTMLElement)) throw new Error('missing review scroll host');
+    reviewScroll.scrollTop = 41;
     await act(async () => {
       renderRoom({
         run: run({ id: 'run-switch' }),
@@ -320,9 +329,14 @@ describe('ConsoleNodeRoom', () => {
           nodeState({ nodeId: 'plan', name: 'Plan', status: 'running' }),
         ],
         loadMessages,
+        onScrollTopChange: (scrollTop: number): void => {
+          savedPlan.push(scrollTop);
+        },
       });
     });
     await flushUntil('second agent', () => (host.textContent ?? '').includes('second'));
+    expect(savedReview).toContain(41);
+    expect(savedPlan).toEqual([]);
     expect(calls).toEqual([
       ['run-switch', 'review'],
       ['run-switch', 'plan'],
@@ -463,8 +477,55 @@ describe('ConsoleNodeRoom', () => {
   });
 
   test('polls live agent rooms every 1000 ms and does not poll completed rooms', async () => {
-    const loadMessages = (): Promise<WorkflowNodeMessagesResponse> =>
-      Promise.resolve({ messages: [...FIXTURE] });
+    const afterSeqs: number[] = [];
+    const burst = Array.from({ length: 100 }, (_, index): WorkflowNodeMessage => {
+      const seq = index + 9;
+      return {
+        id: `fresh-${seq}`,
+        seq,
+        kind: 'text',
+        payload: { text: `fresh-${seq}` },
+        created_at: CREATED_AT,
+      };
+    });
+    const loadMessages = async (
+      _runId: string,
+      _nodeId: string,
+      options?: { afterSeq?: number }
+    ): Promise<WorkflowNodeMessagesResponse> => {
+      const afterSeq = options?.afterSeq ?? 0;
+      afterSeqs.push(afterSeq);
+      if (afterSeq === 0) {
+        return {
+          messages: [...FIXTURE],
+          nextCursor: '8',
+          highWatermark: 8,
+          hasMore: false,
+        };
+      }
+      if (afterSeq === 8) {
+        return {
+          messages: burst,
+          nextCursor: '108',
+          highWatermark: 109,
+          hasMore: true,
+        };
+      }
+      return {
+        messages: [
+          {
+            id: 'fresh-109',
+            seq: 109,
+            kind: 'text',
+            payload: { text: 'fresh-109' },
+            created_at: CREATED_AT,
+          },
+        ],
+        nextCursor: '109',
+        highWatermark: 109,
+        hasMore: false,
+      };
+    };
     const scheduled: (() => void)[] = [];
     const timeoutSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((
       handler: TimerHandler,
@@ -489,7 +550,10 @@ describe('ConsoleNodeRoom', () => {
     await act(async () => {
       scheduled[0]();
     });
-    await flush();
+    await flushUntil('fresh snapshot drained', () =>
+      (host.textContent ?? '').includes('fresh-109')
+    );
+    expect(afterSeqs).toEqual([0, 8, 108]);
     expect(scheduled.length).toBeGreaterThanOrEqual(before);
 
     await act(async () => {
@@ -862,6 +926,7 @@ describe('ConsoleNodeRoom', () => {
       firstTool.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING
     ).not.toBe(0);
     expect(host.textContent).toContain('waiting on you');
+    expect(host.textContent).toContain('Execution scope was not recorded for this interaction.');
     assertNoConversationComposer(host);
   });
 

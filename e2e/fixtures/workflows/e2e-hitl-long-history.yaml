@@ -7,5 +7,5 @@ nodes:
     provider: e2e-fake
     model: e2e-fake-model
     prompt: |
-      <<E2E_SCENARIO>>{"emitTool":true,"repeatTool":120}<</E2E_SCENARIO>>
+      <<E2E_SCENARIO>>{"emitTool":true,"repeatTool":120,"largeLastToolOutput":true}<</E2E_SCENARIO>>
       $ARGUMENTS

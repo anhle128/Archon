@@ -246,7 +246,7 @@ export function AskCard(props: AskCardProps): React.ReactElement {
 
   return (
     <form
-      id={askCardId(interaction.tool_use_id)}
+      id={askCardId(interaction.tool_use_id, mountContext)}
       tabIndex={-1}
       aria-label={`question from agent, ${String(questions.length)} questions`}
       onSubmit={handleSubmit}

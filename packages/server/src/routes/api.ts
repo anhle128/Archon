@@ -5232,6 +5232,7 @@ export function registerApiRoutes(
                 ...(row.metadata ?? {}),
                 truncated: true,
                 output_state: 'truncated' as const,
+                full_output_available: true,
               }
             : row.metadata;
         return {
@@ -5292,19 +5293,19 @@ export function registerApiRoutes(
         });
       }
       const limit = query.limit ?? 100;
-      const listQuery = {
-        ...(query.afterSeq !== undefined ? { afterSeq: query.afterSeq } : {}),
-        limit: limit + 1,
-        ...(query.occurrenceId !== undefined ? { occurrenceId: query.occurrenceId } : {}),
-        ...(query.attemptId !== undefined ? { attemptId: query.attemptId } : {}),
-      };
-      const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId, listQuery);
-      const hasMore = rows.length > limit;
-      const page = hasMore ? rows.slice(0, limit) : rows;
       const highWatermark = await workflowNodeMessageDb.getNodeMessageHighWatermark(runId, nodeId, {
         ...(query.occurrenceId !== undefined ? { occurrenceId: query.occurrenceId } : {}),
         ...(query.attemptId !== undefined ? { attemptId: query.attemptId } : {}),
       });
+      const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId, {
+        ...(query.afterSeq !== undefined ? { afterSeq: query.afterSeq } : {}),
+        limit: limit + 1,
+        throughSeq: highWatermark,
+        ...(query.occurrenceId !== undefined ? { occurrenceId: query.occurrenceId } : {}),
+        ...(query.attemptId !== undefined ? { attemptId: query.attemptId } : {}),
+      });
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
       const last = page[page.length - 1];
       return c.json({
         messages: page.map(row => toWorkflowNodeMessageResponse(row, true)),

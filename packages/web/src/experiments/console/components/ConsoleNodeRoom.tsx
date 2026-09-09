@@ -13,6 +13,7 @@ import {
 import { buildAgentHistory, type AgentHistoryItem } from '@/lib/agent-history';
 import { buildExecutionHeader, type ExecutionHeaderModel } from '@/lib/execution-room-model';
 import {
+  beginNodeMessageRefresh,
   createNodeMessageState,
   drainNodeMessages,
   nodeMessageScopeKey,
@@ -37,6 +38,7 @@ import type { AskActionStateByRequest } from './ask/ask-answer-controller';
 import { resolveAskCardPresentation } from './ask/ask-card-presentation';
 import { parseAskEnvelope, type AskDraft, type AskDraftByRequest } from './ask/parse-ask-envelope';
 import { selectVisibleNodeAskInteractions } from './ask/select-visible-node-ask-interactions';
+import { UNSCOPED_INTERACTION_LIMITATION } from './inspect/execution-interactions';
 import type { LogRow } from './inspect/build-log-rows';
 import { ConsoleAgentHistoryList } from './inspect/ConsoleAgentHistoryList';
 import { ConsoleRoomHeader, type ConsoleExecutionHeaderOption } from './inspect/ConsoleRoomHeader';
@@ -80,6 +82,7 @@ export interface ConsoleNodeRoomProps {
   loadMessage?: typeof getNodeMessage;
   onClose: () => void;
   pendingInteractions: readonly PendingInteraction[];
+  ownsUnscopedInteractions: boolean;
   viewerIsStarter: boolean;
   starterDisplayName: string | null;
   actionStates: AskActionStateByRequest;
@@ -445,6 +448,7 @@ export function ConsoleNodeRoom({
   loadMessage = getNodeMessage,
   onClose,
   pendingInteractions,
+  ownsUnscopedInteractions,
   viewerIsStarter,
   starterDisplayName,
   actionStates,
@@ -480,11 +484,9 @@ export function ConsoleNodeRoom({
   const [retryNonce, setRetryNonce] = useState(0);
   const pageStateRef = useRef(pageState);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const onScrollTopChangeRef = useRef(onScrollTopChange);
   const loadMessagesRef = useRef(loadMessages);
   const prevScopeRef = useRef(resolvedScopeKey);
   pageStateRef.current = pageState;
-  onScrollTopChangeRef.current = onScrollTopChange;
   loadMessagesRef.current = loadMessages;
 
   const nodeKey = row?.nodeId ?? null;
@@ -529,14 +531,14 @@ export function ConsoleNodeRoom({
       if (cancelled || controller.signal.aborted) return;
       if (isLive && next.error === null) {
         timer = setTimeout(() => {
-          void runDrain({ ...next, complete: false });
+          void runDrain(beginNodeMessageRefresh(next));
         }, 1000);
       }
     };
 
     const startState =
       pageStateRef.current.scopeKey === resolvedScopeKey
-        ? { ...pageStateRef.current, complete: false }
+        ? beginNodeMessageRefresh(pageStateRef.current)
         : createNodeMessageState(resolvedScopeKey);
     void runDrain(startState);
 
@@ -545,9 +547,19 @@ export function ConsoleNodeRoom({
       controller.abort();
       if (timer !== undefined) clearTimeout(timer);
       const el = scrollRef.current;
-      if (el !== null) onScrollTopChangeRef.current?.(el.scrollTop);
+      if (el !== null) onScrollTopChange?.(el.scrollTop);
     };
-  }, [agentActive, isLive, nodeKey, resolvedScopeKey, retryNonce, row, rowId, run.id]);
+  }, [
+    agentActive,
+    isLive,
+    nodeKey,
+    onScrollTopChange,
+    resolvedScopeKey,
+    retryNonce,
+    row,
+    rowId,
+    run.id,
+  ]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -602,8 +614,10 @@ export function ConsoleNodeRoom({
       ? selectVisibleNodeAskInteractions({
           pending: pendingInteractions,
           nodeId: row.nodeId,
+          selection: row.selection,
           allMessages,
           visibleMessages,
+          ownsUnscopedInteractions,
         })
       : [];
   const visibleToolIds = collectToolIds(visibleMessages);
@@ -641,46 +655,54 @@ export function ConsoleNodeRoom({
 
   const renderAskCard = (interaction: PendingInteraction): ReactElement => {
     const questions = parseAskEnvelope(interaction.envelope);
+    const limitation =
+      interaction.execution_scope == null ? (
+        <p className="text-xs text-warning">{UNSCOPED_INTERACTION_LIMITATION}</p>
+      ) : null;
     if (questions === null) {
       return (
-        <ConsoleInvalidAskCard
-          key={interaction.id}
-          interaction={interaction}
-          agentDisplayName={agentDisplayName}
-          nodeId={roomNodeId}
-        />
+        <div key={interaction.id}>
+          {limitation}
+          <ConsoleInvalidAskCard
+            interaction={interaction}
+            agentDisplayName={agentDisplayName}
+            nodeId={roomNodeId}
+          />
+        </div>
       );
     }
     const requestId = interaction.tool_use_id;
     return (
-      <ConsoleAskCard
-        key={interaction.id}
-        interaction={interaction}
-        questions={questions}
-        presentation={resolveAskCardPresentation({
-          interaction,
-          action: actionStates[requestId],
-          nodeStatus: selectedNodeState?.status,
-          nodeError: selectedNodeState?.error,
-        })}
-        viewerIsStarter={viewerIsStarter}
-        starterDisplayName={starterDisplayName}
-        agentDisplayName={agentDisplayName}
-        nodeId={roomNodeId}
-        autoFocus={interaction.id === firstActionableId}
-        nowMs={nowMs}
-        mountContext="room"
-        draft={askDrafts[requestId] ?? {}}
-        onDraftChange={(next): void => {
-          onAskDraftChange?.(requestId, next);
-        }}
-        onSubmit={(body): void => {
-          void onSubmitAsk(requestId, body);
-        }}
-        onDecline={(): void => {
-          void onSubmitAsk(requestId, { decline: true });
-        }}
-      />
+      <div key={interaction.id}>
+        {limitation}
+        <ConsoleAskCard
+          interaction={interaction}
+          questions={questions}
+          presentation={resolveAskCardPresentation({
+            interaction,
+            action: actionStates[requestId],
+            nodeStatus: selectedNodeState?.status,
+            nodeError: selectedNodeState?.error,
+          })}
+          viewerIsStarter={viewerIsStarter}
+          starterDisplayName={starterDisplayName}
+          agentDisplayName={agentDisplayName}
+          nodeId={roomNodeId}
+          autoFocus={interaction.id === firstActionableId}
+          nowMs={nowMs}
+          mountContext="room"
+          draft={askDrafts[requestId] ?? {}}
+          onDraftChange={(next): void => {
+            onAskDraftChange?.(requestId, next);
+          }}
+          onSubmit={(body): void => {
+            void onSubmitAsk(requestId, body);
+          }}
+          onDecline={(): void => {
+            void onSubmitAsk(requestId, { decline: true });
+          }}
+        />
+      </div>
     );
   };
 

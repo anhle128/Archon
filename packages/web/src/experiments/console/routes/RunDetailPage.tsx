@@ -14,8 +14,6 @@ import { RunDetailHeader } from '../components/RunDetailHeader';
 import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
-import { ApprovalContext } from '../components/ApprovalContext';
-import { ApprovalPanel } from '../components/ApprovalPanel';
 import { ConsoleInspectPane } from '../components/ConsoleInspectPane';
 import {
   ConsoleReplyComposer,
@@ -27,7 +25,10 @@ import {
   type AskActionState,
   type AskActionStateByRequest,
 } from '../components/ask/ask-answer-controller';
-import { firstPendingAskAwaitingNodeId, isAskAwaitingRun } from '../components/ask/awaiting-chrome';
+import {
+  firstPendingAskAwaitingInteraction,
+  isAskAwaitingRun,
+} from '../components/ask/awaiting-chrome';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { buildConsoleLogEntries } from '../components/inspect/build-console-log-entries';
 import { buildLogRows } from '../components/inspect/build-log-rows';
@@ -44,9 +45,11 @@ import type { ConversationSummary } from '../primitives/conversation';
 import {
   applyRoomDeepLink,
   askCardId,
+  chooseExecutionForInteraction,
   chooseExecutionForNode,
   closeRoom,
   openRoom,
+  openExplicitRoom,
   rememberRoomScroll,
   resetRoomVisit,
   roomOpenerId,
@@ -67,9 +70,8 @@ import type { AskAnswerBody, ArtifactFile, ConsoleRunDetail } from '../skills/ru
  *   - skill.listMessages() → conversation messages (assistant text, user input,
  *                            persisted tool calls in metadata)
  *
- * RunStream merges both into one timeline. Paused runs render the
- * ApprovalContext + ApprovalPanel at the bottom of the stream so the user can
- * answer the gate in place.
+ * RunStream merges both into one timeline. Approval controls render inside
+ * the exact execution section and the selected execution room.
  *
  * Updates flow through SSE (lib/sse.ts) with a 30s safety-net refetch
  * for runs that are still running/paused.
@@ -84,7 +86,7 @@ const TOGGLE_KEYS = {
 function focusAskCard(requestId: string): void {
   let attempts = 0;
   const focusAsk = (): void => {
-    const card = document.getElementById(askCardId(requestId));
+    const card = document.getElementById(askCardId(requestId, 'room'));
     if (card !== null) {
       card.focus();
       if (document.activeElement === card) return;
@@ -95,18 +97,6 @@ function focusAskCard(requestId: string): void {
     }
   };
   requestAnimationFrame(focusAsk);
-}
-
-function pendingAskRequestId(
-  pending: ConsoleRunDetail['pendingInteractions'],
-  nodeId: string
-): string | undefined {
-  return pending.find(
-    interaction =>
-      interaction.kind === 'ask' &&
-      interaction.status === 'pending' &&
-      interaction.node_id === nodeId
-  )?.tool_use_id;
 }
 
 function readToggle(key: string, defaultOn: boolean): boolean {
@@ -193,6 +183,8 @@ export function RunDetailPage(): ReactElement {
   }>({ runId, states: {} });
   const actionStates = askActions.runId === runId ? askActions.states : {};
   const selectedNodeIdRef = useRef<string | null>(null);
+  const roomOpenerToRestoreRef = useRef<string | null>(null);
+  const logScrollTopBeforeRoomRef = useRef<number | null>(null);
 
   // `Project | null` / `ConsoleRunDetail | null` rather than the `as unknown as T`
   // casts the original sentinel used — keeps the null path honest for
@@ -278,7 +270,13 @@ export function RunDetailPage(): ReactElement {
   }, [detail]);
 
   const logRows = useMemo(
-    () => buildLogRows(inspectNodeStates, detail?.rawEvents ?? [], detail?.nodeExecutions),
+    () =>
+      buildLogRows(
+        inspectNodeStates,
+        detail?.rawEvents ?? [],
+        detail?.nodeExecutions,
+        detail?.run.startedAt
+      ),
     [inspectNodeStates, detail]
   );
 
@@ -355,12 +353,17 @@ export function RunDetailPage(): ReactElement {
   );
 
   const onInspectSelect = useCallback(
-    (nodeId: string, rowId?: string, openerId: string | null = null): void => {
+    (
+      nodeId: string,
+      rowId?: string,
+      openerId: string | null = null,
+      rememberExplicit = rowId !== undefined
+    ): void => {
+      if (selectedNodeIdRef.current === null) {
+        logScrollTopBeforeRoomRef.current = scrollRef.current?.scrollTop ?? null;
+      }
       setRoom(previous => {
-        const lastExplicit =
-          previous.selection?.nodeId === nodeId
-            ? null
-            : (previous.lastExplicitRowByNode[nodeId] ?? null);
+        const lastExplicit = previous.lastExplicitRowByNode[nodeId] ?? null;
         const chosen =
           rowId !== undefined
             ? (logRows.find(row => row.id === rowId && row.nodeId === nodeId) ?? null)
@@ -371,7 +374,10 @@ export function RunDetailPage(): ReactElement {
           (rowId !== undefined
             ? roomOpenerId('console', 'log', rowId)
             : roomOpenerId('console', 'graph', nodeId));
-        return openRoom(previous, { nodeId, rowId: chosen.id, openerId: nextOpener });
+        const selection = { nodeId, rowId: chosen.id, openerId: nextOpener };
+        return rememberExplicit
+          ? openExplicitRoom(previous, selection)
+          : openRoom(previous, selection);
       });
       replaceNodeSearch(nodeId);
     },
@@ -419,10 +425,33 @@ export function RunDetailPage(): ReactElement {
     [askController]
   );
 
+  useLayoutEffect(() => {
+    if (room.selection !== null) return;
+    const openerId = roomOpenerToRestoreRef.current;
+    const scrollTop = logScrollTopBeforeRoomRef.current;
+    if (openerId === null && scrollTop === null) return;
+    roomOpenerToRestoreRef.current = null;
+    logScrollTopBeforeRoomRef.current = null;
+    let restoreFrame: number | undefined;
+    const frame = requestAnimationFrame(() => {
+      restoreFrame = requestAnimationFrame(() => {
+        if (scrollTop !== null && scrollRef.current !== null) {
+          scrollRef.current.scrollTop = scrollTop;
+        }
+        if (openerId !== null) {
+          document.getElementById(openerId)?.focus({ preventScroll: true });
+        }
+      });
+    });
+    return (): void => {
+      cancelAnimationFrame(frame);
+      if (restoreFrame !== undefined) cancelAnimationFrame(restoreFrame);
+    };
+  }, [room.selection]);
+
   const onCloseRoom = useCallback((): void => {
-    const openerId = room.selection?.openerId ?? null;
+    roomOpenerToRestoreRef.current = room.selection?.openerId ?? null;
     setRoom(closeRoom);
-    if (openerId !== null) document.getElementById(openerId)?.focus();
   }, [room.selection?.openerId]);
 
   const onRoomRatioChange = useCallback((ratio: number): void => {
@@ -536,6 +565,31 @@ export function RunDetailPage(): ReactElement {
     ]
   );
   useKeymap({ bindings });
+  const selectedNodeId = room.selection?.nodeId ?? null;
+  const selectedLogRowId = room.selection?.rowId ?? null;
+  const selectedRow = logRows.find(row => row.id === selectedLogRowId) ?? null;
+  const transcriptScopeKey =
+    selectedRow === null
+      ? 'run:none|node:none|sel:node:none'
+      : nodeMessageScopeKey(
+          runId ?? '',
+          selectedRow.nodeId,
+          selectedRow.selection.kind === 'occurrence'
+            ? {
+                kind: 'occurrence',
+                occurrenceId: selectedRow.selection.occurrenceId,
+                ...(selectedRow.selection.attemptId !== undefined
+                  ? { attemptId: selectedRow.selection.attemptId }
+                  : {}),
+              }
+            : { kind: 'node', rowId: selectedRow.id }
+        );
+  const onRoomScrollTopChange = useCallback(
+    (scrollTop: number): void => {
+      setRoom(previous => rememberRoomScroll(previous, transcriptScopeKey, scrollTop));
+    },
+    [transcriptScopeKey]
+  );
 
   if (projectId === undefined || runId === undefined) {
     return (
@@ -623,43 +677,10 @@ export function RunDetailPage(): ReactElement {
   const logFooter: ReactNode = (
     <div className="px-6 pb-4">
       <RunFinishedLine run={run} />
-      {run.status === 'paused' && run.approval !== null && run.approval !== undefined ? (
-        <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
-          <div className="mb-2 flex items-center gap-2">
-            <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-warning" />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
-              Waiting for approval
-            </span>
-          </div>
-          <ApprovalContext run={run} />
-          <div className="mt-2">
-            <ApprovalPanel run={run} />
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 
   const projectCwd = project?.path;
-  const selectedNodeId = room.selection?.nodeId ?? null;
-  const selectedLogRowId = room.selection?.rowId ?? null;
-  const selectedRow = logRows.find(row => row.id === selectedLogRowId) ?? null;
-  const transcriptScopeKey =
-    selectedRow === null
-      ? 'run:none|node:none|sel:node:none'
-      : nodeMessageScopeKey(
-          runId,
-          selectedRow.nodeId,
-          selectedRow.selection.kind === 'occurrence'
-            ? {
-                kind: 'occurrence',
-                occurrenceId: selectedRow.selection.occurrenceId,
-                ...(selectedRow.selection.attemptId !== undefined
-                  ? { attemptId: selectedRow.selection.attemptId }
-                  : {}),
-              }
-            : { kind: 'node', rowId: selectedRow.id }
-        );
 
   const replyState: ReplyDestinationState =
     parentPlatformId === null
@@ -685,14 +706,15 @@ export function RunDetailPage(): ReactElement {
           usage={detail.usage}
           askAwaiting={isAskAwaitingRun(run.status, detail.pendingInteractions)}
           onAwaitingInput={(): void => {
-            const nodeId = firstPendingAskAwaitingNodeId({
+            const interaction = firstPendingAskAwaitingInteraction({
               pending: detail.pendingInteractions,
               nodes: inspectNodeStates,
             });
-            if (nodeId === null) return;
-            onInspectSelect(nodeId, undefined, null);
-            const requestId = pendingAskRequestId(detail.pendingInteractions, nodeId);
-            if (requestId !== undefined) focusAskCard(requestId);
+            if (interaction === null) return;
+            const row = chooseExecutionForInteraction(logRows, interaction);
+            if (row === null) return;
+            onInspectSelect(interaction.node_id, row.id, null, false);
+            focusAskCard(interaction.tool_use_id);
           }}
         />
         <ConsoleAskChrome
@@ -703,10 +725,11 @@ export function RunDetailPage(): ReactElement {
           onRequestGraphView={(): void => {
             setViewPersist('graph');
           }}
-          onSelectAwaitingNode={(nodeId: string): void => {
-            onInspectSelect(nodeId, undefined, null);
-            const requestId = pendingAskRequestId(detail.pendingInteractions, nodeId);
-            if (requestId !== undefined) focusAskCard(requestId);
+          onSelectAwaitingNode={(nodeId, interaction): void => {
+            const row = chooseExecutionForInteraction(logRows, interaction);
+            if (row === null) return;
+            onInspectSelect(nodeId, row.id, null, false);
+            focusAskCard(interaction.tool_use_id);
           }}
         />
 
@@ -756,9 +779,7 @@ export function RunDetailPage(): ReactElement {
                 onSubmitAsk={submitAsk}
                 scopeKey={transcriptScopeKey}
                 initialScrollTop={room.scrollTopByScope[transcriptScopeKey]}
-                onScrollTopChange={(scrollTop: number): void => {
-                  setRoom(previous => rememberRoomScroll(previous, transcriptScopeKey, scrollTop));
-                }}
+                onScrollTopChange={onRoomScrollTopChange}
                 askDrafts={askDrafts}
                 onAskDraftChange={(requestId: string, draft): void => {
                   setAskDrafts(previous => ({ ...previous, [requestId]: draft }));

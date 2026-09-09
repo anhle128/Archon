@@ -3197,6 +3197,7 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
       stream_id: 'stream-1',
       truncated: true,
       output_state: 'truncated',
+      full_output_available: true,
     });
     expect(storedMetadata).toEqual({ stream_id: 'stream-1' });
     expect(storedRow.payload.output).toBe(fullOutput);
@@ -3215,40 +3216,47 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
 
   test('cursor mode returns metadata, nextCursor, hasMore, and highWatermark', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
-    mockGetNodeMessageHighWatermark.mockImplementationOnce(async () => 3);
-    mockListNodeMessages.mockImplementationOnce(async () => [
-      {
-        id: 'msg-1',
-        workflow_run_id: 'run-uuid-1',
-        node_id: 'plan',
-        seq: 1,
-        kind: 'tool',
-        payload: {
-          name: 'Read',
-          id: 'tool-1',
-          input: { path: 'a.ts' },
-          output: 'HITL_TOOL_OUTPUT',
-        },
-        created_at: '2026-01-01T00:00:00.000Z',
-        metadata: {
-          execution: {
-            occurrence_id: '11111111-1111-4111-8111-111111111111',
-            attempt_id: '22222222-2222-4222-8222-222222222222',
-            retry_epoch: 0,
+    const queryOrder: string[] = [];
+    mockGetNodeMessageHighWatermark.mockImplementationOnce(async () => {
+      queryOrder.push('watermark');
+      return 3;
+    });
+    mockListNodeMessages.mockImplementationOnce(async () => {
+      queryOrder.push('list');
+      return [
+        {
+          id: 'msg-1',
+          workflow_run_id: 'run-uuid-1',
+          node_id: 'plan',
+          seq: 1,
+          kind: 'tool',
+          payload: {
+            name: 'Read',
+            id: 'tool-1',
+            input: { path: 'a.ts' },
+            output: 'HITL_TOOL_OUTPUT',
           },
-          tool_phase: 'result',
+          created_at: '2026-01-01T00:00:00.000Z',
+          metadata: {
+            execution: {
+              occurrence_id: '11111111-1111-4111-8111-111111111111',
+              attempt_id: '22222222-2222-4222-8222-222222222222',
+              retry_epoch: 0,
+            },
+            tool_phase: 'result',
+          },
         },
-      },
-      {
-        id: 'msg-2',
-        workflow_run_id: 'run-uuid-1',
-        node_id: 'plan',
-        seq: 2,
-        kind: 'text',
-        payload: { text: 'next' },
-        created_at: '2026-01-01T00:00:01.000Z',
-      },
-    ]);
+        {
+          id: 'msg-2',
+          workflow_run_id: 'run-uuid-1',
+          node_id: 'plan',
+          seq: 2,
+          kind: 'text',
+          payload: { text: 'next' },
+          created_at: '2026-01-01T00:00:01.000Z',
+        },
+      ];
+    });
 
     const { app } = makeApp();
     const response = await app.request(
@@ -3276,7 +3284,9 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     expect(mockListNodeMessages.mock.calls[0]?.[2]).toEqual({
       afterSeq: 0,
       limit: 2,
+      throughSeq: 3,
     });
+    expect(queryOrder).toEqual(['watermark', 'list']);
   });
 
   test('rejects invalid cursor limit and afterSeq with 400 and does not list rows', async () => {

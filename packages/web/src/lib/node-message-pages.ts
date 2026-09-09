@@ -63,6 +63,14 @@ export function createNodeMessageState(scopeKey: string): NodeMessageState {
   };
 }
 
+export function beginNodeMessageRefresh(state: NodeMessageState): NodeMessageState {
+  return {
+    ...state,
+    highWatermark: null,
+    complete: false,
+  };
+}
+
 function isCompatibilityPage(page: NodeMessagePage): boolean {
   return (
     page.hasMore === undefined && page.nextCursor === undefined && page.highWatermark === undefined
@@ -136,13 +144,16 @@ export function reduceNodeMessagePage(
 
   const rows = mergeRows(state.rows, page.messages);
   const afterSeq = resolveAfterSeq(page, state.afterSeq);
-  const highWatermark = page.highWatermark !== undefined ? page.highWatermark : state.highWatermark;
+  const highWatermark =
+    state.highWatermark ?? (page.highWatermark !== undefined ? page.highWatermark : null);
   const compatibility = isCompatibilityPage(page);
   const progressed = afterSeq > state.afterSeq;
   const empty = page.messages.length === 0;
   const cursorSeq = progressed ? afterSeq : state.afterSeq;
   const watermark = effectiveWatermark(highWatermark, cursorSeq, compatibility);
-  const complete = page.hasMore !== true && cursorSeq >= watermark;
+  const complete = compatibility
+    ? page.hasMore !== true && cursorSeq >= watermark
+    : cursorSeq >= watermark;
 
   if (empty && !progressed && !complete) {
     return {
