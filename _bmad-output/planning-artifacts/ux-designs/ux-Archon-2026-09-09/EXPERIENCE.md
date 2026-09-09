@@ -196,7 +196,7 @@ The delta is tokens and panel width, never structure.
 | Focus ring                | `{colors.focus-console}`, offset 2px                                               | `{colors.focus-legacy}`, offset −2px                                            |
 | Family hues               | the same four inherited `--node-*` tokens                                          | the same four inherited `--node-*` tokens                                       |
 
-Pressure order as the panel narrows: chip caps at 24ch → path headline elides in the middle, text headline at the end → the duration badge drops; exit code and counts are never dropped.
+The order in which a narrowing panel gives way is one rule with one home: Elision and badge priority. It is the same on both surfaces, so nothing about it belongs in this table.
 **The transcript declares no breakpoint of its own.** Below the room's own small-viewport breakpoint it inherits whatever the panel does; the row still never wraps. The room already owns the responsive behaviour (`56c61f72`, "align agent history and the responsive run room"), and a second breakpoint inside it would only be a place for the two to disagree.
 
 ## Provider normalization at the edge
@@ -205,11 +205,9 @@ The transcript never learns a provider name.
 Everything provider-specific is resolved in `packages/web/src/lib/` before a renderer sees it (`tool-presentation-contract.md`, Provider normalizers).
 Reader-visible consequences:
 
-- The chip shows the tool name as sent; the family colour is the only sign of resolution.
-- A Codex name beginning with exactly `/bin/zsh -lc '` or `/bin/bash -lc '` has that prefix and the closing quote stripped for the headline; the script is never parsed; the full wrapped name stays in the terminal body and behind Raw.
-- An MCP name renders as `server · tool`, following the backend formatter's convention.
-- OMP's nine-op `todo` and Claude's whole-list `TodoWrite` produce the same checklist; OMP's batch `task` and Claude's single `Agent` produce the same subtask cards.
-- `path` means the pattern in OMP `glob` and the search directory in Claude `Glob`; the headline is `pattern` when present, else `path`, and the reader never sees the difference.
+- The chip shows the tool name as sent. Colour is the fast sign of which family it resolved to, never the only one — see Accessibility Floor for the three channels that carry it.
+- A Codex name that wraps a whole script keeps its full text in the terminal body and behind Raw; only the headline is shortened, and the script is never parsed. Component Patterns → Headline holds the exact prefixes stripped.
+- Two providers that model the same idea differently — nine-op `todo` against whole-list `TodoWrite`, batch `task` against single `Agent`, `path`-as-pattern against `path`-as-directory, `mcp__server__tool` against a plain name — reach the reader as one checklist, one set of subtask cards, one headline, one label. The mappings live in `tool-presentation-contract.md` and `todo-fold-contract.md`; what matters here is only that no renderer branches on a provider, so no reader can tell which one produced a row.
 
 ## Occurrence grouping
 
@@ -262,9 +260,9 @@ Flow 3's protagonist is named by role, not by name: `project-context.md` declare
 
 1. Kevin opens `speckit-ralph-native-feature` at `/console/p/<project>/r/run_d9556522f45a`; the run is Running and the `implement` node reads `running · 14m 07s · run 2`.
 2. They click the node; the panel opens with the transcript under `Run 1`.
-3. They scan nine collapsed rows without opening any: two `read_file` rows with their filenames intact, a `grep`, a `glob`, a `todo updated`, a `task` row reading `2 subagents · 2m 04s`, a `search_replace` with `+14 −3`.
+3. They scan seven collapsed rows without opening any: two `read_file` rows with their filenames intact, a `grep`, a `glob`, a `todo updated`, a `task` row reading `2 subagents · 2m 04s`, a `search_replace` with `+14 −3`.
    They open the `task` row, because a dispatch is the one row whose headline cannot say what happened inside it: the batch context reads as markdown, then one card per subtask, each with its agent name in semibold, its subtask name, and its prompt. `TaskSubtask` carries no per-subtask outcome, so the cards say what was dispatched, never how each one ended — the row's own glyph is the only status. They close it again.
-4. **Climax:** the tenth row is already open — `✕ run_terminal_command cargo test … exit 101 · 41.2s` — and beneath it the terminal body shows the panic, `left: 31 right: 30`. They know what failed and why without a single click.
+4. **Climax:** the eighth row is already open — `✕ run_terminal_command cargo test … exit 101 · 41.2s` — and beneath it the terminal body shows the panic, `left: 31 right: 30`. They know what failed and why without a single click.
 5. The `Run 2 · retry` header follows, then the assistant's one-line diagnosis, the `edit` row with `+2 −2`, the same test now `exit 0`, an `eval` row.
 6. They open the `todo` row: the folded checklist shows `4/6 done`, Research complete, Implement three of four, `◐ Run full auto_retry suite`.
 7. The last row is `◐ run_terminal_command CARGO_BUILD_JOBS=1 cargo test … running · 1m 48s`. They leave it open in a tab.

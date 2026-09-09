@@ -343,7 +343,7 @@ Diff lines use success for `+` and error for `−`; `FAILED`/`ok` markers use er
 | running glyph on surface                                                  | 7.4:1     | 7.7:1     |
 | node-bash chip on surface-elevated                                        | 7.6:1     | 7.9:1     |
 | node-command chip on surface-elevated                                     | 4.8:1     | 4.9:1     |
-| node-prompt chip on surface-elevated                                      | **3.8:1** | **3.9:1** |
+| node-prompt chip on surface-elevated                                      | **3.7:1** | **3.9:1** |
 | node-approval chip on surface-elevated                                    | 6.5:1     | 6.8:1     |
 | text-secondary on surface-hover (the state a pointer reader is in)        | 5.1:1     | 7.5:1     |
 | text-secondary on surface-inset (raw box, key column)                     | 6.3:1     | 8.9:1     |
@@ -353,13 +353,13 @@ Diff lines use success for `+` and error for `−`; `FAILED`/`ok` markers use er
 | focus ring today — Legacy's `outline-ring/50` (`index.css:179`)           | **2.3:1** | n/a       |
 | focus ring on surface — `--accent-bright`, the token this spine specifies | 7.4:1     | 4.9:1     |
 
-The bold cells are inherited product tokens that fall short. The last two rows are the exception to "used exactly as the mocks use them", and the difference matters:
+Every bold cell has a disposition. `--node-prompt` on both backgrounds is the open question above; the Legacy `--error` badge is an accepted shortfall, recorded below; the two focus rows are the departure this spine makes deliberately, explained next. The last two rows are the exception to "used exactly as the mocks use them", and the difference matters:
 
 **The focus ring is the one place this spine knowingly departs from the shipped surface.** Console's `:focus-visible` is `outline: 2px solid var(--accent-ring)` (`theme.css:153-156`), and `--accent-ring` is magenta at 30% alpha (`theme.css:68`), which composites over `--surface` to **1.4:1** — under the 3:1 floor of SC 1.4.11, and a keyboard reader effectively cannot see where they are. All three mocks quietly drew the opaque token instead, and this spine now states that on purpose: **the transcript row's focus ring is `--accent-bright`**, which is an existing token, so the no-new-token constraint holds.
 
 That is scoped to the transcript row. The same 1.4:1 ring is on every other focusable element in the console, which is room chrome and out of scope here — recorded so the next person finds it, not silently inherited.
 
-Everything else bold is listed under Open Questions; this spine changes no token the user has ruled out changing.
+This spine changes no token the user has ruled out changing.
 
 ## Typography
 
@@ -492,27 +492,27 @@ Inline code inside it is mono at 11px.
 
 ## Open Questions
 
-**One, and it is narrow.** `--node-prompt` chip text measures **3.7:1 on Legacy and 3.9:1 on Console** against `surface-elevated`. Chip text is 11px, so 4.5:1 applies. It is the only family hue that fails: `--node-command` clears it at 4.8:1 / 4.9:1, `--node-approval` at 6.5:1 / 6.8:1, `--node-bash` at 7.6:1 / 7.9:1, and `generic` sits in `--text-secondary` at 5.8:1 / 8.4:1. So this is two chips — `search` and `glob` — not the palette.
+**One, and it is narrow.** `--node-prompt` is the only family hue that falls short, and it does so on both backgrounds it is drawn against: **3.7:1 / 3.9:1** as chip text on `surface-elevated`, and **4.4:1 / 4.4:1** as code-body keywords on `surface-inset`. Both are 11px or smaller, so 4.5:1 applies to each. Every other hue clears it: `--node-command` clears it at 4.8:1 / 4.9:1, `--node-approval` at 6.5:1 / 6.8:1, `--node-bash` at 7.6:1 / 7.9:1, and `generic` sits in `--text-secondary` at 5.8:1 / 8.4:1. So this is one token in two places — the `search` and `glob` chips, and the keywords inside a `code` body — not the palette.
 
-The tier decision does not reach it. Every other transcript fact moved to `--text-secondary`, but a chip's colour **is** its family, and the family-hue system is a user decision; recolouring these two to grey would delete the meaning the chip exists to carry.
+The tier decision does not reach it. Every other transcript fact moved to `--text-secondary`, but here the colour **is** the content: on the chip it is the family, in the code body it is the syntax class. Recolouring either to grey would delete the meaning the colour exists to carry, and the family-hue system is a user decision.
 
 Two ways out, both inside the no-new-token rule:
 
-- **Brighten the two chips' text** with `color-mix(in oklch, var(--node-prompt) 70%, var(--text-primary))`, keeping the border in the pure family hue so the violet identity survives. Clears 4.5:1 and changes only these two chips.
-- **Accept, and record it** — the chip is a redundant label (the tool name sits inside it, and the family is also in the body bar, the accessible name, and the tooltip), so no fact is lost by a reader who cannot resolve the violet.
+- **Brighten the token where it carries text** with `color-mix(in oklch, var(--node-prompt) 70%, var(--text-primary))`, keeping the pure hue on the chip border so the violet identity survives. Clears 4.5:1 on both backgrounds and touches nothing else.
+- **Accept, and record it** — the chip is a redundant label (the tool name sits inside it, and the family is also in the body bar, the accessible name and the `title`), and a keyword that reads as body text still reads: the code is legible at `--text-primary`, only its syntax highlighting is muted.
 
 This one was carried into the finalize pass by mistake: it was folded into a renumbering and marked resolved when nothing had resolved it. Recorded as open rather than quietly accepted.
 
-**Recommendation: accept and record.** Three things point that way. The chip is the most redundant element on the row — the tool name sits inside it, and since the family also travels in the body bar, the accessible name and the `title`, a reader who cannot resolve the violet loses a scanning aid rather than a fact. It would join three shortfalls already accepted on the same footing (the 22px row, the Legacy `--error` badge, the chip borders), so accepting is the consistent answer rather than a new exception. And brightening produces a colour that appears in neither token file, which the brand rule treats as an ad-hoc value.
+**Recommendation: accept and record.** Three things point that way. Neither place carries a fact alone — the chip is the most redundant element on the row — the tool name sits inside it, and since the family also travels in the body bar, the accessible name and the `title`, a reader who cannot resolve the violet loses a scanning aid rather than a fact. It would join three shortfalls already accepted on the same footing (the 22px row, the Legacy `--error` badge, the chip borders), so accepting is the consistent answer rather than a new exception. And brightening produces a colour that appears in neither token file, which the brand rule treats as an ad-hoc value.
 
 The honest counter, so the choice is a real one: `color-mix` is **already** how this design draws every chip border, five times in the states sheet alone, so the precedent for deriving a value from tokens exists and the third argument above is the weakest of the three. If the transcript ever has to pass an audit rather than serve a developer, brightening is the answer that survives it.
 
-Every question this run opened is now answered. What follows is the record.
+One question is open, above. Everything else this run opened is answered, and what follows is the record.
 
 **Resolved during finalize**, from the accessibility review, from live code, and from three user decisions:
 
 - **Every transcript fact moved from `--text-tertiary` to `--text-secondary`, on both surfaces** — a user decision, taken with the measurements in hand. `--text-tertiary` carried every badge, body bar, occurrence header and key name at 10–11.5px, where 4.5:1 applies without argument, and it measured 2.53:1 on Legacy and 4.07:1 on Console resting, worse on hover. The headline beside a failing badge passes at 15.3:1, so the effect was exact: a reader with low contrast sensitivity got the command and not the result. `--text-secondary` clears the floor everywhere (5.82:1 / 8.37:1) and is an existing token, so the no-new-token constraint holds. `--text-tertiary` now has exactly one use, the chevron, which is decoration hidden from assistive technology. The third tonal step is replaced by the primary-to-secondary headline drop and by the `·` rhythm.
-- The old question about the `exit 101` badge went with it: the badge is now `--text-secondary` with `--error` kept on the digits, so nothing in it sits under the floor.
+- The old question about the `exit 101` badge is folded into the accepted shortfalls: the word `exit` and the duration moved to `--text-secondary` with the tier decision, and the digits keep `--error` at **4.3:1** on Legacy. That 0.2 shortfall is accepted, not cleared — it rides on the surface being replaced, and the `✕` glyph carries the same fact beside it.
 - **The Raw toggle carries `min-height: 24px`; the tool row keeps its 22px** — a user decision. Raw was the target that genuinely missed SC 2.5.8: about 15–17px, at the far right of the body bar, near the panel's drag-to-resize edge. It grows through padding, so the painted box does not change. The row's 2px shortfall is accepted deliberately, because density is the feature the transcript exists to deliver and the audience reaches it with a pointer — recorded here so a later audit inherits a reason rather than a surprise. Revisit if the surface is ever targeted at touch.
 - **The family reaches a colour-blind reader through the body bar and a tooltip, not a chip prefix** — a user decision. A prefix would have cost row width on the one line that must never wrap, and at 460px the path headline pays first. See **Components → Tool body**.
 - `interrupted` takes `⚠` in `--warning` — see **Colors → Status**.
