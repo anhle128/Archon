@@ -45,8 +45,8 @@ nodes:
     depends_on:
       - setup
     effort: xhigh
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    provider: claude
+    model: "opus"
     context: fresh
 
   - id: clarify
@@ -151,7 +151,7 @@ nodes:
     trigger_rule: none_failed_min_one_success
     effort: high
     provider: claude
-    model: "claude-opus-4-8[1M]"
+    model: "opus"
     context: fresh
     skills: [speckit-red-team-run]
     denied_tools:
@@ -209,8 +209,8 @@ nodes:
     depends_on:
       - red-team
     effort: xhigh
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    provider: codex
+    model: "gpt-5.6-sol"
     context: fresh
 
   - id: red-team-apply
@@ -231,8 +231,8 @@ nodes:
     depends_on:
       - red-team-apply
     effort: xhigh
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    provider: codex
+    model: "gpt-6-astra"
     context: fresh
 
   - id: tasks
@@ -242,8 +242,8 @@ nodes:
     depends_on:
       - plan
     effort: xhigh
-    provider: codex
-    model: "gpt-5.6-sol"
+    provider: omp
+    model: "xai-oauth/grok-4.6"
     context: fresh
 
   - id: analyze
@@ -456,9 +456,9 @@ nodes:
       /speckit.ralph-loop.sync-back <feature_directory>
     depends_on:
       - ralph-loop-run
-    provider: codex
+    provider: omp
     effort: medium
-    model: gpt-5.6-terra
+    model: xai-oauth/grok-4.5
     context: fresh
 
   - id: speckit-converge
