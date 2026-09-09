@@ -1,0 +1,5 @@
+# Runtime proof dirs are local. A successful generator pass may commit
+# last-proof/ so reviewers can see one captured run.
+runs/
+*.pid
+state.json

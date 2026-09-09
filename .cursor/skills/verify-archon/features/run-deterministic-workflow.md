@@ -1,0 +1,41 @@
+# Run a deterministic workflow
+
+Run a deterministic workflow lets a user execute `e2e-deterministic` — bash and script nodes, `$node.output` substitution, `when:`, and `trigger_rule` — with zero AI provider calls.
+
+## Sub-features
+
+- `dry-run-control-flow` simulates DAG routing without creating a run.
+- `dry-run-exec-code` executes trusted local bash/script nodes during dry-run.
+- `run-real` creates a real run and reaches a terminal state without a provider.
+- `run-json-detach` is the fire-and-forget shape used for long AI runs; not required here.
+
+## How to get to it (user POV)
+
+- Run `archon workflow run e2e-deterministic --dry-run --json` from this repo.
+- Add `--exec-code` when the local bash/script nodes are trusted (they are, in this checkout).
+- Run `archon workflow run e2e-deterministic --no-worktree` to create a real run in the live checkout (user must accept that).
+- Default `workflow run` creates a git worktree. Prefer that unless the user asked for `--no-worktree`.
+
+## Driving it with verify-archon
+
+Preconditions:
+
+- `verify-archon doctor` passed.
+- `e2e-deterministic` appears in `verify-archon cli -- workflow list --json`.
+- Isolated `ARCHON_HOME` is set so run rows do not land in the operator's `~/.archon`.
+- `uv` is optional. Without it, the `script-python` node fails a real run; dry-run without `--exec-code` still proves routing if stubs cover that node.
+
+- **Dry-run routing.** Simulate control flow. Run `verify-archon cli -- workflow run e2e-deterministic --dry-run --json`. Exit code `0`. Stdout is one JSON document. No `workflow_runs` row is created (`verify-archon cli -- workflow runs --json` stays empty or unchanged).
+- **Confirm dry-run isolation.** Observe that no provider was contacted and no new run id appeared. Run `verify-archon cli -- workflow runs --json` again. The run count matches the pre-dry-run count.
+- **Optional exec-code.** Execute trusted nodes. Run `verify-archon cli -- workflow run e2e-deterministic --dry-run --exec-code --json`. Exit code `0` if `bun` and `uv` both exist. If `uv` is missing, record the failure and do not claim `script-python` ran.
+- **Optional real run.** Create a run only when proving this feature live (not required for the generator's one-feature pass). Run `verify-archon cli -- workflow run e2e-deterministic --no-worktree --json` is **not** a clean JSON document unless `--detach` is also set. Prefer the human stream, then `workflow runs --json` / `workflow get <id> --json`. `result.state` is `completed` and `result.terminal` is true on success.
+- **Proof.** Keep the dry-run JSON and the before/after `workflow runs` payloads. Evidence names `dry-run.cli.json` and `runs-after-dry-run.cli.json`.
+
+## Gotchas
+
+- `--dry-run` does not execute bash/script nodes unless `--exec-code` is set. A green dry-run without `--exec-code` proves routing, not node bodies.
+- `--exec-code` can write files. Only use it on this repo's `e2e-deterministic` nodes, never on an untrusted workflow.
+- A real `workflow run --json` without `--detach` is not one JSON document. Do not parse it as JSON.
+- Detached ack has `conversationId` and `logPath`, not the run id. Wait for `workflow runs --json` and match `worker_platform_id`.
+- Default isolation creates a worktree. Cleanup of a real run must not `git clean -fd` and must not delete evidence.
+- Mini remote is the wrong place to create throwaway runs unless the user asked.
