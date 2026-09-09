@@ -24,14 +24,32 @@ await mkdir(evidenceDir, { recursive: true });
 const browser = await chromium.launch({
   channel: 'chrome',
   headless: true,
+  args: ['--no-sandbox', '--disable-dev-shm-usage'],
 });
 
-const context = await browser.newContext({
-  viewport,
-  recordVideo: { dir: join(evidenceDir, 'video'), size: viewport },
-});
+async function openContext(withVideo) {
+  const options = { viewport };
+  if (withVideo) {
+    options.recordVideo = { dir: join(evidenceDir, 'video'), size: viewport };
+  }
+  return browser.newContext(options);
+}
 
-const page = await context.newPage();
+let context = await openContext(true);
+let page;
+try {
+  page = await context.newPage();
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  if (!/ffmpeg/i.test(message)) {
+    await browser.close().catch(() => undefined);
+    throw err;
+  }
+  process.stderr.write('playwright ffmpeg missing; continuing without video\n');
+  await context.close().catch(() => undefined);
+  context = await openContext(false);
+  page = await context.newPage();
+}
 const assertions = [];
 
 function noted(id, detail) {
@@ -104,6 +122,7 @@ try {
     assertions,
     screenshots: ['console-runs.png', 'console-runs-all.png', 'console-settings.png'],
     video: videoPath,
+    videoEnabled: videoPath !== null,
   };
   await writeFile(join(evidenceDir, 'ui-assertions.json'), `${JSON.stringify(summary, null, 2)}\n`);
   process.stdout.write(`${JSON.stringify(summary)}\n`);

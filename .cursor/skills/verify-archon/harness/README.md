@@ -2,7 +2,7 @@
 
 Verification scaffolding. Not part of the Archon product runtime.
 
-Uses Playwright against the **system Google Chrome** (`channel: 'chrome'`) so a cloud VM does not need Playwright's bundled Chromium download.
+Uses Playwright against the **system Google Chrome** (`channel: 'chrome'`) so a cloud VM does not need Playwright's bundled Chromium download. Video recording needs Playwright's ffmpeg (`bunx playwright install ffmpeg`); screenshots still pass without it.
 
 ```bash
 # from this directory, once

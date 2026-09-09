@@ -13,5 +13,5 @@
   "is_docker": false,
   "is_wsl": false,
   "activePlatforms": ["Web"],
-  "schema": { "createdAppVersion": "dev", "appVersion": "dev", "appliedAt": "2026-09-09 03:42:17" }
+  "schema": { "createdAppVersion": "dev", "appVersion": "dev", "appliedAt": "2026-09-09 04:26:04" }
 }

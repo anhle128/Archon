@@ -46,10 +46,12 @@ Start bun run dev:server with HOST=127.0.0.1, empty DATABASE_URL (SQLite),
 ARCHON_TELEMETRY_DISABLED=1, and an isolated ARCHON_HOME. Waits until
 GET /api/health returns status "ok".
 
---with-web also starts `bun --cwd packages/web exec vite --host 127.0.0.1
+--with-web also starts (from packages/web) `bun run dev --host 127.0.0.1
 --port 15173 --strictPort` with PORT=<api> so Vite proxies /api to the
 isolated server. Ready when GET <webUrl>/console returns the Archon SPA
 shell (title Archon, #root). Required for drive web-console.
+Do not pass a bare `--` before Vite flags: bun then treats `--port` as its
+own flag and prints `bun run` usage instead of starting Vite.
 
 Refuses to launch when ARCHON_VERIFY_TARGET=mini (use doctor against the
 remote URL instead). --dry-run prints the command and env without spawning.
@@ -378,10 +380,11 @@ start_vite() {
   local web_log=$state_dir/$run_id/vite.log
   mkdir -p "$(dirname "$web_log")" "${ev_dir:-/tmp}"
   (
-    cd "$repo_root"
+    cd "$repo_root/packages/web"
     export PORT=$api_port
     export HOST=127.0.0.1
-    bun --cwd packages/web exec vite --host 127.0.0.1 --port "$web_port" --strictPort
+    # No `--` before Vite flags: bun steals `--port` and prints usage.
+    bun run dev --host 127.0.0.1 --port "$web_port" --strictPort
   ) >"$web_log" 2>&1 &
   local web_spawn=$!
   sleep 0.5
@@ -456,7 +459,7 @@ cmd_launch() {
       log "dry-run launch PORT=$port HOST=127.0.0.1 ARCHON_HOME=$home_dir"
       log "would run: bun run dev:server (cwd=$repo_root)"
       if [[ "$with_web" -eq 1 ]]; then
-        log "would run: PORT=$port bun --cwd packages/web exec vite --host 127.0.0.1 --port $default_web_port --strictPort"
+        log "would run: PORT=$port bun run dev --host 127.0.0.1 --port $default_web_port --strictPort (cwd=packages/web)"
       fi
     fi
     return 0
@@ -907,6 +910,11 @@ drive_web_console() {
   fi
   command -v google-chrome >/dev/null || command -v google-chrome-stable >/dev/null \
     || die "system Chrome not found (harness uses Playwright channel: chrome)"
+  # Video is optional. Playwright records only when its ffmpeg is present.
+  if [[ ! -x "${HOME}/.cache/ms-playwright/ffmpeg-1011/ffmpeg-linux" ]]; then
+    (cd "$harness" && bunx playwright install ffmpeg) \
+      || log "playwright ffmpeg install skipped; screenshots still required"
+  fi
 
   export ARCHON_VERIFY_WEB_URL=$web_url
   export ARCHON_VERIFY_EVIDENCE_DIR=$ev
@@ -1065,21 +1073,39 @@ cmd_prove() {
     die "evidence missing after cleanup: $ev"
   fi
   # Per-feature last-proof so discover-workflows and web-console coexist.
+  # Keep PROOF.md (hand-written) across re-proves; refresh everything else.
   local last_dir=$evidence_root/last-proof/$feature
+  local proof_keep=''
+  if [[ -f "$last_dir/PROOF.md" ]]; then
+    proof_keep=$(mktemp)
+    cp -a "$last_dir/PROOF.md" "$proof_keep"
+  fi
   rm -rf "$last_dir"
   mkdir -p "$last_dir"
+  if [[ -n "$proof_keep" ]]; then
+    mv "$proof_keep" "$last_dir/PROOF.md"
+  fi
   # Commit-sized subset: skip full workflow-definition dumps (they are megabytes).
   local f
-  for f in summary.json launch-health.http.json doctor-health.http.json doctor.cli.txt \
-    doctor.cli.exit validate-e2e-deterministic.cli.json codebase-register.meta.json \
-    workflow-list.cli.names.json workflows-bundled.http.names.json \
-    workflows-project.http.names.json ui-assertions.json \
-    console-runs.png console-runs-all.png console-settings.png; do
+  local copies=(
+    summary.json launch-health.http.json doctor-health.http.json doctor.cli.txt
+    doctor.cli.exit
+  )
+  if [[ "$feature" == "web-console" ]]; then
+    copies+=(ui-assertions.json console-runs.png console-runs-all.png console-settings.png)
+  else
+    copies+=(
+      validate-e2e-deterministic.cli.json codebase-register.meta.json
+      workflow-list.cli.names.json workflows-bundled.http.names.json
+      workflows-project.http.names.json
+    )
+  fi
+  for f in "${copies[@]}"; do
     if [[ -f "$ev/$f" ]]; then
       cp -a "$ev/$f" "$last_dir/$f"
     fi
   done
-  if [[ -d "$ev/video" ]]; then
+  if [[ "$feature" == "web-console" && -d "$ev/video" ]]; then
     mkdir -p "$last_dir/video"
     local vid
     for vid in "$ev"/video/*.{webm,mp4}; do

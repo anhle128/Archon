@@ -76,7 +76,8 @@ Body must have `"status":"ok"`. `archon serve` from source exits: it is compiled
 Optional web UI for CLI/HTTP proofs is unused. For **web-console**, the helper starts Vite on **15173** (not laptop 5173) with `PORT` equal to the API port so `packages/web/vite.config.ts` proxies `/api` to the isolated server:
 
 ```bash
-PORT=13090 bun --cwd packages/web exec vite --host 127.0.0.1 --port 15173 --strictPort
+PORT=13090 bun run dev --host 127.0.0.1 --port 15173 --strictPort
+# cwd: packages/web  (do not insert `--` before Vite flags; bun steals --port)
 ```
 
 `bun run dev:web` is the same Vite app on 5173. Verification must set `PORT=<api>` or the proxy still targets 3090. Ready when `GET http://127.0.0.1:15173/console` is the SPA shell (`<title>Archon</title>`, `#root`). `packages/web/dist` is absent until `bun run build:web`; the API server then logs `web_dist_not_found` and still serves `/api/*` — that is **not** a UI proof.

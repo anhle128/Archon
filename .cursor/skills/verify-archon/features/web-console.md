@@ -47,7 +47,9 @@ Step-wise:
 Manual Vite equivalent if debugging the helper (repo root, API already on 13090):
 
 ```bash
-PORT=13090 bun --cwd packages/web exec vite --host 127.0.0.1 --port 15173 --strictPort
+cd packages/web
+PORT=13090 bun run dev --host 127.0.0.1 --port 15173 --strictPort
+# Do not insert `--` before Vite flags; bun steals `--port` and prints usage.
 ```
 
 Manual Playwright equivalent (after `bun install` in `.cursor/skills/verify-archon/harness`):

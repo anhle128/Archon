@@ -1,6 +1,6 @@
 # Generator proof — discover-workflows
 
-Captured on 2026-09-09 against this checkout, using the local bun target (not Mini).
+Captured on 2026-09-09 against this checkout, using the local bun target (not Mini). Re-proved after the web-console UI drive to confirm the API-only path still works (no Vite).
 
 ## Invoke
 
@@ -14,19 +14,19 @@ Step-wise: `launch` → `doctor --json` → `drive discover-workflows` → `clea
 
 Feature: **discover-workflows**
 
-1. Launch `bun run dev:server` at `http://127.0.0.1:13090` with isolated `ARCHON_HOME` and empty `DATABASE_URL` (SQLite).
-2. `GET /api/health` returned `status: "ok"`, `adapter: "web"`, `version: "0.9.0"`.
+1. Launch `bun run dev:server` at `http://127.0.0.1:13090` with isolated `ARCHON_HOME` and empty `DATABASE_URL` (SQLite). Vite was not started.
+2. `GET /api/health` returned `status: "ok"`.
 3. `archon doctor` passed (database, writable isolated home, bundled defaults). AI binaries skipped — expected offline.
-4. `workflow list --json` included `e2e-deterministic` (83 workflows).
-5. `validate workflows e2e-deterministic --json` was valid with 0 errors (1 warning: `uv` not on PATH).
-6. `GET /api/workflows` (no cwd) returned the bundled catalog (38 workflows).
+4. `workflow list --json` included `e2e-deterministic`.
+5. `validate workflows e2e-deterministic --json` was valid with 0 errors (warning: `uv` not on PATH).
+6. `GET /api/workflows` (no cwd) returned the bundled catalog.
 7. `POST /api/codebases` registered `/workspace` as `anhle128/Archon` (`kind: repo`).
 8. `GET /api/workflows?cwd=/workspace` included `{name: e2e-deterministic, source: project}`.
-9. Cleanup stopped PID 13090's listener, removed isolated home, and left this evidence tree.
+9. Cleanup stopped the API listener, removed isolated home, and left this evidence tree.
 
 ## Artifacts here
 
-Slim copies only (full workflow-definition dumps stay in `../../runs/<run-id>/`, gitignored). This directory is `last-proof/discover-workflows/` so a later `prove web-console` does not wipe it.
+Slim copies only (full workflow-definition dumps stay in `../../runs/<run-id>/`, gitignored). This directory is `last-proof/discover-workflows/` so `prove web-console` does not wipe it.
 
 | File                                  | Proof                                    |
 | ------------------------------------- | ---------------------------------------- |
@@ -42,5 +42,5 @@ Slim copies only (full workflow-definition dumps stay in `../../runs/<run-id>/`,
 ## Not claimed
 
 - Mini / Tailscale
-- Vite `/console` HTML
+- Vite `/console` HTML (see `../web-console/`)
 - A real `e2e-deterministic` run (`uv` missing on this VM)

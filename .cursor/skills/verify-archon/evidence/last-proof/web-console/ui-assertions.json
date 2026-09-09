@@ -1,0 +1,49 @@
+{
+  "ok": true,
+  "feature": "web-console",
+  "webUrl": "http://127.0.0.1:15173",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "assertions": [
+    {
+      "id": "console-rail",
+      "detail": "nav aria-label=Projects is visible",
+      "ok": true
+    },
+    {
+      "id": "console-brand",
+      "detail": "rail shows Archon + console pill",
+      "ok": true
+    },
+    {
+      "id": "console-runs-heading",
+      "detail": "h1 All projects + all-projects copy",
+      "ok": true
+    },
+    {
+      "id": "console-rail-actions",
+      "detail": "All projects + Add project buttons visible",
+      "ok": true
+    },
+    {
+      "id": "console-empty-running",
+      "detail": "default Running filter empty state",
+      "ok": true
+    },
+    {
+      "id": "console-filter-all",
+      "detail": "All filter chip shows No runs yet.",
+      "ok": true
+    },
+    {
+      "id": "console-settings",
+      "detail": "Settings link → /console/settings h1 Settings",
+      "ok": true
+    }
+  ],
+  "screenshots": ["console-runs.png", "console-runs-all.png", "console-settings.png"],
+  "video": "/workspace/.cursor/skills/verify-archon/evidence/runs/20260909T042553Z-fe1183f2/video/page@4c515cd97f39f7fe41d13be992282655.webm",
+  "videoEnabled": true
+}
