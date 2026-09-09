@@ -7,7 +7,7 @@ This directory is the maintained source for proving Archon the way a user does â
 - Work from the repository root. Confirm `git remote -v` points at `anhle128/Archon`.
 - Default target is a **local bun server** started by this skill (`HOST=127.0.0.1`, explicit `PORT`, isolated `ARCHON_HOME`). That path is fully offline and is what cloud agents must use.
 - Oceanlabs production Mini (PM2 + PostgreSQL, typically port 3090 over Tailscale) is an **optional remote target**. Never start, stop, restart, or deploy Mini as part of verification. Set `ARCHON_VERIFY_TARGET=mini` and `ARCHON_VERIFY_BASE_URL` only when the user asked to inspect that install **and** the host is reachable.
-- Put `verify-archon` on `PATH` or invoke `.cursor/skills/verify-archon/bin/verify-archon`.
+- Put `verify-archon` on `PATH` or invoke `.agents/skills/verify-archon/bin/verify-archon`.
 - Run `verify-archon doctor` and require the expected base URL, isolated home (local target), and `/api/health` `status: "ok"`.
 - Never drive an instance this run did not launch, except the explicit Mini remote target.
 - Solo SQLite installs have no web login. Do not set `BETTER_AUTH_SECRET` or `DATABASE_URL` on the local verification instance.

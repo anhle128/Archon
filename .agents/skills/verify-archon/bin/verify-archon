@@ -34,7 +34,7 @@ Environment:
   ARCHON_VERIFY_WEB_PORT   Default 15173 (avoids laptop Vite 5173)
   ARCHON_VERIFY_HOME       Isolated ARCHON_HOME (default under /tmp/archon-verify)
   ARCHON_VERIFY_STATE_DIR  State file directory (default /tmp/archon-verify)
-  ARCHON_VERIFY_EVIDENCE   Evidence root (default <repo>/.cursor/skills/verify-archon/evidence)
+  ARCHON_VERIFY_EVIDENCE   Evidence root (default <repo>/.agents/skills/verify-archon/evidence)
 
 Default local launch is offline: SQLite, loopback, no platform adapters, no Mini.
 CLI/HTTP proofs do not need Vite. UI proofs require launch --with-web.

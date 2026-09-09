@@ -16,7 +16,8 @@ description: |
         Tailscale proofs, or review-only work. Never start or stop Oceanlabs Mini.
   Input: The approved brainstorm result, product notes, design spec path, or
          requirements from the manual Superpowers brainstorming step. Run from
-         the anhle128/Archon checkout that contains `.cursor/skills/verify-archon/`.
+         the anhle128/Archon checkout that contains `.agents/skills/verify-archon/`
+         (Codex discovers `skills: [verify-archon]`).
 provider: omp
 model: "xai-oauth/grok-4.6"
 effort: high
@@ -40,7 +41,7 @@ nodes:
         echo "Local bun verify only. Never Mini / PM2 / Tailscale."
       } > "$ARTIFACTS_DIR/superpowers/setup.md"
 
-      VERIFY_BIN=".cursor/skills/verify-archon/bin/verify-archon"
+      VERIFY_BIN=".agents/skills/verify-archon/bin/verify-archon"
       if [ ! -f "$VERIFY_BIN" ]; then
         echo "ERROR: $VERIFY_BIN is missing." >&2
         echo "Run this workflow from anhle128/Archon after verify-archon landed on develop." >&2
@@ -300,30 +301,24 @@ nodes:
       echo "SELECTED_IDS=$(tr '\n' ' ' < "$IDS_FILE")"
     timeout: 60000
 
-  - id: prove
-    description: Fail-closed local verify-archon prove for each selected feature-map id.
+  - id: prove-preflight
+    description: chmod verify-archon helpers and install the Playwright harness when needed.
     depends_on:
       - normalize-verify-targets
       - fix-verify
     trigger_rule: one_success
     always_run: true
-    timeout: 2700000
     bash: |
-      set -uo pipefail
-
+      set -euo pipefail
       OUT_DIR="$ARTIFACTS_DIR/verify"
-      IDS_FILE="$OUT_DIR/feature-ids.txt"
-      VERIFY_BIN=".cursor/skills/verify-archon/bin/verify-archon"
       mkdir -p "$OUT_DIR/evidence" "$OUT_DIR/runs"
-
-      unset ARCHON_VERIFY_TARGET ARCHON_VERIFY_BASE_URL || true
-      export ARCHON_VERIFY_TARGET=local
-      export ARCHON_VERIFY_EVIDENCE="$OUT_DIR/runs"
-      export ARCHON_TELEMETRY_DISABLED=1
+      IDS_FILE="$OUT_DIR/feature-ids.txt"
+      VERIFY_BIN=".agents/skills/verify-archon/bin/verify-archon"
+      HARNESS=".agents/skills/verify-archon/harness"
 
       write_fail() {
         printf 'FAIL\n' > "$OUT_DIR/result.txt"
-        printf '%s\n' "${1:-verify failed}" > "$OUT_DIR/last-error.txt"
+        printf '%s\n' "${1:-verify preflight failed}" > "$OUT_DIR/last-error.txt"
       }
 
       if [ ! -f "$VERIFY_BIN" ]; then
@@ -338,65 +333,47 @@ nodes:
       fi
 
       if grep -qx 'web-console' "$IDS_FILE"; then
-        if [ ! -f .cursor/skills/verify-archon/harness/package.json ]; then
-          write_fail "web-console selected but harness/package.json is missing"
-          echo "ERROR: Playwright harness README/package.json missing for web-console." >&2
+        if [ ! -f "$HARNESS/package.json" ]; then
+          write_fail "web-console selected but $HARNESS/package.json is missing"
+          echo "ERROR: Playwright harness package.json missing for web-console." >&2
           exit 1
         fi
-        echo "Installing verify-archon Playwright harness deps (web-console)." >&2
-        if ! (cd .cursor/skills/verify-archon/harness && bun install) >&2; then
-          write_fail "bun install failed in verify-archon/harness"
+        echo "Installing verify-archon Playwright harness deps ($HARNESS)." >&2
+        if ! (cd "$HARNESS" && bun install) >&2; then
+          write_fail "bun install failed in $HARNESS"
           exit 1
         fi
       fi
+    timeout: 180000
 
-      : > "$OUT_DIR/exit-codes.txt"
-      failed=0
-      while IFS= read -r id || [ -n "$id" ]; do
-        id=$(printf '%s' "$id" | tr -d '\r')
-        [ -z "$id" ] && continue
-        case "$id" in
-          \#*) continue ;;
-        esac
-        echo "verify-archon prove $id" >&2
-        set +e
-        "$VERIFY_BIN" prove "$id"
-        code=$?
-        set -e
-        printf '%s=%s\n' "$id" "$code" >> "$OUT_DIR/exit-codes.txt"
-
-        dest="$OUT_DIR/evidence/$id"
-        mkdir -p "$dest"
-        src_last="$OUT_DIR/runs/last-proof/$id"
-        if [ ! -d "$src_last" ]; then
-          src_last=".cursor/skills/verify-archon/evidence/last-proof/$id"
-        fi
-        if [ -d "$src_last" ]; then
-          cp -a "$src_last/." "$dest/"
-        fi
-        if [ "$code" -ne 0 ]; then
-          failed=1
-          printf 'prove %s exited %s\n' "$id" "$code" > "$OUT_DIR/last-error.txt"
-        fi
-      done < "$IDS_FILE"
-
-      {
-        echo '{'
-        echo "  \"gate\": \"$([ "$failed" -eq 0 ] && echo PASS || echo FAIL)\","
-        echo "  \"ids_file\": \"$IDS_FILE\","
-        echo "  \"evidence_dir\": \"$OUT_DIR/evidence\","
-        echo "  \"exit_codes_file\": \"$OUT_DIR/exit-codes.txt\""
-        echo '}'
-      } > "$OUT_DIR/result.json"
-
-      if [ "$failed" -eq 0 ]; then
-        printf 'PASS\n' > "$OUT_DIR/result.txt"
-        echo "All selected verify-archon ids passed." >&2
-        exit 0
-      fi
-      printf 'FAIL\n' > "$OUT_DIR/result.txt"
-      echo "One or more verify-archon prove commands failed. See $OUT_DIR/exit-codes.txt" >&2
-      exit 1
+  - id: prove
+    description: Follow verify-archon and prove every selected feature-map id (fail-closed).
+    provider: codex
+    model: gpt-5.6-sol
+    effort: xhigh
+    context: fresh
+    idle_timeout: 3600000
+    skills:
+      - verify-archon
+    depends_on:
+      - prove-preflight
+    always_run: true
+    prompt: |
+      $verify-archon
+      Follow verify-archon.
+      Prove every id in $ARTIFACTS_DIR/verify/feature-ids.txt.
+      Write PASS or FAIL to $ARTIFACTS_DIR/verify/result.txt and evidence under $ARTIFACTS_DIR/verify/.
+      Return only JSON with result PASS|FAIL.
+    output_format:
+      type: object
+      required:
+        - result
+      properties:
+        result:
+          type: string
+          enum:
+            - PASS
+            - FAIL
 
   - id: record-verify
     description: Read prove artifacts and emit PASS or FAIL for the route_loop gate.

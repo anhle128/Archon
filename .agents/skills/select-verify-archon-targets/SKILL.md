@@ -3,7 +3,7 @@ name: select-verify-archon-targets
 description: >-
   Choose verify-archon feature-map ids to prove after a product change.
   Use when an Archon workflow node must pick one or more ids from
-  `.cursor/skills/verify-archon/features/` based on a plan and git diff.
+  `.agents/skills/verify-archon/features/` based on a plan and git diff.
 ---
 
 # Select verify-archon targets
@@ -13,7 +13,7 @@ Do not implement product code. Do not start Mini, PM2, or Tailscale.
 
 ## Map
 
-Read `.cursor/skills/verify-archon/features/README.md` and the feature files there.
+Read `.agents/skills/verify-archon/features/README.md` and the feature files there.
 Allowed ids only:
 
 - `discover-workflows`
