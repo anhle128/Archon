@@ -1,0 +1,18 @@
+{
+  "results": [
+    {
+      "workflowName": "e2e-deterministic",
+      "valid": true,
+      "issues": [
+        {
+          "level": "warning",
+          "nodeId": "script-python",
+          "field": "runtime",
+          "message": "Runtime 'uv' is not available on PATH",
+          "hint": "Install uv: https://docs.astral.sh/uv/getting-started/installation/ — or run: curl -LsSf https://astral.sh/uv/install.sh | sh"
+        }
+      ]
+    }
+  ],
+  "summary": { "total": 1, "valid": 1, "errors": 0, "warnings": 1 }
+}
