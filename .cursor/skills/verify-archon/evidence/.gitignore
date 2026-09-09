@@ -1,5 +1,12 @@
-# Runtime proof dirs are local. A successful generator pass may commit
-# last-proof/ so reviewers can see one captured run.
+# Runtime proof dirs are local. last-proof/ keeps a slim committed subset.
 runs/
 *.pid
 state.json
+# Full workflow-definition dumps are megabytes; never commit them.
+*.http.json
+!last-proof/launch-health.http.json
+!last-proof/doctor-health.http.json
+last-proof/workflows-*.http.json
+last-proof/workflow-list.cli.json
+last-proof/codebase-register.http.json
+last-proof/server.log

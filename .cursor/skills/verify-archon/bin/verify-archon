@@ -340,7 +340,6 @@ cmd_launch() {
   log_file=$state_dir/$run_id/server.log
   pid_file=$state_dir/$run_id/server.pid
   local ev_dir=$evidence_root/runs/$run_id
-  mkdir -p "$ev_dir" "$home_dir" "$(dirname "$log_file")"
 
   local existing
   existing=$(listener_pid "$port")
@@ -363,6 +362,8 @@ cmd_launch() {
     fi
     return 0
   fi
+
+  mkdir -p "$ev_dir" "$home_dir" "$(dirname "$log_file")"
 
   if [[ -z "${existing:-}" ]]; then
     command -v bun >/dev/null || die "bun not on PATH"
@@ -680,6 +681,14 @@ drive_discover_workflows() {
   assert_jq "$ev/workflows-project.http.json" \
     '[.workflows[] | select(.workflow.name == "e2e-deterministic")] | length >= 1' \
     "project catalog missing e2e-deterministic"
+  jq '{count:(.workflows|length), names:[.workflows[].name]}' \
+    "$ev/workflow-list.cli.json" >"$ev/workflow-list.cli.names.json"
+  jq '{count:(.workflows|length), names:[.workflows[].workflow.name]}' \
+    "$ev/workflows-bundled.http.json" >"$ev/workflows-bundled.http.names.json"
+  jq '{count:(.workflows|length), names:[.workflows[] | {name:.workflow.name, source}]}' \
+    "$ev/workflows-project.http.json" >"$ev/workflows-project.http.names.json"
+  jq '{id, name, default_cwd, kind}' "$ev/codebase-register.http.json" \
+    >"$ev/codebase-register.meta.json"
   jq -n --arg feature discover-workflows --arg evidenceDir "$ev" --arg repo "$repo" \
     '{feature:$feature, evidenceDir:$evidenceDir, repo:$repo, ok:true}' >"$ev/summary.json"
 }
@@ -859,7 +868,17 @@ cmd_prove() {
   fi
   mkdir -p "$evidence_root/last-proof"
   rm -rf "$evidence_root/last-proof"
-  cp -a "$ev" "$evidence_root/last-proof"
+  mkdir -p "$evidence_root/last-proof"
+  # Commit-sized subset: skip full workflow-definition dumps (they are megabytes).
+  local f
+  for f in summary.json launch-health.http.json doctor-health.http.json doctor.cli.txt \
+    doctor.cli.exit validate-e2e-deterministic.cli.json codebase-register.meta.json \
+    workflow-list.cli.names.json workflows-bundled.http.names.json \
+    workflows-project.http.names.json; do
+    if [[ -f "$ev/$f" ]]; then
+      cp -a "$ev/$f" "$evidence_root/last-proof/$f"
+    fi
+  done
   if [[ "$json_mode" -eq 1 ]]; then
     emit_json --arg feature "$feature" --arg evidenceDir "$ev" --arg lastProof "$evidence_root/last-proof" \
       '{ok:true, feature:$feature, evidenceDir:$evidenceDir, lastProof:$lastProof}'
