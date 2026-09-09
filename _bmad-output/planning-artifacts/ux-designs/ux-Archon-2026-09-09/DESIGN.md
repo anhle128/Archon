@@ -1,7 +1,7 @@
 ---
 name: Archon
 description: Readable agent transcript inside the node room, on both web surfaces. shadcn/Radix on Tailwind v4, dark-only; this DESIGN.md specifies the transcript delta over two inherited token sets and forks neither palette.
-status: final
+status: final # one open question in Colors: the --node-prompt chip pair
 updated: 2026-09-10
 sources:
   - ../../../specs/spec-readable-agent-transcript/SPEC.md
@@ -307,7 +307,7 @@ If Console ever replaces Legacy, `--node-script` is present by definition and sp
 Legacy has no `--running`; the ◐ glyph uses `--accent-bright`, the surface's only bright blue.
 A folded-away todo call keeps the ✓ glyph at **full strength**, and the – glyph stays reserved for a genuinely unknown outcome or missing output.
 Dimming the glyph was measured and dropped: `--success` at 55% over `--surface` gives 2.69:1 on Legacy and 3.56:1 on Console, and a 12px bold character is not large text, so both fail 4.5:1 and Legacy also falls under the 3:1 floor this document invokes for glyphs elsewhere.
-The row is already subordinate through its tertiary `todo updated` headline and its `op: <op>` badge, so the dimming bought redundant emphasis with the one budget the glyph could not spare. Full strength also restores the user's own choice of glyph treatment, in which colour reinforces the character and never carries state alone.
+The row is already subordinate through its secondary `todo updated` headline and its `op: <op>` badge, so the dimming bought redundant emphasis with the one budget the glyph could not spare. Full strength also restores the user's own choice of glyph treatment, in which colour reinforces the character and never carries state alone.
 
 `⚠` covers the fifth outcome, `interrupted`, and it is a fifth _character_ rather than a recoloured `✕` because the tool was **stopped**, not failed — the two need different reader responses.
 `--warning` is declared on **both** surfaces (`index.css:24`, `console/theme.css:79`), so the glyph inherits with no new token; the gap that caught `code` and `--node-script` does not repeat here.
@@ -349,7 +349,8 @@ Diff lines use success for `+` and error for `−`; `FAILED`/`ok` markers use er
 | text-secondary on surface-inset (raw box, key column)                     | 6.3:1     | 8.9:1     |
 | warning glyph on surface (`⚠`)                                            | 8.3:1     | 10.1:1    |
 | node-prompt on surface-inset (code-body keywords)                         | **4.4:1** | **4.4:1** |
-| focus ring on surface — `--accent-ring`, the token Console ships          | **1.4:1** | **1.4:1** |
+| focus ring today — Console's `--accent-ring` (30% alpha)                  | n/a       | **1.4:1** |
+| focus ring today — Legacy's `outline-ring/50` (`index.css:179`)           | **2.3:1** | n/a       |
 | focus ring on surface — `--accent-bright`, the token this spine specifies | 7.4:1     | 4.9:1     |
 
 The bold cells are inherited product tokens that fall short. The last two rows are the exception to "used exactly as the mocks use them", and the difference matters:
@@ -424,8 +425,10 @@ All nine families, four hard cases, glyph row, occurrence header options, and th
 Padding `{spacing.row-y} {spacing.row-x}`, radius `{rounded.md}`, `{typography.row}`.
 Hover fills `surface-hover`; focus-visible draws the surface's focus outline; open rotates the chevron 90° over 120ms.
 
-**Status glyph** (`{components.status-glyph}`) — a 12px fixed column, bold, centred: ✓ success, ✕ error, ◐ running, – tertiary.
-Four different characters; colour is added on top.
+**Status glyph** (`{components.status-glyph}`) — a 12px fixed column, bold, centred: ✓ success, ✕ error, ◐ running, ⚠ interrupted, – unknown.
+Five different characters; colour is added on top.
+
+**Raw toggle** (`{components.raw-toggle}`) — its 1px `--border` measures 1.3:1 on Legacy and 1.2:1 on Console against the surface, well under the 3:1 of SC 1.4.11. It stays, because the criterion asks for the information _required to identify_ a control, and the word `Raw` at 5.8:1 / 8.4:1 does that: the border is redundant reinforcement, in the same class as the family-chip borders. Hover and focus raise it to `border-bright` and `text-primary`, which is where the affordance is confirmed.
 
 **Family chip** (`{components.family-chip}`) — `{typography.chip}` on `surface-elevated`, padding `{spacing.chip-pad}`, radius `{rounded.sm}`, 1px border in the family hue mixed to 40% (search and glob 45%), text in the family hue.
 The generic chip has text-secondary text and the plain `border` colour.
@@ -443,31 +446,32 @@ Its first line is the **body bar** (`{components.body-bar}`): text-secondary fac
 **The body bar opens with the resolved family**, then the family's own facts — `shell · exit 101 · 41.2s · cwd …`, `file · 1 hunk · replace_all: false`. That one word is the only place the family is stated in text, and it is what a reader who cannot separate the chip hues has to read instead. The chip carries the same string as a `title`, so a pointer reader gets it without opening the row.
 Raw is a bordered text button, transparent fill; open state swaps to text-primary text and `border-bright`, with a `▾` suffix.
 
-**Body box** (`{components.body-box}`) — the container for terminal, diff, matches, paths, code, and raw JSON: `surface-inset`, 1px `border`, radius `{rounded.md}`, `{spacing.box-pad}`, `{typography.body-text}`, text-secondary, `pre-wrap`.
+**Body box** (`{components.body-box}`) — the container for terminal, diff, matches, paths, code, web, and raw JSON: `surface-inset`, 1px `border`, radius `{rounded.md}`, `{spacing.box-pad}`, `{typography.body-text}`, text-primary content with secondary annotations, `pre-wrap`.
 Terminal: `$` sigil in node-bash, `FAILED` bold error.
-Diff: a `3ch` right-aligned tertiary line-number column, `−` lines error, `+` lines success.
-Matches: path in node-command, `:line` tertiary inline, then the match text.
+Diff: a `3ch` right-aligned line-number column in `{components.body-box.annotation-legacy}` / `{components.body-box.annotation-console}`, `−` lines error, `+` lines success.
+Matches: path in node-command, `:line` inline in the annotation colour, then the match text.
 Paths: one node-command path per line.
-Code: keywords node-prompt, strings success, comments tertiary; the result sits in a second box 6px below.
-Raw: text-secondary JSON.
+Code: keywords node-prompt, strings success, comments in the annotation colour; the result sits in a second box 6px below.
+Raw: text-primary JSON.
+Web: the requested URL as the header, the page or result title beneath it, and the body rendered as markdown — the one arm whose content is prose rather than machine output.
 
 **Checklist** (`{components.checklist}`) — `{typography.checklist}`, text-secondary items.
-Phase label is `{typography.phase-label}` uppercase tertiary with 4px top margin.
-Item glyphs: ☑ success, ◐ running colour, ⊘ warning, ☐ tertiary, and an abandoned item is ☐ with line-through in tertiary followed by `· dropped`.
-A blocked item carries `· blocked: <reason>` in tertiary.
+Phase label is `{typography.phase-label}` uppercase text-secondary with 4px top margin.
+Item glyphs: ☑ success, ◐ running colour, ⊘ warning, ☐ text-secondary, and an abandoned item is ☐ with line-through in text-secondary followed by `· dropped`. Four shapes, so the state survives without colour.
+A blocked item carries `· blocked: <reason>` in text-secondary.
 
 **Folded todo row** — a Tool row for every todo call except the last: glyph `✓` at full strength, the todo chip in `{colors.node-approval}`, headline `todo updated` in text-secondary (`{components.headline.folded-todo-legacy}` / `{components.headline.folded-todo-console}`), badge `op: <op>`.
 Same height and anatomy as any other row, so it does not interrupt the scan.
 
 **Subtask card** (`{components.subtask-card}`) — `surface-elevated`, 1px `border`, radius `{rounded.md}`, `{spacing.subcard-pad}`, 5px top margin.
-Agent name in node-approval semibold, `·`, subtask name bold, `—` then prompt excerpt in tertiary.
+Agent name in node-approval semibold, `·`, subtask name bold, `—` then prompt excerpt in text-secondary.
 Batch context, when present, is one text-secondary line above the first card.
 
-**Key-value list** (`{components.kv-list}`) — up to three rows, key in tertiary at `{spacing.kv-key-w}`, value in text-secondary; `{…}` and `[n]` are literal text.
+**Key-value list** (`{components.kv-list}`) — up to three rows, key in text-secondary at `{spacing.kv-key-w}`, value in text-primary; `{…}` and `[n]` are literal text.
 
-**Occurrence header** (`{components.occurrence-header}`) — `{typography.occurrence-header}` uppercase tertiary label, then a 1px `border` rule to the right edge; margin `{spacing.occurrence-margin}`.
+**Occurrence header** (`{components.occurrence-header}`) — `{typography.occurrence-header}` uppercase text-secondary label, then a 1px `border` rule to the right edge; margin `{spacing.occurrence-margin}`.
 
-**Assistant text** (`{components.assistant-text}`) — sans, text-secondary, with a 10px uppercase tertiary `assistant` role label above it on the room screens.
+**Assistant text** (`{components.assistant-text}`) — sans, text-secondary, with a 10px uppercase text-secondary `assistant` role label above it on the room screens.
 Inline code inside it is mono at 11px.
 
 ## Do's and Don'ts
@@ -477,7 +481,7 @@ Inline code inside it is mono at 11px.
 | Resolve every colour to an existing `--*` variable on the surface        | Carry a GitHub-dark hex from the brainstorm imports                 |
 | Keep the row anatomy identical on both surfaces; vary only `:root`       | Give Console or Legacy a different chevron, glyph, or chip shape    |
 | Let the status glyph out-shout the chip, and the chip out-shout the text | Add a sixth chip treatment or split a sibling pair onto its own hue |
-| Show the ✓ ✕ ◐ – character and colour it                                 | Encode outcome in colour alone, a dot, or a left bar                |
+| Show the ✓ ✕ ◐ ⚠ – character and colour it                               | Encode outcome in colour alone, a dot, or a left bar                |
 | Elide paths in the middle so the filename survives                       | Tail-cut a path                                                     |
 | Cap the chip at `{spacing.chip-max}` and ellipsise inside it             | Let a Codex command or MCP name burst the chip                      |
 | Sink bodies to `surface-inset`, lift chips to `surface-elevated`         | Use shadows, gradients, or the brand gradient inside the transcript |
@@ -487,8 +491,16 @@ Inline code inside it is mono at 11px.
 
 ## Open Questions
 
-1. **The family hue for a sighted colour-blind reader.** The screen-reader half is closed — the family now travels in the chip's accessible name. The visual half is not: `--node-bash` (75°) against `--node-approval` (40°) collapses under protanopia and deuteranopia, so five treatments become two or three, and the generic grey that means _"this tool was not recognised"_ stops being distinguishable from a recognised one. The tool name usually implies the family, but the two cases this document itself calls out — `eval` against `run_terminal_command` sharing amber, and generic against recognised — are exactly where the name does not carry it.
-   Resolved — see the entry below.
+**One, and it is narrow.** `--node-prompt` chip text measures **3.7:1 on Legacy and 3.9:1 on Console** against `surface-elevated`. Chip text is 11px, so 4.5:1 applies. It is the only family hue that fails: `--node-command` clears it at 4.8:1 / 4.9:1, `--node-approval` at 6.5:1 / 6.8:1, `--node-bash` at 7.6:1 / 7.9:1, and `generic` sits in `--text-secondary` at 5.8:1 / 8.4:1. So this is two chips — `search` and `glob` — not the palette.
+
+The tier decision does not reach it. Every other transcript fact moved to `--text-secondary`, but a chip's colour **is** its family, and the family-hue system is a user decision; recolouring these two to grey would delete the meaning the chip exists to carry.
+
+Two ways out, both inside the no-new-token rule:
+
+- **Brighten the two chips' text** with `color-mix(in oklch, var(--node-prompt) 70%, var(--text-primary))`, keeping the border in the pure family hue so the violet identity survives. Clears 4.5:1 and changes only these two chips.
+- **Accept, and record it** — the chip is a redundant label (the tool name sits inside it, and the family is also in the body bar, the accessible name, and the tooltip), so no fact is lost by a reader who cannot resolve the violet.
+
+This one was carried into the finalize pass by mistake: it was folded into a renumbering and marked resolved when nothing had resolved it. Recorded as open rather than quietly accepted.
 
 Every question this run opened is now answered. What follows is the record.
 

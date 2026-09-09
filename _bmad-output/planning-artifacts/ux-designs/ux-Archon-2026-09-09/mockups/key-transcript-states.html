@@ -119,6 +119,7 @@ h1 { font-size: 18px; margin: 0 0 4px; } h2 { font-size: 13px; text-transform: u
   <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="file · Edit" aria-label="file · Edit">Edit</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/src/</span><span class="t">auto_retry.rs</span></span><span class="bd"><span class="add">+2</span> <span class="del">−2</span></span></summary></details>
   <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-search" title="search · Grep" aria-label="search · Grep">Grep</span><span class="hl">"fn retry_backoff" in crates/</span><span class="bd">3 files</span></summary></details>
   <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-search" title="glob" aria-label="glob">glob</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/tests/</span><span class="t">**/*.rs</span></span><span class="bd">11 files</span></summary></details>
+  <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="web · WebFetch" aria-label="web · WebFetch">WebFetch</span><span class="hl hl-path"><span class="h">https://doc.rust-lang.org/std/time/struct.</span><span class="t">Duration.html</span></span><span class="bd">1.4 KB · 380ms</span></summary></details>
   <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-code" title="code · eval" aria-label="code · eval">eval</span><span class="hl">assert!(backoff(5) &lt;= Duration::from_secs(30))</span><span class="bd">rust · 12ms</span></summary></details>
   <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan">todo_write</span><span class="hl">Tasks</span><span class="bd">2/5 done</span></summary></details>
   <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-plan" title="task · Agent" aria-label="task · Agent">Agent</span><span class="hl">Scout retry-backoff call sites</span><span class="bd">1 subagent · 2m 04s</span></summary></details>
@@ -194,6 +195,20 @@ assertion `left == right` failed
 <span class="ln">213</span><span class="d">-     Duration::from_secs(secs + 1)</span>
 <span class="ln">213</span><span class="a">+     Duration::from_secs(secs)</span>
 <span class="ln">214</span>  }</div></div>
+  </details>
+</div>
+</div>
+<div>
+<p class="cap">web — url header, title, body as markdown. Six rows in the whole corpus, and the rarest arm.</p>
+<div class="panel tx">
+  <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file" title="web · WebFetch" aria-label="web · WebFetch">WebFetch</span><span class="hl hl-path"><span class="h">https://doc.rust-lang.org/std/time/struct.</span><span class="t">Duration.html</span></span><span class="bd">1.4 KB · 380ms</span></summary>
+    <div class="tbody"><div class="tbar">web · doc.rust-lang.org · 1.4 KB<button class="raw" type="button">Raw</button></div>
+<div class="box"><span class="pl">https://doc.rust-lang.org/std/time/struct.Duration.html</span>
+<b>Duration in std::time — Rust</b>
+
+A Duration type to represent a span of time, typically used for system timeouts.
+Each Duration is composed of a whole number of seconds and a fractional part
+represented in nanoseconds.</div></div>
   </details>
 </div>
 </div>
