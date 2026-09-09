@@ -1,0 +1,37 @@
+- id: '1'
+  title: Replace the raw-JSON tool rows with a scannable transcript
+  description: >-
+    Build the tool presentation resolver and render every tool call as one
+    collapsed row, with the bodies that need no additional module — terminal,
+    matches, paths, code and generic — on both node rooms. Covers CAP-1, CAP-7
+    and the part of CAP-2 that depends on nothing else.
+  spec_checkpoint: true
+  done_checkpoint: true
+
+- id: '2'
+  title: Show an inline diff for file edits
+  description: >-
+    Move the pure git hunk adapter into lib/ so Console can reach it without
+    crossing the component boundary, then render the diff body whenever a
+    payload carries both before and after content. Covers CAP-5.
+
+- id: '3'
+  title: Render the agent's todo list as folded state
+  description: >-
+    Normalize both provider todo shapes into one phase list — OMP's nine
+    mutating ops and Claude's whole-list replacement — and anchor the rendered
+    checklist at the last todo call. Covers CAP-3.
+  spec_checkpoint: true
+
+- id: '4'
+  title: Render subagent dispatches as subtask cards
+  description: >-
+    Normalize OMP's batch dispatch and Claude's single dispatch into one subtask
+    list, then render the batch context and one card per subtask. Covers CAP-4.
+
+- id: '5'
+  title: Separate attempts and loop iterations
+  description: >-
+    Thread execution identity through the shared history layer and group rows by
+    occurrence_id, rendering a group header only when a node spans more than
+    one. Covers CAP-6.
