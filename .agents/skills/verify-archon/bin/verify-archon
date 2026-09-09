@@ -908,11 +908,8 @@ drive_web_console() {
     (cd "$harness" && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 bun install) \
       || die "bun install failed in $harness"
   fi
-  # Linux: google-chrome on PATH. macOS: Playwright channel chrome uses Google Chrome.app.
-  if ! command -v google-chrome >/dev/null && ! command -v google-chrome-stable >/dev/null \
-    && [[ ! -d "/Applications/Google Chrome.app" ]]; then
-    die "system Chrome not found (harness uses Playwright channel: chrome)"
-  fi
+  command -v google-chrome >/dev/null || command -v google-chrome-stable >/dev/null \
+    || die "system Chrome not found (harness uses Playwright channel: chrome)"
   # Video is optional. Playwright records only when its ffmpeg is present.
   if [[ ! -x "${HOME}/.cache/ms-playwright/ffmpeg-1011/ffmpeg-linux" ]]; then
     (cd "$harness" && bunx playwright install ffmpeg) \
