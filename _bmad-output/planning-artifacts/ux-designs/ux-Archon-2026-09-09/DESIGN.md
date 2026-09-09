@@ -503,6 +503,10 @@ Two ways out, both inside the no-new-token rule:
 
 This one was carried into the finalize pass by mistake: it was folded into a renumbering and marked resolved when nothing had resolved it. Recorded as open rather than quietly accepted.
 
+**Recommendation: accept and record.** Three things point that way. The chip is the most redundant element on the row — the tool name sits inside it, and since the family also travels in the body bar, the accessible name and the `title`, a reader who cannot resolve the violet loses a scanning aid rather than a fact. It would join three shortfalls already accepted on the same footing (the 22px row, the Legacy `--error` badge, the chip borders), so accepting is the consistent answer rather than a new exception. And brightening produces a colour that appears in neither token file, which the brand rule treats as an ad-hoc value.
+
+The honest counter, so the choice is a real one: `color-mix` is **already** how this design draws every chip border, five times in the states sheet alone, so the precedent for deriving a value from tokens exists and the third argument above is the weakest of the three. If the transcript ever has to pass an audit rather than serve a developer, brightening is the answer that survives it.
+
 Every question this run opened is now answered. What follows is the record.
 
 **Resolved during finalize**, from the accessibility review, from live code, and from three user decisions:

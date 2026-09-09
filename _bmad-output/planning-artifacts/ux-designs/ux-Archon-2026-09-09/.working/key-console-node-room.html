@@ -84,6 +84,7 @@ body { background: oklch(0.11 0.005 265); color: var(--text-primary); font-famil
 .tcall > summary { list-style: none; display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
 .tcall > summary::-webkit-details-marker { display: none; }
 .tcall > summary:hover { background: var(--surface-hover); }
+.tcall > summary:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; }
 .chev { color: var(--text-tertiary); flex: 0 0 9px; font-size: 10px; display: inline-block; transition: transform .12s; }
 .tcall[open] > summary .chev { transform: rotate(90deg); }
 .gl { flex: 0 0 12px; text-align: center; font-weight: 700; }

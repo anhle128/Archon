@@ -4,6 +4,8 @@ Brainstorm mockup: option B applied to the full transcript, four hard cases, sta
 The transcript body repeats v1; its rows are reconciled in `reconcile-superpowers-transcript-v1.md` and not repeated here.
 Authority: `.memlog.md` (cited as memlog L<n>); screens `.working/key-*.html`; contract `tool-presentation-contract.md`.
 
+> **Point-in-time record.** This file describes the reconciliation as it stood at mock review. Three of its statements were superseded afterwards and are left in place so the trail is readable: the six-treatment mapping and `code = --node-script` (the user chose amber; memlog L36), the chip that "truncates with an ellipsis" (the contract makes it fall back to the family name), and the four-glyph set (`⚠` was added for `interrupted`). The spines win on every conflict.
+
 ## Carried
 
 - Chip = tool name on every row (subtitle "Tên tool là chip") → memlog L9 "density option B = tool name as chip"; `.fam` in all three screens; contract "Chip".
