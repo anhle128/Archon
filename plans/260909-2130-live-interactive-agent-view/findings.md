@@ -81,13 +81,75 @@ Claude is unconditional (§5.6); and Archon hardcodes **no** Claude key anywhere
 `providers/src/claude/` — pure pass-through — so alias sets remain the correct design even though the
 spelling is now known. [V]
 
-Residual risk **[?]**: these are the _Claude Code harness_ schemas; Archon calls the Claude _Agent
-SDK_, same built-in tools but could drift by version. Alias sets absorb drift.
+~~Residual risk **[?]**: these are the _Claude Code harness_ schemas; Archon calls the Claude _Agent
+SDK_, same built-in tools but could drift by version.~~ **Resolved 2026-09-09 [V].** The published
+Agent SDK `sdk-tools.d.ts` for the pinned 0.3.209 declares the same shapes — `FileEditInput`
+`{file_path, old_string, new_string, replace_all?}`, `FileReadInput {file_path}`,
+`FileWriteInput {file_path, content}`, `BashInput {command}`. No drift, and no exploratory run needed.
 
-### 3.5 Real payloads observed in `~/.archon/archon.db` [V]
+Reading that file also settled two things alias sets can **not** absorb, because they are semantic
+rather than lexical:
 
-46 tool rows, all `superpower-feature`. Names: `read` 31, `glob` 7, `grep` 5, `todo` 2, `task` 1.
-All rows: `input` an object, `output` absent, `metadata.tool_phase` absent.
+- **`GlobInput {pattern, path?}` — `path` is the directory to search.** OMP's `glob` has no `pattern`
+  and its `path` **is** the pattern. The same key, opposite meanings. A resolver reading `path` for
+  the glob family would show a Claude user their search directory instead of their pattern.
+- **`GrepInput.output_mode` defaults to `files_with_matches`**, so Claude's grep returns bare file
+  paths, not `path:line` matches, unless the model asked for content. The body arm has to come from
+  `output_mode`, not from the family.
+
+And two tools are structurally different between providers, not merely spelled differently:
+Claude's `TodoWriteInput {todos:[{content,status,activeForm}]}` is a whole-list replacement with
+explicit statuses and no phases, against OMP's nine mutating ops; Claude's `AgentInput
+{description,prompt,subagent_type?}` is a **single** dispatch against OMP's batch. Both are handled
+by per-provider normalizers at the `lib/` edge rather than by branching in a renderer.
+
+### 3.5 Real payloads — the local sample was not representative [V]
+
+**Corrected 2026-09-09.** This section was first written from the laptop database: 46 tool rows, one
+run, names `read` 31 · `glob` 7 · `grep` 5 · `todo` 2 · `task` 1, `output` absent on every row.
+Measuring the **deployment** database instead (read-only, `sqlite3 -readonly` on the Mac mini's
+`/Users/agent/.archon/archon.db`, 1.7 GB) gives a different picture entirely:
+
+|                        | laptop | deployment      |
+| ---------------------- | ------ | --------------- |
+| tool rows              | 46     | **22,867**      |
+| runs                   | 1      | **31**          |
+| distinct tool names    | 5      | **2,369**       |
+| rows carrying `output` | 0      | roughly a third |
+
+The laptop sample came from a **research** workflow — it reads and searches, never writes — so it
+contained no `bash`, no `edit`, and none of the write-heavy traffic that dominates real runs.
+
+**Measured family coverage over all 22,867 rows**, using the alias table as first drafted:
+
+```
+file-read 5554 · GENERIC FALLBACK 4914 · codex-shell (tier 3) 4911 · shell 3584
+search 2625 · file-write 803 · glob 228 · todo 198 · task 46 · web 6
+```
+
+**21.5% of real rows would have rendered as bare `key: value`** — the exact defect the work exists to
+remove, invisible in a sample that happened to be 100% covered. What the fallback actually contained:
+
+| name                                                                          | rows  | belongs to                                                                                |
+| ----------------------------------------------------------------------------- | ----- | ----------------------------------------------------------------------------------------- |
+| `read_file`                                                                   | 1,605 | file-read — and it carries the path in **`target_file`**, a key the resolver did not know |
+| `run_terminal_command`                                                        | 1,182 | shell                                                                                     |
+| `search_replace`                                                              | 904   | **file-write**, despite the name containing "search"                                      |
+| `eval`                                                                        | 821   | a code-execution family that did not exist; carries `code` + `language`                   |
+| `hub` · `get_command_or_subagent_output` · `search_tool` · `lsp` · `list_dir` | 379   | mixed                                                                                     |
+
+Three consequences, all now in `SPEC-readable-agent-transcript`:
+
+- **Alias matching normalizes the name** (case-fold, strip `_` and `-`) and matches **exact tokens,
+  never substrings.** `search_replace` → `searchreplace` _contains_ `search` but is an edit tool;
+  substring matching would misfile 904 rows into the wrong family.
+- **Codex tool names are frequently multi-line** — whole shell loops and `&&` chains stored as the
+  name, across 4,911 rows. A collapsed row is one line, so the headline must take the first non-empty
+  line only. This is a main path, not an edge case.
+- Adding five measured aliases, the `target_file` key, and a `code` family drops the generic fallback
+  from 21.5% to under 2%.
+
+The payload examples below remain from the laptop sample; they are the `todo` and `task` shapes.
 
 ```jsonc
 {"op":"init","list":[{"phase":"Research","items":["Read story 5.5 spec and brainstorm","…"]},{"phase":"Plan","items":["…"]}]}

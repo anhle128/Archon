@@ -22,16 +22,19 @@ file:line, not personally re-read · **[?]** unverified.
 **Beliefs this document overturns.** Each was believed during the work and is now disproved by
 source. If you carry one in from an earlier read or an earlier doc, it is wrong:
 
-| Belief                                       | Reality                                                                                    | Where       |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------ | ----------- |
-| `todo` has two ops                           | nine, and bare `done`/`drop`/`rm` target **everything**                                    | §3.5, §5.5  |
-| `glob` is a content search                   | its output is a **file list**; a metacharacter-free `path` is a directory listing          | §3.5, §5.2  |
-| `text_kind` needs no backend change          | no DB migration, but the metadata schema is `.strict()`                                    | §4.2        |
-| `dag-executor` has a tool-round drain point  | it consumes the stream; the drain is the harness's                                         | §3.7, §4.3a |
-| `providerPayload` is the rpc payload problem | it is `undefined` outside OpenAI-Responses; the driver is `partial`                        | §3.8, §11.4 |
-| Claude's advisor is unreachable              | it reaches Archon today; **testability** is the blocker                                    | §3.6, §11.5 |
-| `advisorModel` identifies the advisor        | dropped before the SDK frame                                                               | §3.6        |
-| AskHuman's web UI is not wired               | **shipped on both surfaces**; Track B extends it, and a prior BMad SPEC owns that contract | §3.10, §6   |
+| Belief                                                | Reality                                                                                          | Where       |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------- |
+| `todo` has two ops                                    | nine, and bare `done`/`drop`/`rm` target **everything**                                          | §3.5, §5.5  |
+| `glob` is a content search                            | its output is a **file list**; a metacharacter-free `path` is a directory listing                | §3.5, §5.2  |
+| `text_kind` needs no backend change                   | no DB migration, but the metadata schema is `.strict()`                                          | §4.2        |
+| `dag-executor` has a tool-round drain point           | it consumes the stream; the drain is the harness's                                               | §3.7, §4.3a |
+| `providerPayload` is the rpc payload problem          | it is `undefined` outside OpenAI-Responses; the driver is `partial`                              | §3.8, §11.4 |
+| Claude's advisor is unreachable                       | it reaches Archon today; **testability** is the blocker                                          | §3.6, §11.5 |
+| `advisorModel` identifies the advisor                 | dropped before the SDK frame                                                                     | §3.6        |
+| AskHuman's web UI is not wired                        | **shipped on both surfaces**; Track B extends it, and a prior BMad SPEC owns that contract       | §3.10, §6   |
+| The 46 local tool rows are representative             | the deployment has **22,867 rows / 2,369 names**; 21.5% would have hit the generic fallback      | §3.5        |
+| Claude Agent SDK schemas might drift from the harness | identical, confirmed from the pinned `sdk-tools.d.ts` — no exploratory run needed                | §3.4        |
+| `todo` and `task` differ only in spelling             | they differ **structurally** per provider; normalizers at the `lib/` edge, not renderer branches | §3.4        |
 
 **Two bugs found along the way**, both independent of either track: the `isFollowUpTurnEvent`
 allowlist (§3.9) and Claude's silent drop of unknown content blocks (§3.9, §11.5).
@@ -246,8 +249,10 @@ Note there is **no `todo` body arm**: todo state spans calls and is folded one l
 **`matches` and `paths` are two arms, not one, because the two searches return different things.**
 Grep returns `path:line: text`; glob returns bare file paths — and §3.5 establishes that OMP's `glob`
 with a metacharacter-free `path` is a _recursive directory listing_, whose output has no line numbers
-to parse. One arm would make a renderer guess which it received, and 7 of the 46 observed rows are
-`glob`.
+to parse. One arm would make a renderer guess which it received. Claude inverts the same keys —
+`GlobInput` has a required `pattern` and a `path` meaning the search _directory_ — so the headline
+reads `pattern` first and falls back to `path`, and the grep body arm comes from `output_mode`, whose
+default returns file paths rather than matches (§3.4).
 
 ### 5.2 Resolver — four tiers, in order
 
@@ -566,8 +571,10 @@ Run `bun run validate` before any PR (AGENTS.md).
 
 ## 11. Open items
 
-1. **[?]** Confirm the Claude _Agent SDK_ built-in tool schemas match the Claude Code harness schemas
-   recorded in §3.4. One real Claude run settles it. Alias sets absorb any drift meanwhile.
+1. ~~Confirm the Claude _Agent SDK_ built-in tool schemas match the Claude Code harness schemas.~~
+   **RESOLVED 2026-09-09 [V]** from the pinned `sdk-tools.d.ts`: they match, and no exploratory run
+   was needed. The same read exposed the `glob` key inversion, the `output_mode` default, and the
+   structural `todo`/`task` divergence — none of which alias sets can absorb. See §3.4.
 2. Track B needs its own design pass before planning — §6 is a sketch, not a design.
 3. Where the OMP RPC session registry lives, and how its teardown integrates with existing
    process-cleanup (the §4.3 hard requirement).
