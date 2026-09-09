@@ -10,6 +10,22 @@ description: >-
 
 # Verify Archon
 
+## Manual Cursor use
+
+Invoke with `/verify-archon` in this repo. No Archon workflow or `$ARTIFACTS_DIR` required.
+
+Typical flow after `/select-verify-archon-targets`:
+
+```bash
+.agents/skills/verify-archon/bin/verify-archon features
+.agents/skills/verify-archon/bin/verify-archon prove <feature-id>
+# UI ids need Chrome (macOS: Google Chrome.app) and often:
+.agents/skills/verify-archon/bin/verify-archon prove web-console
+```
+
+Ids come from `.agents/skills/verify-archon/features/`. Prefer proving every id
+the select skill emitted for the change — not only the easiest smoke id.
+
 Drive this Archon fork (`anhle128/Archon`) the way a user does. CI green and `tsc` are not proof. A CLI/HTTP proof is a real command or `/api/*` request against a live instance, plus the resulting state. A **web-console** proof is a real browser session against `/console`: visible DOM assertions plus screenshots (and video when the harness records it). HTTP-only is not a passing UI claim.
 
 Primary surfaces: **Archon CLI** (`bun run cli`) and the **server HTTP API** (`bun run dev:server`). The web console (`bun run dev:web`, `/console`) is secondary. Oceanlabs production Mini (PM2 + PostgreSQL over Tailscale) is an optional remote target — never the default, and never started or stopped from here.
