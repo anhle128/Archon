@@ -1,7 +1,7 @@
 ---
 name: Archon
 description: Readable agent transcript inside the node room, on both web surfaces. shadcn/Radix on Tailwind v4, dark-only; this DESIGN.md specifies the transcript delta over two inherited token sets and forks neither palette.
-status: final # one open question in Colors: the --node-prompt chip pair
+status: final # one open question in Colors: --node-prompt, on both backgrounds it carries text
 updated: 2026-09-10
 sources:
   - ../../../specs/spec-readable-agent-transcript/SPEC.md
