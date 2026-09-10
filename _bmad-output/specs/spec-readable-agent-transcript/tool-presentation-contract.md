@@ -153,7 +153,8 @@ With no scalar entry, the headline is the tool name alone.
 chev glyph chip    headline (flex, min-width:0)        badges (right)
 ```
 
-**Status glyph `✓ ✕ ◐ –`**, mapped from the existing `AgentHistoryItem.outcome` via `deriveOutcome()`, reused unchanged.
+**Status glyph `✓ ✕ ◐ ⚠ –`**, mapped from the existing `AgentHistoryItem.outcome` via `deriveOutcome()`, reused unchanged.
+Five characters for the five values that type carries (`agent-history.ts:36`). `⚠` is `interrupted` — a tool that was **stopped**, not one that failed, so it takes its own character rather than a recoloured `✕`. Only Claude produces it, from the `PostToolUseFailure` hook when `is_interrupt` is true (`claude/provider.ts:952-959`); Codex cannot, its union being `success`/`error`/`unknown` (`codex/provider.ts:644-650`).
 Colour is applied _in addition to_ the glyph, never instead of it.
 
 **Chip** is the normalised tool name when that name is a single token of at most 24 characters, else the family name.

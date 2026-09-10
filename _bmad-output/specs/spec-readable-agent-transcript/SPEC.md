@@ -4,13 +4,15 @@ companions:
   - tool-presentation-contract.md
   - todo-fold-contract.md
   - test-plan.md
+  - ../../planning-artifacts/ux-designs/ux-Archon-2026-09-09/DESIGN.md
+  - ../../planning-artifacts/ux-designs/ux-Archon-2026-09-09/EXPERIENCE.md
   - ../../../plans/260909-2130-live-interactive-agent-view/findings.md
   - ../../project-context.md
 sources:
   - ../../../plans/260909-2130-live-interactive-agent-view/design.md
 ---
 
-> **Canonical contract.** This SPEC and the files in `companions:` are the complete, preservation-validated contract for what to build, test, and validate. Source documents listed in frontmatter are for traceability — consult them only if you need narrative rationale this contract intentionally omits. `findings.md` is a required companion, not background: it carries the `file:line` evidence and the real provider payloads every capability below was derived from.
+> **Canonical contract.** This SPEC and the files in `companions:` are the complete, preservation-validated contract for what to build, test, and validate. Source documents listed in frontmatter are for traceability — consult them only if you need narrative rationale this contract intentionally omits. `findings.md` is a required companion, not background: it carries the `file:line` evidence and the real provider payloads every capability below was derived from. `DESIGN.md` and `EXPERIENCE.md` are the UX run's two spines, adopted here rather than summarised: they own how the transcript looks and how it behaves, and they win over any mockup. This kernel does not restate them — a reader who needs a colour, a state rule, or a keyboard contract goes there.
 
 # Readable Agent Transcript
 
@@ -61,7 +63,7 @@ That is what separates this from the live/interactive work, which needs persiste
 - Console must not import from `@/components/`. Shared logic therefore lands in `packages/web/src/lib/` and the JSX is written twice, thin. Duplicating a little JSX for a surface scheduled for deletion beats refactoring code on its way out.
 - **No raw `JSON.stringify` as a default presentation anywhere in the transcript.** It survives only behind CAP-7's explicit toggle. This is the defect being fixed; re-introducing it in a fallback path fails the spec.
 - Status must be decodable **without colour** — a glyph character carries it, colour only reinforces. A coloured dot encodes state in hue alone and is lost to a colour-blind reader.
-- Every chip label is **at most 24 characters**. Codex sets the tool name to the entire shell command, which would burst the chip.
+- A chip shows the tool name only when that name is **a single token of at most 24 characters**; otherwise it shows the **family name**. Codex sets the tool name to the entire shell command, so the fallback is a main path, not an edge case. The 24-character cap is the guard behind the rule, never the rule itself — read the other way round it becomes "truncate with an ellipsis", which is how three documents in the UX run came to teach a state this contract makes unreachable.
 - Tool identification **duck-types over alias sets**; no name-keyed mapping table. One workflow run mixes three naming conventions in a single transcript (`superpower-feature.yaml` declares `omp`, `claude` and `codex` on different nodes), and a table would need a row per provider per tool.
 - **Provider shape differences are normalized at the edge, never branched on in a renderer.** Where two providers disagree structurally — `todo` and `task` do, completely — a small normalizer in `lib/` converts each to one shared shape. `ToolPresentation` stays render-neutral and neither renderer learns a provider name. The same key can mean opposite things per provider (`path` is the pattern in OMP's `glob` and the search directory in Claude's), so a shared key is not evidence of a shared shape.
 - Path headlines elide in the **middle**; commands and patterns elide at the end. A tail cut on a path destroys the only identifying part.
