@@ -104,7 +104,7 @@ async function captureAtTwoHundredPercentZoom(
   }
 }
 
-test('[P1] HITL visual: Console and Legacy vs canonical mockup at required viewports', async ({
+test('[P1] [V:hitl.visual-captures] HITL visual: Console and Legacy vs canonical mockup at required viewports', async ({
   page,
   archon,
 }) => {

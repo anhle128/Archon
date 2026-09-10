@@ -2,6 +2,13 @@
 
 Inspect a workflow run lets a user list recent runs for this project, open one run, and read its lifecycle state after a workflow has actually executed.
 
+## Automated Coverage
+
+`runs.inspection` creates a real CLI-origin HITL run in the isolated home, then
+asserts the same paused run ID in CLI get/status/list and HTTP detail/list.
+It does not prove abandonment or a completed run's terminal state. The steps
+below are additional manual exploration, not extra guarantees from this recipe.
+
 ## Sub-features
 
 - `runs-list` lists recent runs via CLI and `GET /api/workflows/runs`.
@@ -21,7 +28,7 @@ Inspect a workflow run lets a user list recent runs for this project, open one r
 Preconditions:
 
 - `verify-archon doctor` passed.
-- At least one run exists in the isolated home. If none exists, drive [Run a deterministic workflow](./run-deterministic-workflow.md) first, or report this feature unreachable — do not invent a run row.
+- At least one real run exists in the isolated home. The automated recipe creates its own; a dry-run does not create one. Never invent a run row.
 - You have the full run id from `workflow runs` / `workflowRunRef.runId`, not a detached ack.
 
 - **List runs.** Ask for recent runs. Run `verify-archon cli -- workflow runs --json`. Exit code `0`. The array (or `runs` field) contains the expected id.

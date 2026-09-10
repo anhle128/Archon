@@ -45,7 +45,11 @@ export default tseslint.config(
 
   // Project-specific settings
   {
-    files: ['packages/*/src/**/*.{ts,tsx}', 'scripts/**/*.ts'],
+    files: [
+      'packages/*/src/**/*.{ts,tsx}',
+      'scripts/**/*.ts',
+      '.agents/skills/verify-archon/lib/**/*.ts',
+    ],
     languageOptions: {
       parserOptions: {
         projectService: true,

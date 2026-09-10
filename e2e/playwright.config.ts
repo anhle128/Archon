@@ -33,7 +33,15 @@ export default defineConfig({
       ],
   use: {
     trace: 'on-first-retry',
-    screenshot: 'only-on-failure',
+    screenshot: process.env.ARCHON_E2E_PROOF === '1' ? 'on' : 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        ...(process.env.ARCHON_PW_CHANNEL ? { channel: process.env.ARCHON_PW_CHANNEL } : {}),
+      },
+    },
+  ],
 });

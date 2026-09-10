@@ -9,15 +9,18 @@ import {
   HITL_LONG_NODE,
   HITL_LOOP_NODE,
   HITL_TOOL_OUTPUT,
+  UnsupportedSetupError,
+  type ArchonRuntime,
+  type CliRunResult,
 } from '../lib/playwright/archon-runtime';
 import {
-  answerAskViaApi,
   createIdentityContext,
   getRunDetail,
   listNodeMessages,
   observeNodeMessagePages,
   openLegacyRunDetail,
   openRunDetail,
+  submitAskYes,
 } from '../lib/playwright/run-detail';
 import { T } from '../lib/playwright/timeouts';
 
@@ -79,7 +82,7 @@ function formatRecordedDuration(durationMs: number): string {
 }
 
 async function openConsoleLogRow(page: Page, nodeId: string, index = 0): Promise<void> {
-  const buttons = page.locator('button[id^="console-log-"]').filter({ hasText: nodeId });
+  const buttons = page.getByRole('button', { name: new RegExp(nodeId) });
   await expect(buttons.nth(index)).toBeVisible({ timeout: T.medium });
   await buttons.nth(index).click();
 }
@@ -89,7 +92,7 @@ async function openLegacyLogRow(page: Page, nodeId: string, index = 0): Promise<
   if ((await logsTab.count()) > 0) {
     await logsTab.click();
   }
-  const buttons = page.locator('button[id^="legacy-log-"]').filter({ hasText: nodeId });
+  const buttons = page.getByRole('button', { name: new RegExp(nodeId) });
   await expect(buttons.nth(index)).toBeVisible({ timeout: T.medium });
   await buttons.nth(index).click();
 }
@@ -104,47 +107,83 @@ function executionSection(page: Page, nodeId: string): Locator {
   return page.locator('section[data-execution-row-id]').filter({ hasText: nodeId }).first();
 }
 
-test('[P1] Console room opens, closes, and releases its width', async ({ page, archon }) => {
+async function requireLongHistoryFixture(page: Page, archon: ArchonRuntime): Promise<CliRunResult> {
+  try {
+    const started = await archon.runHitlLongHistoryWorkflow();
+    const stored = await listNodeMessages(page, started.runId, HITL_LONG_NODE);
+    const ids = new Set(stored.filter(row => row.kind === 'tool').map(row => row.payload.id));
+    // A short fixture cannot exercise a cursor boundary or prove a UI pagination bug.
+    if (ids.size <= 100) {
+      throw new UnsupportedSetupError(
+        `Long-history fixture produced ${String(ids.size)} tool calls; ` +
+          'the target fake provider must support repeatTool before pagination can be verified'
+      );
+    }
+    return started;
+  } catch (error) {
+    if (error instanceof UnsupportedSetupError) {
+      test.info().annotations.push({ type: 'verification-setup', description: 'unsupported' });
+    }
+    throw error;
+  }
+}
+
+test('[P1] [V:hitl.console-room-layout] Console room opens, closes, and releases its width', async ({
+  page,
+  archon,
+}) => {
   await page.setViewportSize(SPLIT_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   await openRunDetail(page, started.runId);
   await waitForRunTitle(page, 'e2e-hitl-run');
 
+  await openConsoleLogRow(page, HITL_INSPECT_NODE);
+  const room = await waitForRoom(page, HITL_INSPECT_NODE);
+  const logRow = page.getByRole('button', { name: new RegExp(HITL_INSPECT_NODE) }).first();
+  const openWidth = await boxWidth(logRow, 'Console log row while room is open');
+  const roomWidth = await boxWidth(room, 'Console room');
+
+  await page.getByRole('button', { name: 'Close' }).click();
+  await expect(room).toHaveCount(0);
+  const closedWidth = await boxWidth(logRow, 'Console log row after room closes');
+  expect(
+    closedWidth - openWidth,
+    'closing the room returns its width to the log'
+  ).toBeGreaterThanOrEqual(roomWidth - WIDTH_TOLERANCE_PX);
+  await expect(page.getByText('Select a node', { exact: true })).toHaveCount(0);
   await expect(panelLocator(page, 'console-run-room')).toHaveCount(0);
   await expect(page.getByRole('separator', { name: 'Resize node room' })).toHaveCount(0);
-  await expect(page.getByText('Select a node')).toHaveCount(0);
-
-  const mainClosed = panelLocator(page, 'console-run-view');
-  const fullWidth = await boxWidth(mainClosed, 'console-run-view before open');
-
   await openConsoleLogRow(page, HITL_INSPECT_NODE);
   await waitForRoom(page, HITL_INSPECT_NODE);
   const ratio = await roomRatio(page, 'console');
   expect(ratio).toBeGreaterThanOrEqual(DEFAULT_RATIO_MIN);
   expect(ratio).toBeLessThanOrEqual(DEFAULT_RATIO_MAX);
-
-  await page.getByRole('button', { name: 'Close' }).click();
-  await expect(panelLocator(page, 'console-run-room')).toHaveCount(0);
-  const restored = await boxWidth(mainClosed, 'console-run-view after close');
-  expect(Math.abs(restored - fullWidth)).toBeLessThanOrEqual(WIDTH_TOLERANCE_PX);
 });
 
-test('[P1] Legacy room is readable and percentage sized', async ({ page, archon }) => {
+test('[P1] [V:hitl.legacy-room-layout] Legacy room is readable and percentage sized', async ({
+  page,
+  archon,
+}) => {
   await page.setViewportSize(LEGACY_RATIO_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   await openLegacyRunDetail(page, started.runId);
   await waitForRunTitle(page, 'e2e-hitl-run');
   await openLegacyLogRow(page, HITL_INSPECT_NODE);
   const room = await waitForRoom(page, HITL_INSPECT_NODE);
+  const width = await boxWidth(room, 'Legacy node room');
+  expect(width, 'Legacy room must be wide enough to read tool output').toBeGreaterThan(
+    ROOM_MIN_WIDTH_PX
+  );
   const ratio = await roomRatio(page, 'legacy');
   expect(ratio).toBeGreaterThanOrEqual(DEFAULT_RATIO_MIN);
   expect(ratio).toBeLessThanOrEqual(DEFAULT_RATIO_MAX);
-  const width = await boxWidth(panelLocator(page, 'legacy-run-room'), 'legacy-run-room');
-  expect(width).toBeGreaterThan(ROOM_MIN_WIDTH_PX);
   await expect(room.getByText(HITL_TOOL_OUTPUT)).toBeVisible({ timeout: T.medium });
 });
 
-test('[P1] Graph selection restores the last explicit execution', async ({ page, archon }) => {
+test('[P1] [V:hitl.graph-selection] Graph selection restores the last explicit execution', async ({
+  page,
+  archon,
+}) => {
   await page.setViewportSize(SPLIT_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   await openRunDetail(page, started.runId);
@@ -166,7 +205,10 @@ test('[P1] Graph selection restores the last explicit execution', async ({ page,
   await expect(page.getByText('Iteration 1').first()).toBeVisible();
 });
 
-test('[P1] Agent history shows role, tool context, and outcome', async ({ page, archon }) => {
+test('[P1] [V:hitl.agent-history] Agent history shows role, tool context, and outcome', async ({
+  page,
+  archon,
+}) => {
   await page.setViewportSize(SPLIT_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   await openRunDetail(page, started.runId);
@@ -205,7 +247,10 @@ test('[P1] Agent history shows role, tool context, and outcome', async ({ page, 
   ).toBeVisible();
 });
 
-test('[P1] Execution selector requests the selected scope', async ({ page, archon }) => {
+test('[P1] [V:hitl.execution-scope] Execution selector requests the selected scope', async ({
+  page,
+  archon,
+}) => {
   await page.setViewportSize(SPLIT_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   const observed = observeNodeMessagePages(page, started.runId, HITL_LOOP_NODE);
@@ -243,7 +288,10 @@ test('[P1] Execution selector requests the selected scope', async ({ page, archo
   }
 });
 
-test('[P1] Ask draft is shared across room and execution section', async ({ browser, archon }) => {
+test('[P1] [V:hitl.ask-draft] Ask draft is shared across room and execution section', async ({
+  browser,
+  archon,
+}) => {
   await pageWaitStarter(browser, archon, async page => {
     await page.setViewportSize(SPLIT_VIEWPORT);
     const started = await archon.runHitlWorkflow();
@@ -263,7 +311,10 @@ test('[P1] Ask draft is shared across room and execution section', async ({ brow
   });
 });
 
-test('[P1] Answered and declined Ask records remain in place', async ({ browser, archon }) => {
+test('[P1] [V:hitl.ask-history] Answered and declined Ask records remain in place', async ({
+  browser,
+  archon,
+}) => {
   await pageWaitStarter(browser, archon, async page => {
     await page.setViewportSize(SPLIT_VIEWPORT);
     const started = await archon.runHitlTwoAsksWorkflow();
@@ -294,7 +345,9 @@ test('[P1] Answered and declined Ask records remain in place', async ({ browser,
     expect(answerId).toBeTruthy();
     expect(declineId).toBeTruthy();
     if (!answerId || !declineId) throw new Error('missing two-ask request ids');
-    expect(await answerAskViaApi(page, started.runId, answerId)).toBe(200);
+    await openConsoleLogRow(page, HITL_ASK_ANSWER_NODE);
+    const pendingAnswerRoom = await waitForRoom(page, HITL_ASK_ANSWER_NODE);
+    await submitAskYes(page, pendingAnswerRoom, started.runId, answerId);
     await openConsoleLogRow(page, HITL_ASK_DECLINE_NODE);
     const pendingDeclineRoom = await waitForRoom(page, HITL_ASK_DECLINE_NODE);
     await pendingDeclineRoom.getByRole('button', { name: 'Decline', exact: true }).click();
@@ -341,7 +394,10 @@ test('[P1] Answered and declined Ask records remain in place', async ({ browser,
   });
 });
 
-test('[P1] Awaiting input focuses the matching Ask', async ({ browser, archon }) => {
+test('[P1] [V:hitl.awaiting-focus] Awaiting input focuses the matching Ask', async ({
+  browser,
+  archon,
+}) => {
   await pageWaitStarter(browser, archon, async page => {
     await page.setViewportSize(SPLIT_VIEWPORT);
     const started = await archon.runHitlWorkflow();
@@ -368,7 +424,10 @@ test('[P1] Awaiting input focuses the matching Ask', async ({ browser, archon })
   });
 });
 
-test('[P1] Narrow room uses Back without losing Log state', async ({ browser, archon }) => {
+test('[P1] [V:hitl.console-mobile-back] Narrow room uses Back without losing Log state', async ({
+  browser,
+  archon,
+}) => {
   await pageWaitStarter(browser, archon, async page => {
     await page.setViewportSize(NARROW_VIEWPORT);
     const started = await archon.runHitlWorkflow();
@@ -408,7 +467,10 @@ test('[P1] Narrow room uses Back without losing Log state', async ({ browser, ar
     );
   });
 });
-test('[P1] Legacy narrow room restores Logs focus and Ask draft', async ({ browser, archon }) => {
+test('[P1] [V:hitl.legacy-mobile-back] Legacy narrow room restores Logs focus and Ask draft', async ({
+  browser,
+  archon,
+}) => {
   await pageWaitStarter(browser, archon, async page => {
     await page.setViewportSize(NARROW_VIEWPORT);
     const started = await archon.runHitlWorkflow();
@@ -438,7 +500,7 @@ test('[P1] Legacy narrow room restores Logs focus and Ask draft', async ({ brows
   });
 });
 
-test('[P1] Mobile Ask remains reachable', async ({ browser, archon }) => {
+test('[P1] [V:hitl.mobile-ask] Mobile Ask remains reachable', async ({ browser, archon }) => {
   await pageWaitStarter(browser, archon, async page => {
     await page.setViewportSize(NARROW_VIEWPORT);
     const started = await archon.runHitlWorkflow();
@@ -463,15 +525,19 @@ test('[P1] Mobile Ask remains reachable', async ({ browser, archon }) => {
   });
 });
 
-test('[P1] Deep-link re-entry and focus restoration work', async ({ page, archon }) => {
+test('[P1] [V:hitl.room-deeplink] Deep-link re-entry and focus restoration work', async ({
+  page,
+  archon,
+}) => {
   await page.setViewportSize(SPLIT_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   const opened = await openRunDetail(page, started.runId, HITL_INSPECT_NODE);
   await waitForRoom(page, HITL_INSPECT_NODE);
+  const opener = page.getByRole('button', { name: new RegExp(HITL_INSPECT_NODE) }).first();
+  await expect(opener).toBeVisible();
   await page.getByRole('button', { name: 'Close' }).click();
   await expect(panelLocator(page, 'console-run-room')).toHaveCount(0);
-  const openerId = await page.evaluate(() => document.activeElement?.id ?? '');
-  expect(openerId.startsWith('console-log-')).toBe(true);
+  await expect(opener).toBeFocused();
 
   await page.goto(`/console/p/${opened.projectId}/r/${started.runId}`);
   await waitForRunTitle(page, 'e2e-hitl-run');
@@ -483,7 +549,7 @@ test('[P1] Deep-link re-entry and focus restoration work', async ({ page, archon
   await waitForRoom(page, HITL_INSPECT_NODE);
 });
 
-test('[P1] Reload restores the chosen ratio', async ({ page, archon }) => {
+test('[P1] [V:hitl.room-ratio] Reload restores the chosen ratio', async ({ page, archon }) => {
   await page.setViewportSize(SPLIT_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   await openRunDetail(page, started.runId);
@@ -512,10 +578,13 @@ test('[P1] Reload restores the chosen ratio', async ({ page, archon }) => {
   expect(Math.abs(restored - stored)).toBeLessThanOrEqual(RELOAD_RATIO_TOLERANCE);
 });
 
-test('[P1] Complete history crosses a cursor boundary', async ({ page, archon }) => {
+test('[P1] [V:hitl.history-pagination] Complete history crosses a cursor boundary', async ({
+  page,
+  archon,
+}) => {
   test.setTimeout(T.xlong);
   await page.setViewportSize(SPLIT_VIEWPORT);
-  const started = await archon.runHitlLongHistoryWorkflow();
+  const started = await requireLongHistoryFixture(page, archon);
   const observed = observeNodeMessagePages(page, started.runId, HITL_LONG_NODE);
   try {
     await openRunDetail(page, started.runId);
@@ -534,10 +603,13 @@ test('[P1] Complete history crosses a cursor boundary', async ({ page, archon })
   }
 });
 
-test('[P1] Complete history renders every distinct tool call', async ({ page, archon }) => {
+test('[P1] [V:hitl.history-complete] Complete history renders every distinct tool call', async ({
+  page,
+  archon,
+}) => {
   test.setTimeout(T.xlong);
   await page.setViewportSize(SPLIT_VIEWPORT);
-  const started = await archon.runHitlLongHistoryWorkflow();
+  const started = await requireLongHistoryFixture(page, archon);
   await openRunDetail(page, started.runId);
   await waitForRunTitle(page, 'e2e-hitl-long-history');
   await openConsoleLogRow(page, HITL_LONG_NODE);
@@ -572,7 +644,10 @@ test('[P1] Complete history renders every distinct tool call', async ({ page, ar
   });
 });
 
-test('[P1] Console Reply rejects a missing parent', async ({ page, archon }) => {
+test('[P1] [V:hitl.console-reply-unavailable] Console Reply rejects a missing parent', async ({
+  page,
+  archon,
+}) => {
   await page.setViewportSize(SPLIT_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   const creates: string[] = [];
@@ -590,7 +665,10 @@ test('[P1] Console Reply rejects a missing parent', async ({ page, archon }) => 
   expect(creates).toEqual([]);
 });
 
-test('[P1] Console Reply uses the exact parent web conversation', async ({ browser, archon }) => {
+test('[P1] [V:hitl.console-reply-parent] Console Reply uses the exact parent web conversation', async ({
+  browser,
+  archon,
+}) => {
   await pageWaitStarter(browser, archon, async page => {
     await page.setViewportSize(SPLIT_VIEWPORT);
     const webRun = await archon.runHitlWorkflowViaWeb();
@@ -609,7 +687,10 @@ test('[P1] Console Reply uses the exact parent web conversation', async ({ brows
   });
 });
 
-test('[P1] Legacy navigation and timeline survive without a parent', async ({ page, archon }) => {
+test('[P1] [V:hitl.legacy-navigation] Legacy navigation and timeline survive without a parent', async ({
+  page,
+  archon,
+}) => {
   await page.setViewportSize(SPLIT_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   await openLegacyRunDetail(page, started.runId);
@@ -627,7 +708,10 @@ test('[P1] Legacy navigation and timeline survive without a parent', async ({ pa
   });
 });
 
-test('[P1] Console Artifacts keeps the room docked', async ({ page, archon }) => {
+test('[P1] [V:hitl.artifacts-room] Console Artifacts keeps the room docked', async ({
+  page,
+  archon,
+}) => {
   await page.setViewportSize(SPLIT_VIEWPORT);
   const started = await archon.runHitlWorkflow();
   await openRunDetail(page, started.runId);

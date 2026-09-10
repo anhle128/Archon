@@ -1,95 +1,107 @@
 ---
 name: select-verify-archon-targets
 description: >-
-  Choose verify-archon feature-map ids to prove after a product change.
-  Use from Cursor via /select-verify-archon-targets (manual) or from an
-  Archon workflow node. Picks ids under `.agents/skills/verify-archon/features/`
-  from a plan and git diff. Not Archon-runtime-only.
+  Use when choosing user-facing verification coverage for an Archon product
+  change, or selecting behavior regressions to check on a historical checkout.
+  Works manually in an editor without an Archon workflow.
 ---
 
-# Select verify-archon targets
+# Select Verification Targets
 
-Pick the smallest set of feature-map ids whose user paths this change can break.
-Do not implement product code. Do not start Mini, PM2, or Tailscale.
+The agent interprets impact; the helper validates coverage. Produce a JSON
+proposal of affected behaviors, then a normalized selection whose required
+scenarios come from the catalog. A feature name or smoke result is not coverage.
 
-This skill is **Cursor-first**. You can run it with `/select-verify-archon-targets`
-in a checkout with no Archon workflow. Workflow env vars are optional adapters.
+## Inputs
 
-## Map
+Read the user's request, named plan or PR, relevant source, and complete diff.
+Use the helper from the checkout containing the current verification tooling;
+`--repo` can point at a separate clean product worktree.
 
-Read `.agents/skills/verify-archon/features/README.md` and the feature files there.
-Allowed ids only:
+Resolve the base from an explicit user ref first, then `$BASE_SHA_FILE` when
+supplied. Otherwise inspect refs and use the merge-base with the project's
+actual development branch (`origin/dev` or `origin/develop`). If ambiguous,
+report the missing base instead of substituting `main` or `HEAD~1`.
+For an explicitly requested historical snapshot check, use `--base HEAD --historical` and
+derive affected behaviors from the requested regression, not an empty diff.
 
-- `discover-workflows`
-- `web-console`
-- `diagnose-install`
-- `run-deterministic-workflow`
-- `inspect-run`
-- `hitl-run-room`
+```bash
+VERIFY=/absolute/path/to/current-tooling/.agents/skills/verify-archon/bin/verify-archon
+"$VERIFY" catalog --json
+"$VERIFY" snapshot --repo /absolute/path/to/product --base BASE_REF
+git -C /absolute/path/to/product diff BASE_SHA..HEAD_SHA
+```
 
-## Inputs (resolve in this order)
+The snapshot supplies exact `base_sha`, `head_sha`, `changed_paths`, and `dirty`.
+A dirty product checkout cannot receive commit-bound proof. Preserve its edits
+and use a clean worktree; do not stash, commit, or reset user changes for this skill.
 
-1. **Plan** — path the user names, or the newest relevant file under `docs/superpowers/plans/`, or "none".
-2. **Base ref for diff** — first available:
-   - path in `$BASE_SHA_FILE` or `$ARTIFACTS_DIR/superpowers/base-sha.txt` (workflow)
-   - SHA/ref the user names (`develop`, `origin/develop`, a commit)
-   - default: `git merge-base HEAD origin/develop` (fallback `origin/main`, then `HEAD~1`)
-3. **Request text** — the user's message / PR description / empty.
+## Proposal Contract
 
-Diff range: `base...HEAD`, plus staged and unstaged changes.
+Read the JSON manifests in `verify-archon/features/`; these are authoritative.
+Choose behavior IDs by their observable guarantees, not keyword similarity.
+For example, Ask rendering does not cover answering: answering requires an
+actual browser submit, persisted answer, continuation and final state.
 
-## Output locations (manual vs workflow)
-
-| Mode | Write proposed ids to | Also print |
-| --- | --- | --- |
-| **Manual (default)** | `.agents/skills/verify-archon/evidence/last-select/feature-ids.proposed.txt` | JSON to the user |
-| **Workflow** when `$ARTIFACTS_DIR` is set | `$ARTIFACTS_DIR/verify/feature-ids.proposed.txt` | JSON return for the node |
-
-Create parent dirs as needed. One id per line, no commentary in the txt file.
-
-Never require `$ARTIFACTS_DIR` for a successful manual run.
-
-## Rules
-
-- Include every id whose mapped user path the diff or plan can break.
-- If anything under `packages/web` changed, include `web-console`.
-- If the plan or diff can break run-detail room paths (Console/Legacy room, agent history, Ask cards, `?node=`, node-message paging, or execution-history used by the room), include `hitl-run-room`. Do not treat a green `web-console` as covering that path.
-- Always emit at least one id.
-- If nothing else is justified, use `discover-workflows`.
-- Local bun verify only (ids must be driveable by `verify-archon`).
-
-## Return
-
-Return JSON (and show it to the user when manual):
+Write `proposal.json` with this shape, using real snapshot values:
 
 ```json
 {
-  "feature_ids": ["web-console", "inspect-run", "hitl-run-room"],
-  "rationale": "…",
-  "web_changed": true,
-  "base_ref": "abc123…",
-  "output_path": "…"
+  "version": 1,
+  "base_sha": "<snapshot base_sha>",
+  "head_sha": "<snapshot head_sha>",
+  "changed_paths": ["<every path from snapshot>"],
+  "affected_behaviors": [
+    {
+      "id": "hitl.answer",
+      "confidence": "high",
+      "rationale": "Ask ownership changes can prevent submitting an answer."
+    }
+  ],
+  "coverage_gaps": []
 }
 ```
 
-## Next step (manual)
+Use `high` only when the evidence supports that scope. `medium` or `low` expands
+to every behavior in that feature. Include every affected behavior; path mappings
+also add known obligations and expand omitted impacted features.
 
-Tell the user to run `/verify-archon` (or the helper) for each id:
+If the requested behavior has no executable scenario, record the gap and report
+selection failure. Unknown IDs, unmapped changed paths, empty selections, and
+coverage gaps fail validation. **There is no `discover-workflows` fallback.**
+Do not omit paths or mark uncertainty `high` just to obtain a smaller test set.
+
+## Normalize And Hand Off
+
+Manual artifacts default to `verify-archon/evidence/last-select/` and are local.
+An explicitly supplied artifact directory may be used instead; no workflow
+environment variable is required. Keep artifacts outside the product checkout
+or in an ignored location so they do not make it dirty.
 
 ```bash
-.agents/skills/verify-archon/bin/verify-archon prove <id>
+"$VERIFY" normalize-selection /absolute/path/to/proposal.json \
+  --repo /absolute/path/to/product --base BASE_REF \
+  --out /absolute/path/to/selection.json
+"$VERIFY" validate-selection /absolute/path/to/selection.json \
+  --repo /absolute/path/to/product --base BASE_REF
 ```
 
-Or prove all selected:
+Report the normalized behavior/scenario IDs, automatic expansions, both SHAs,
+and selection path. On failure, report the actual validation error; no usable
+selection was established. Never hand-edit normalized scenario IDs.
+
+For execution, use **verify-archon** with the normalized artifact:
 
 ```bash
-while read -r id; do
-  [ -n "$id" ] || continue
-  .agents/skills/verify-archon/bin/verify-archon prove "$id" || exit 1
-done < .agents/skills/verify-archon/evidence/last-select/feature-ids.proposed.txt
+"$VERIFY" prove --selection /absolute/path/to/selection.json \
+  --repo /absolute/path/to/product --base BASE_REF
 ```
 
-`hitl-run-room` is the map entry for Console run-detail room (open/close,
-~40% split, history, `?node=`). Narrow-viewport / Legacy / multi-Ask paths
-still live in `e2e/ui/workflow-run-hitl-room.spec.ts` — say so when the
-diff is broader than this recipe.
+The runner revalidates selection and checkout. A changed diff, catalog, or HEAD
+requires a fresh selection. Selection success is not a product PASS. Workflow
+wiring is a separate integration step; this skill does not update workflows.
+
+For an empty-diff historical regression, pass the same explicit
+`--base HEAD --historical` flags to normalize, validate, and prove. The
+normalized artifact records its mode, so it cannot later be consumed as an
+ordinary change selection.
