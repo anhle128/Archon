@@ -7,22 +7,25 @@ description: |
 
   DAG workflow that:
   1. Detects input: existing prd.json, existing prd.md (needs stories), or raw idea
-  2. Generates prd.md + prd.json if needed (explores codebase, breaks into stories)
-  3. Validates PRD files, reads project context, installs dependencies
-  4. Runs Ralph loop (fresh context per iteration) implementing one story per
-     iteration, validating with the PROJECT's OWN checks — detected from
-     CLAUDE.md/AGENTS.md + manifest (Cargo.toml→cargo, package.json→bun/npm,
-     go.mod→go, pyproject.toml→python); the project owns build/publish policy
-  5. Creates PR and reports completion
+  2. Generates prd.md + prd.json if needed, without mutating Git lifecycle state
+  3. Validates PRD files, reads project context, and installs dependencies
+  4. Runs the project-aware Ralph loop, leaving validated changes uncommitted
+  5. Reports completion only after every story passes
 
-  Accepts: An idea description, a path to an existing prd.md, or a directory with prd.md + prd.json
+  Returns: The structured `implement` result with `done:true` only when every story
+           passes, or `done:false` with blocker evidence for the caller.
+  The caller owns staging, commits, push, pull request, and blocker handling.
+
+  Accepts: An idea description, a path to an existing prd.md, or a directory with
+           prd.md + prd.json.
 
 provider: omp
+returns: implement
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
   # NODE 1: DETECT INPUT
-  # Determines what the user provided: full PRD, partial PRD, or idea
+  # Determines what the user provided: full PRD, partial PRD, or idea.
   # ═══════════════════════════════════════════════════════════════
 
   - id: detect-input
@@ -40,41 +43,24 @@ nodes:
 
       ## Step 2: Classify the input
 
-      Look at the user input above. It's one of three things:
+      **Case A — Directory path**: check that both `prd.json` and `prd.md` exist
+      there. Try locally first, then relative to the main repo root if in a worktree.
 
-      **Case A — Directory path** (ANY folder that already holds a Ralph PRD — e.g.
-      `plans/<slug>/`, `specs/<slug>/`, `docs/superpowers/ralph/<name>/`, or a legacy
-      `.archon/ralph/<slug>/`): check that BOTH `prd.json` and `prd.md` exist there
-      (try locally first, then relative to the main repo root if in a worktree). This
-      is the normal path when invoked by ak-implement (it passes a ready PRD dir).
+      **Case B — File path** (ends in `.md`): find it as written, as an absolute
+      path, or relative to the main repo root. Read it to confirm it is a PRD.
 
-      **Case B — File path** (ends in `.md`):
-      An external PRD file. Find it:
-      1. Try the path as-is (relative to cwd)
-      2. Try it as an absolute path
-      3. If in a worktree, try it relative to the **main repo root** from Step 1
-      Once found, read the file to confirm it's a PRD.
+      **Case C — Free text**: treat it as a feature idea.
 
-      **Case C — Free text**:
-      Not a file path — it's a feature idea.
+      ## Step 3: Prepare the destination
 
-      ## Step 3: Take action based on classification
+      - Case A with both files: output `ready` and its existing directory.
+      - Case B: derive a kebab-case slug, create a sibling `ralph/<slug>` directory
+        (fallback `.archon/ralph/<slug>` for a repo-root file), copy the source to
+        `<prd_dir>/prd.md`, and output `external_prd`.
+      - Case C, or Case A with `prd.md` but no `prd.json`: derive or preserve the
+        destination directory and output `needs_generation`.
 
-      **If Case A and both files exist** → output `ready` with `prd_dir` = that
-      directory (absolute or repo-relative). No further action.
-
-      **If Case B (external PRD found)**:
-      1. Derive a kebab-case slug from the PRD filename or title.
-      2. Create a ralph directory next to the file —
-         `<dirname(dirname(file))>/ralph/<slug>` (fallback `.archon/ralph/<slug>` when
-         the file sits at the repo root); `mkdir -p` it.
-      3. Copy the PRD content to `<prd_dir>/prd.md`.
-      4. Output `external_prd` with the new prd_dir.
-
-      **If Case C, or a Case-A directory that has prd.md but no prd.json** → output
-      `needs_generation` with `prd_dir` = that directory (or the derived one).
-
-      ## Output
+      Do not stage, commit, push, or create a pull request.
 
       Your final output MUST be exactly one JSON object:
       ```json
@@ -95,34 +81,72 @@ nodes:
 
   # ═══════════════════════════════════════════════════════════════
   # NODE 2: GENERATE PRD
-  # Scenario 1: User has an idea → generate prd.md + prd.json
-  # Scenario 2: User has prd.md → generate prd.json with stories
-  # Skipped if prd.json already exists
+  # Creates missing Ralph files while leaving them uncommitted.
   # ═══════════════════════════════════════════════════════════════
 
   - id: generate-prd
     depends_on: [detect-input]
     when: "$detect-input.output.input_type != 'ready'"
-    command: archon-ralph-generate
     context: fresh
+    prompt: |
+      # Generate Ralph PRD Files
+
+      **User input**: $ARGUMENTS
+      **Input type**: $detect-input.output.input_type
+      **PRD directory**: $detect-input.output.prd_dir
+
+      Autonomously create a production-quality Ralph PRD from the supplied idea or
+      existing `prd.md`. Use the PRD directory above exactly; do not invent a second
+      destination.
+
+      1. Read the repository's applicable agent guidance and manifests.
+      2. Explore the actual codebase before designing stories. Reference real files,
+         symbols, patterns, and project validation commands.
+      3. If `prd.md` already exists, preserve all its requirements and enrich only
+         missing implementation context. Otherwise create it with problem, goals,
+         non-goals, user flow, requirements, technical context, risks, and validation.
+      4. Create `prd.json` with one flat `userStories` array. Each story must include
+         `id`, `title`, `description`, `acceptanceCriteria`, `technicalNotes`,
+         `dependsOn`, `priority`, `passes: false`, and `notes`.
+      5. Size each story for one Ralph iteration. Dependencies must reference existing
+         story IDs, remain acyclic, and never require a lower-priority story.
+      6. Make every acceptance criterion observable and include the target project's
+         actual checks rather than assuming Bun.
+      7. Validate that both files exist and that `prd.json` parses before finishing.
+
+      Do not stage, commit, push, stash, reset, clean, or create/update a pull request.
+      Leave the generated files in the checkout for the caller-owned lifecycle.
+
+      Finish with:
+      ```
+      PRD_DIR=$detect-input.output.prd_dir
+      FILES_CREATED=prd.md,prd.json
+      ```
+
+  # Complements generate-prd so validation waits for the selected path to finish.
+  - id: ready-prd
+    depends_on: [detect-input]
+    when: "$detect-input.output.input_type == 'ready'"
+    bash: |
+      set -e
+      PRD_DIR=$detect-input.output.prd_dir
+      test -f "$PRD_DIR/prd.md"
+      test -f "$PRD_DIR/prd.json"
+      echo "PRD ready: $PRD_DIR"
 
   # ═══════════════════════════════════════════════════════════════
   # NODE 3: VALIDATE & SETUP
-  # Finds PRD directory, reads all state files, installs deps,
-  # verifies the environment is ready for implementation.
+  # Reads the detected PRD state and installs dependencies.
   # ═══════════════════════════════════════════════════════════════
 
   - id: validate-prd
-    depends_on: [detect-input, generate-prd]
+    depends_on: [ready-prd, generate-prd]
     trigger_rule: one_success
     bash: |
       set -e
 
       # ── 1. Find PRD directory (passed from detect-input) ──────
       PRD_DIR=$detect-input.output.prd_dir
-
-      # detect-input already resolved prd_dir (any co-located location). Trust it;
-      # fail clearly if missing/incomplete — do NOT guess (no global .archon/ralph scan).
       if [ -z "$PRD_DIR" ] || [ ! -f "$PRD_DIR/prd.json" ]; then
         echo "ERROR: no prd.json in detect-input's prd_dir ('$PRD_DIR')." >&2
         exit 1
@@ -148,11 +172,8 @@ nodes:
         pnpm install --frozen-lockfile 2>&1 | tail -3
       fi
 
-      # ── 3. Git state ──────────────────────────────────────────
-      echo "BRANCH=$(git branch --show-current)"
-      echo "GIT_ROOT=$(git rev-parse --show-toplevel)"
 
-      # ── 4. Output PRD context ─────────────────────────────────
+      # ── 3. Output PRD context ─────────────────────────────────
       echo "PRD_DIR=$PRD_DIR"
       echo "=== PRD_JSON_START ==="
       cat "$PRD_DIR/prd.json"
@@ -183,7 +204,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
   # NODE 4: RALPH IMPLEMENTATION LOOP
   # Fresh context each iteration. Reads PRD state from disk.
-  # One story per iteration. Validates before committing.
+  # One story per iteration. Validates and leaves changes for the parent.
   # ═══════════════════════════════════════════════════════════════
 
   - id: implement
@@ -195,28 +216,33 @@ nodes:
     output_format:
       type: object
       properties:
+        terminal:
+          type: boolean
+          description: true when all stories pass or a blocker must be handed to the parent; false when another child iteration should run.
         done:
           type: boolean
-          description: true ONLY when every story in prd.json has passes:true AND the PR has been created; false on every other iteration.
+          description: true ONLY when every story in prd.json has passes:true.
         mode:
           type: string
-          description: this iteration's mode — "implement" | "unblock" | "blocked".
+          description: this iteration's mode — "implement" or "blocked".
         story_id:
           type: string
           description: the story worked this iteration, if any.
         note:
           type: string
-          description: short carry-forward for the next iteration — blocker fingerprint, attempt count, or next step.
+          description: short carry-forward for the next iteration or the parent handoff.
       required:
+        - terminal
         - done
     loop:
       prompt: |
         # Ralph Agent — Autonomous Story Implementation
 
         You are an autonomous coding agent in a FRESH session — you have no memory of previous iterations.
-        Your job: Read state from disk, implement ONE story, validate, commit, update tracking, exit.
+        Your job: Read state from disk, implement ONE story, validate, update tracking, exit.
 
-        **Golden Rule**: If validation fails, fix it before committing. Never commit broken code. Never skip validation.
+        **Golden Rule**: If validation fails, fix it before marking the story passed. Never skip validation.
+        Do not stage, commit, push, or create/update a pull request. The parent workflow owns that lifecycle.
 
         ---
 
@@ -241,6 +267,8 @@ nodes:
         ### 0.2 Read Current State (from disk, not from context above)
 
         The context above is a snapshot from before the loop started. Previous iterations may have changed files.
+        Accumulated uncommitted changes from earlier iterations are expected and parent-owned.
+        Preserve them; never discard, stage, commit, stash, reset, or clean them.
         **You MUST re-read from disk to get the current state:**
 
         1. **Read `{prd-dir}/progress.txt`** — your only link to previous iterations
@@ -278,7 +306,7 @@ nodes:
 
         **If no eligible stories exist** (every not-passing story is gated by a
         dependency that itself won't pass) → this is a blocker to RESOLVE, not a
-        stopping point. Do NOT end idle. Run the **UNBLOCK PROTOCOL** (below):
+        stopping point. Do NOT end idle. Run the **BLOCKER PROTOCOL** (below):
         usually a dependency was left `passes: false` though its code is done, or a
         `dependsOn` is wrong/circular. Fix the real state, then continue — the loop
         never idles on a blocker, it removes the blocker and keeps going.
@@ -321,8 +349,8 @@ nodes:
         - Go (`go.mod`) → `go build` / `go vet` / `go test ./...` / `gofmt -l`
         - Python (`pyproject.toml`) → the repo's configured typecheck / lint / test / format
         Prefer the exact commands the story's `acceptanceCriteria` / `technicalNotes`
-        name. Follow the project's own build/publish policy (e.g. a clean-before-PR
-        step) — do NOT override it with loop-specific rules.
+        name. Follow the project's own build policy; do not introduce loop-specific
+        commands.
 
         ### 2.1 Explore Before Coding
 
@@ -350,10 +378,9 @@ nodes:
         - Over-engineer — do the simplest thing that satisfies the criteria
 
         **Blocked exception:** these DON'T rules (and "don't fix unrelated code" in
-        Phase 3) govern NORMAL implementation. When genuinely blocked (see UNBLOCK
-        PROTOCOL), you MAY apply the minimal proven fix that clears the blocker —
-        only as a separate `chore(unblock):` commit, and NEVER by editing or
-        weakening the acceptance criteria.
+        Phase 3) govern normal implementation. If a blocker is outside the selected
+        story, record it using the BLOCKER PROTOCOL below. Do not expand scope or
+        mutate Git state to route around it.
 
         ### 2.3 Verify Build After Each File
 
@@ -395,7 +422,7 @@ nodes:
         1. Read the failure output
         2. Determine: bug in your implementation or pre-existing failure?
         3. If your bug → fix the implementation (not the test)
-        4. If pre-existing → note it; don't fix unrelated tests UNLESS it blocks this story's acceptance gate (then use the UNBLOCK PROTOCOL)
+        4. If pre-existing → note it; don't fix unrelated tests. If it blocks this story's acceptance gate, use the BLOCKER PROTOCOL.
         5. Re-run tests
         6. Repeat until green
 
@@ -421,53 +448,19 @@ nodes:
 
         ---
 
-        ## Phase 4: COMMIT — Save Changes
+        ## Phase 4: HANDOFF — Preserve Changes for the Parent
 
-        ### 4.1 Stage Only Files You Edited
+        Do not stage or commit any file. Leave the validated implementation and
+        tracking-file changes in the checkout for the parent workflow.
 
-        Stage **only** the files you actually edited for this story — never `git add -A`, `git add .`, or `git add -u`. List them by name:
-
-        ```bash
-        git add path/to/file1 path/to/file2 ...
-        git status --porcelain  # verify nothing scratch/review/PR-body is staged
-        git diff --cached --stat
-        ```
-
-        **Never stage** scratch / review / PR-body artifacts, even if they show up in `git status`:
-
-        - `.pr-body.md`, `pr-body.md`, `*.scratch.md`, `*.tmp.md`
-        - `review/`, `*-report.md` at the repo root
-        - Anything under `$ARTIFACTS_DIR`
-        - Repo-local Archon telemetry: `.archon/artifacts/`, `.archon/logs/`, `.archon/state/` (local-only — never in git)
-
-        Verify only expected files are staged. If unexpected files appear, investigate before committing.
-
-        ### 4.2 Write Commit Message
-
-        ```bash
-        git commit -m "$(cat <<'EOF'
-        feat: {story-title}
-
-        Implements {story-id} from PRD.
-
-        Changes:
-        - {change 1}
-        - {change 2}
-        - {change 3}
-        EOF
-        )"
-        ```
-
-        **Commit message rules:**
-        - Prefix: `feat:` for features, `fix:` for bugs, `refactor:` for refactors
-        - Title: the story title (not the PRD name)
-        - Body: list the actual changes made
-        - Do NOT include AI attribution
+        Record the exact files changed and the validation evidence in
+        `progress.txt`. The parent uses that evidence when it commits and creates
+        the pull request.
 
         **PHASE_4_CHECKPOINT:**
-        - [ ] Only expected files committed
-        - [ ] Commit message is clear and accurate
-        - [ ] Working directory is clean after commit
+        - [ ] No Git staging, commit, push, or PR operation performed
+        - [ ] Only files required by the selected story were changed
+        - [ ] Validation evidence is ready for progress tracking
 
         ---
 
@@ -549,25 +542,17 @@ nodes:
 
         ### 6.2 If ALL Stories Pass
 
-        1. **Push the branch:**
-           ```bash
-           git push -u origin HEAD
-           ```
+        Signal implementation completion via the structured output declared by this
+        node. Set `terminal: true`, `done: true`, `mode: "implement"`, the finished
+        `story_id`, and a short handoff note.
 
-        2. **Read the PR template:**
-           Look for a PR template in the repo — check `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and `docs/pull_request_template.md`. Read whichever one exists.
-
-           If a template was found, fill in **every section** using the context from this implementation. Don't skip sections or leave placeholders — fill them honestly based on the actual changes (summary, architecture, validation evidence, security, compatibility, rollback, etc.).
-
-           If no template was found, write a summary with: problem, what changed, stories table, and validation evidence.
-
-        3. **Create a draft PR** by resolving `PR_REPO` from `$PR_REMOTE`, computing `PR_HEAD`, and running `gh pr create --repo "$PR_REPO" --draft --base "$BASE_BRANCH" --head "$PR_HEAD" --title "feat: {PRD feature name}"` with the filled-in template as the body. Use a HEREDOC for the body.
-
-        4. **Signal completion via your structured output.** This iteration's final output MUST be the JSON object declared by this node's `output_format`. Set `done: true` (with `mode: "implement"`, the finished `story_id`, and a short `note`) — valid ONLY here, after the PR is created with every story passing.
+        Do not stage, commit, push, or create/update a pull request. The parent
+        workflow performs those actions after any downstream review or convergence
+        work completes.
 
         ### 6.3 If Stories Remain
 
-        Report status, then end the iteration. Your final output MUST be the JSON object declared by `output_format` with `done: false` (`mode` = "implement" | "unblock" | "blocked", `story_id` = the story you worked, `note` = fingerprint/attempt or next step). Human-readable summary:
+        Report status, then end the iteration. Return `terminal: false`, `done: false`, `mode: "implement"`, the `story_id`, and the next-step note. Human-readable summary:
         ```
         ── Iteration Complete ──────────────────────────────
         Story completed: {story-id} — {story-title}
@@ -583,7 +568,7 @@ nodes:
         ## Handling Edge Cases
 
         ### Validation fails repeatedly
-        - If the project's checks or tests fail 3+ times on the SAME root cause, stop repeating the same attempt — you are blocked. Enter the **UNBLOCK PROTOCOL** below.
+        - If the project's checks or tests fail 3+ times on the SAME root cause, stop repeating the same attempt — you are blocked. Enter the **BLOCKER PROTOCOL** below.
         - Re-read the acceptance criteria first — confirm you are running the AC's EXACT command correctly (you may be misreading the requirement).
 
         ### Story is too large for one iteration
@@ -593,55 +578,39 @@ nodes:
         - The next iteration will pick it up and continue
 
         ### Pre-existing test/lint failures
-        - During normal implementation, note pre-existing failures but don't fix unrelated code; scope your test/lint runs to your change where the toolchain allows.
-        - BUT if a pre-existing failure BLOCKS this story's acceptance gate, it is a blocker — do not route around it: use the **UNBLOCK PROTOCOL** (fix the proven cause, then continue).
+        - Note failures that are unrelated to the selected story; do not fix them.
+        - If such a failure blocks an exact acceptance gate, use the BLOCKER
+          PROTOCOL below and leave the story at `passes: false`.
 
         ### Dependency setup fails
         - JS installs deps from a lockfile; most other toolchains (cargo, go, …)
-          fetch automatically on first build — there may be no separate install step
-        - If fetch/install fails, check network / registry access and note it in progress.txt
-
-        ### Git state is dirty at iteration start
-        - This shouldn't happen (fresh worktree), but if it does:
-        - Run `git status` to understand what's dirty
-        - If it's leftover from a failed previous iteration, commit or stash
-        - Never discard changes silently
+          fetch automatically on first build — there may be no separate install step.
+        - If fetch/install fails, record the failure in progress.txt.
 
         ### Blocked stories — all remaining have unmet dependencies
-        - This is a blocker to RESOLVE, not a stopping point — enter the **UNBLOCK PROTOCOL**.
+        - This is a blocker to record, not a reason to alter unrelated code — enter the **BLOCKER PROTOCOL**.
         - Report the dependency chain; check whether a dependency was incorrectly left `passes: false`.
         - If a dependency's code genuinely satisfies its own gate, re-run THAT gate to confirm, then set its `passes: true` in prd.json. If a `dependsOn` is wrong/circular, correct it. Then continue.
 
         ---
 
-        ## UNBLOCK PROTOCOL — Resolve blockers, NEVER stall
+        ## BLOCKER PROTOCOL — Record, Do Not Hide
 
-        This loop has no "give up and wait" state. A story that cannot reach
-        `passes: true` under the current constraints is a **blocker to remove**, not
-        a reason to end the run or burn iterations. When blocked, resolve it IN THIS
-        ITERATION, then end normally so the next fresh iteration continues on the
-        now-unblocked story.
+        A story is blocked when an exact acceptance gate cannot pass because of a
+        cause outside the story, missing credentials or services, or a contradictory
+        requirement.
 
-        **You are blocked** if any holds for the selected story:
-        - The same acceptance gate failed with the same root cause across 2+ recorded attempts (see the Blocker Ledger in progress.txt).
-        - A gate/AC fails on a cause OUTSIDE this story's own changes (e.g. a pre-existing lint/test failure in a sibling file, or a package-wide gate hitting existing debt).
-        - Every not-passing story is gated by a dependency that won't pass.
+        When blocked:
+        1. Capture the exact failing command and its stable error fingerprint.
+        2. Confirm the failure is outside the selected story's files and criteria.
+        3. Do not weaken acceptance criteria or fix unrelated code.
+        4. Leave the story at `passes: false`.
+        5. Append a `BLOCKER` entry to progress.txt with the evidence and required
+           next action.
+        6. Return `terminal: true`, `done: false`, `mode: "blocked"`, and a concise
+           handoff note.
 
-        **Hard limits — never cross these to get green:**
-        - NEVER edit, narrow, or weaken a story's `acceptanceCriteria` or any requirement to make it pass. The gate is fixed; you do not grade your own homework.
-        - NEVER blanket-expand scope or `git add -A`. No "while I'm here" changes.
-        - NEVER set `passes: true` unless the story's EXACT, unmodified acceptance gate passes.
-
-        **Resolve it (the only sanctioned action) — order matters:**
-        1. **Capture the blocking failures WITH your story present.** Run the exact acceptance gate and record each failure's FINGERPRINT — file:line + rule/message (not just "it failed").
-        2. **Stash ALL story work, including new files** — `git stash push --include-untracked -m "ralph-unblock:<story-id>"`; confirm `git status --porcelain` prints NOTHING (a truly clean base). Remember this stash ref.
-        3. **Re-run the SAME gate on the clean base** and record its fingerprints.
-        4. **Qualify the blocker — this is the crucial test.** A failure is an UNBLOCK case ONLY if the SAME fingerprint appears in BOTH runs AND its culprit file is OUTSIDE this story's target/diff. A failure that appears only with your changes, or lives in a file this story edits/creates, is YOURS → `git stash pop` your ref and fix it in Phase 2. (A gate failing on the base merely because the story isn't implemented yet is NOT a blocker — most ACs fail on base for exactly that reason.)
-        5. **Fix ONLY the qualified pre-existing culprit — story still stashed.** Edit just those exact lines (smallest change; do not refactor or weaken the gate — keep `-D warnings`, etc.). Stage those paths BY NAME (never `git add -A`/`.`/`-u`) and commit `chore(unblock): fix pre-existing <thing> blocking <gate>` — a commit containing ZERO story changes. Do NOT revert it later.
-        6. **Confirm on the base, then restore.** Re-run the gate on the base — the qualified fingerprints must be gone. Then `git stash pop` the ref from step 2 and re-run the EXACT acceptance gate with your story present; set `passes: true` only when it is green on its own terms.
-        7. **Record it** in the Blocker Ledger (progress.txt) so future fresh iterations see the proof and the action instead of repeating the attempt.
-
-        **If a minimal proven fix cannot clear the gate** — the blocker needs access or a decision you genuinely cannot obtain (missing credentials, an external service, a contradictory requirement only a human can reconcile) — record it fully in the Blocker Ledger and end the iteration honestly WITHOUT faking `passes`. Do not spin on it; `max_iterations` remains only a runaway safety cap, not the normal path.
+        `terminal: true` exits the child loop so the parent can resolve the blocker.
 
         ---
 
@@ -693,54 +662,26 @@ nodes:
 
         ### Blocker Ledger (in progress.txt)
 
-        Append one line per blocked encounter so fresh iterations don't repeat a failed attempt:
+        Append one line per blocked encounter so the parent receives durable evidence:
 
         ```
-        BLOCKER {story-id} | gate=<exact command> | cause=<root cause + proof> | action=<fix applied, or why still blocked> | {date}
+        BLOCKER {story-id} | gate=<exact command> | cause=<root cause + proof> | action=<required parent action> | {date}
         ```
 
         ---
-
         ## Success Criteria
 
+
         - **ONE_STORY**: Exactly one story implemented per iteration
-        - **VALIDATED**: the project's own checks (build/typecheck + lint + tests + format) all pass before commit
-        - **COMMITTED**: Changes committed with clear message
+        - **VALIDATED**: the project's own checks (build/typecheck + lint + tests + format) pass before marking a story complete
+        - **UNCOMMITTED_HANDOFF**: No staging, commit, push, or PR operation is performed
         - **TRACKED**: prd.json and progress.txt updated accurately
         - **PATTERNS_SHARED**: Discovered patterns added to progress.txt for future iterations
-        - **NO_SCOPE_CREEP**: No unrelated changes, no refactoring, no "improvements" — the ONLY exception is a proven, minimal, separately-committed `chore(unblock):` fix per the UNBLOCK PROTOCOL; never an acceptance-criteria edit
-      until_field: done
+        - **NO_SCOPE_CREEP**: No unrelated changes, refactoring, or improvements
+      until_field: terminal
       max_iterations: 35
       fresh_context: true
 
-  - id: verify-pr-base
-    bash: |
-      set -euo pipefail
-      # Pin to the origin remote — in a fork clone, gh otherwise queries the upstream parent
-      ORIGIN_REPO=$(git remote get-url origin | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##')
-      HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-      PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
-      ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
-      ORIGIN_OWNER=${ORIGIN_REPO%%/*}
-      if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
-        PR_HEAD="$HEAD_BRANCH"
-      else
-        PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
-      fi
-      PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number')
-      if [ -z "$PR_NUMBER" ]; then
-        echo "No open PR found for branch $HEAD_BRANCH" >&2
-        exit 1
-      fi
-      EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
-      if [ "$ACTUAL" != "$EXPECTED" ]; then
-        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --repo "$PR_REPO" --base "$EXPECTED"
-      else
-        echo "PR base verified: $EXPECTED"
-      fi
-    depends_on: [implement]
 
   # ═══════════════════════════════════════════════════════════════
   # NODE 5: COMPLETION REPORT
@@ -748,7 +689,8 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: report
-    depends_on: [verify-pr-base]
+    depends_on: [implement]
+    when: "$implement.output.done == true"
     provider: claude
     effort: medium
     model: sonnet
@@ -781,46 +723,18 @@ nodes:
       cat {prd-dir}/progress.txt
       ```
 
-      ### 2. Gather Git Info
-
-      ```bash
-      git log --oneline --no-merges $(git merge-base HEAD $BASE_BRANCH)..HEAD
-      git diff --stat $(git merge-base HEAD $BASE_BRANCH)..HEAD
-      ```
-
-      ### 3. Check PR Status
-
-      ```bash
-      PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
-      HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-      ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
-      ORIGIN_OWNER=${ORIGIN_REPO%%/*}
-      if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
-        PR_HEAD="$HEAD_BRANCH"
-      else
-        PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
-      fi
-      PR_NUMBER=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number -q '.[0].number')
-      if [ -n "$PR_NUMBER" ]; then
-        gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json url,number,state
-      else
-        echo "No PR found"
-      fi
-      ```
-
-      ### 4. Generate Report
+      ### 2. Generate Report
 
       Output this format:
 
       ```
       ═══════════════════════════════════════════════════════
-      RALPH DAG — COMPLETION REPORT
+      RALPH DAG — IMPLEMENTATION REPORT
       ═══════════════════════════════════════════════════════
 
       Feature: {feature name from prd.json}
       PRD: {prd-dir}
-      Branch: {branch name}
-      PR: {url or "not created"}
+      Lifecycle: implementation complete; parent owns commit, push, and PR
 
       ── Stories ─────────────────────────────────────────
 
@@ -830,13 +744,9 @@ nodes:
 
       Total: {N}/{M} stories passing
 
-      ── Commits ─────────────────────────────────────────
+      ── Files Changed ───────────────────────────────────
 
-      {git log output}
-
-      ── Files Changed ─────────────────────────────────
-
-      {git diff --stat output}
+      {from iteration entries in progress.txt, or "None"}
 
       ── Patterns Discovered ─────────────────────────────
 

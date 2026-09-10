@@ -1,15 +1,15 @@
 ---
 description: >
-  One project-aware Ralph story iteration. Intentional no-PR adapted fork of the
-  implement loop in archon-ralph-dag-project-aware (that workflow is not migrated).
-  Do not create or update a pull request.
+  One parent-owned project-aware Ralph story iteration that validates and commits
+  the selected story but never creates or updates a pull request.
 argument-hint: (none - reads PRD dir from $ARTIFACTS_DIR/superpowers/prd-dir.txt)
 ---
 
-# Ralph Agent — Autonomous Story Implementation (no PR)
+# Ralph Agent — Parent-Owned Story Implementation (no PR)
 
-This command is an **intentional adapted fork** of the `implement` loop prompt in
-`archon-ralph-dag-project-aware`. It is not a shared drop-in for that workflow.
+Use this command only when the containing workflow intentionally owns per-story
+commits. The reusable `archon-ralph-dag-project-aware` child leaves all Git and PR
+lifecycle work to its parent instead.
 
 You are an autonomous coding agent in a FRESH session — you have no memory of previous iterations.
 Your job: Read state from disk, implement ONE story, validate, commit, update tracking, exit.

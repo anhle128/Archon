@@ -6,11 +6,10 @@ description: |
             "ralph one task per loop", "speckit project-aware ralph".
   Does: Specify → clarify (Plannotator when questions exist) → red-team
         (Plannotator) → plan → tasks → analyze → convert each unchecked Tnnn
-        into one Ralph userStory → archon-ralph-dag-project-aware once
+        into one Ralph userStory → archon-ralph-dag-project-aware
         (isolation: inherit; one story per loop) → sync-back → converge.
-        Converge FAIL: Plannotator then no-PR project-aware iteration
-        (archon-ralph-project-aware-iteration) so the child is not re-invoked.
-        Exhausted: one final no-PR Ralph pass → BMAD sprint status → PR.
+        Converge FAIL: review tasks in Plannotator, then rerun the same Ralph chain.
+        The parent workflow owns the final commit, push, and pull request.
   NOT for: The batch Ralph loop (speckit-ralph-native-feature / tasks-to-prd.sh).
   NOT for: Quick one-file fixes, bug fixes, PR reviews.
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
@@ -585,8 +584,8 @@ nodes:
     skills: [speckit-analyzebatch]
     
   # One unchecked Tnnn → one project-aware userStory. Do NOT call tasks-to-prd.sh
-  # (that script batches by Phase/###). Initial implement is the child workflow
-  # once. Converge retry/final use the no-PR project-aware iteration command.
+  # (that script batches by Phase/###). The same chain runs initially and after
+  # each approved convergence review.
   - id: ralph-tasks-to-ralph
     script: &speckit_tasks_to_ralph |
       import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -737,7 +736,7 @@ nodes:
           "Phase: " + t.phaseTitle,
           t.subgroupTitle ? "Slice: " + t.subgroupTitle : "",
           "Read " + specRel + "/spec.md, " + specRel + "/plan.md, and the " + t.id + " line in " + specRel + "/tasks.md.",
-          "Implement ONLY this task. Finish, update prd.json passes, commit, and exit the iteration.",
+          "Implement ONLY this task. Finish, update prd.json passes, and hand the validated changes to the parent.",
         ].filter((part: string) => part.length > 0);
         return {
           id: t.id,
@@ -770,7 +769,7 @@ nodes:
           "Spec directory: `" + specRel + "`",
           "",
           "Each Ralph iteration implements **exactly one** `tasks.md` task (one `userStories[]` row).",
-          "Do not batch Phase or slice groups. Finish the selected story, update `prd.json`, commit, and exit.",
+          "Do not batch Phase or slice groups. Finish the selected story, update `prd.json`, and leave Git lifecycle work to the parent.",
           "",
           "## Stories",
           "",
@@ -788,9 +787,7 @@ nodes:
       const artifactsDir = process.env.ARTIFACTS_DIR;
       if (!artifactsDir) throw new Error("ARTIFACTS_DIR is required");
       mkdirSync(join(artifactsDir, "speckit"), { recursive: true });
-      mkdirSync(join(artifactsDir, "superpowers"), { recursive: true });
       writeFileSync(join(artifactsDir, "speckit", "prd-dir.txt"), resolve(featureDir) + "\n");
-      writeFileSync(join(artifactsDir, "superpowers", "prd-dir.txt"), resolve(featureDir) + "\n");
       
       const result: ConvertResult = {
         prd_dir: resolve(featureDir),
@@ -803,6 +800,8 @@ nodes:
     timeout: 60000
     depends_on:
       - analyze-apply
+      - speckit-converge-review-gate
+    trigger_rule: one_success
 
 
   - id: ralph-implement
@@ -812,6 +811,19 @@ nodes:
     depends_on:
       - ralph-tasks-to-ralph
     when: "$ralph-tasks-to-ralph.output.has_tasks == true"
+
+  - id: ralph-implementation-complete
+    depends_on: [ralph-implement]
+    when: "$ralph-implement.output.done == true"
+    bash: |
+      echo "Ralph implementation complete; continuing parent convergence."
+
+  - id: ralph-implementation-blocked
+    depends_on: [ralph-implement]
+    when: "$ralph-implement.output.done == false"
+    bash: |
+      echo "Ralph implementation returned a blocker; stopping before convergence and PR." >&2
+      exit 1
 
   - id: ralph-sync-back
     script: &speckit_ralph_sync |
@@ -897,8 +909,9 @@ nodes:
     runtime: bun
     timeout: 60000
     depends_on:
-      - ralph-implement
-    when: "$ralph-tasks-to-ralph.output.has_tasks == true"
+      - ralph-implementation-complete
+      - ralph-no-tasks
+    trigger_rule: one_success
 
   - id: ralph-no-tasks
     bash: |
@@ -915,8 +928,6 @@ nodes:
       Return FAIL when it added one or more tasks to tasks.md .
     depends_on:
       - ralph-sync-back
-      - ralph-no-tasks
-    trigger_rule: one_success
     provider: codex
     effort: xhigh
     model: gpt-5.6-sol
@@ -934,7 +945,7 @@ nodes:
         - tasks_added
     output_type: speckit-convergence
 
-  # PASS → PR preparation; FAIL → reviewed Ralph retry; exhausted → one final Ralph pass → PR preparation.
+  # PASS → PR preparation; FAIL → reviewed rerun of the same Ralph chain; exhausted → one final Ralph pass.
   - id: speckit-converge-gate
     depends_on: [speckit-converge]
     route_loop:
@@ -1007,142 +1018,42 @@ nodes:
           7. Print only the absolute path to the updated `tasks.md`.
              Do not add a Markdown fence or commentary.
 
-  - id: ralph-retry-tasks-to-ralph
-    script: *speckit_tasks_to_ralph
-    runtime: bun
-    timeout: 60000
-    depends_on: [speckit-converge-review-gate]
-
-
-  - id: ralph-retry-implement
-    depends_on: [ralph-retry-tasks-to-ralph]
-    when: "$ralph-retry-tasks-to-ralph.output.has_tasks == true"
-    idle_timeout: 3600000
-    provider: omp
-    effort: high
-    model: xai-oauth/grok-4.5
-    output_format:
-      type: object
-      properties:
-        done:
-          type: boolean
-        mode:
-          type: string
-        story_id:
-          type: string
-        note:
-          type: string
-      required: [done]
-    loop:
-      command: archon-ralph-project-aware-iteration
-      fresh_context: true
-      max_iterations: 35
-      until_bash: |
-        set -euo pipefail
-        PRD_FILE="${ARTIFACTS_DIR}/speckit/prd-dir.txt"
-        [ -f "$PRD_FILE" ] || exit 1
-        PRD_DIR=$(tr -d '[:space:]' < "$PRD_FILE")
-        [ -n "$PRD_DIR" ] && [ -f "$PRD_DIR/prd.json" ] || exit 1
-        jq -e '.userStories | type == "array" and all(.[]; .passes == true)' "$PRD_DIR/prd.json" >/dev/null
-
-  - id: ralph-retry-sync-back
-    script: *speckit_ralph_sync
-    runtime: bun
-    timeout: 60000
-    depends_on:
-      - ralph-retry-implement
-    when: "$ralph-retry-tasks-to-ralph.output.has_tasks == true"
-
-  - id: ralph-retry-no-tasks
-    bash: |
-      echo "no unchecked Tnnn tasks; skipping retry Ralph implement"
-    depends_on:
-      - ralph-retry-tasks-to-ralph
-    when: "$ralph-retry-tasks-to-ralph.output.has_tasks == false"
-
-  - id: speckit-converge-retry
-    prompt: |
-      Read .specify/feature.json to resolve <feature_directory>.
-      run speckit-converge
-      Return PASS only when there are no any problem.
-      Return FAIL when it added one or more tasks to tasks.md .
-    depends_on:
-      - ralph-retry-sync-back
-      - ralph-retry-no-tasks
-    trigger_rule: one_success
-    provider: codex
-    effort: xhigh
-    model: gpt-5.6-sol
-    context: fresh
-    output_format:
-      type: object
-      properties:
-        gate:
-          type: string
-          enum: [PASS, FAIL]
-        tasks_added:
-          type: number
-      required:
-        - gate
-        - tasks_added
-    output_type: speckit-convergence
-
-  - id: speckit-converge-retry-gate
-    depends_on: [speckit-converge-retry]
-    route_loop:
-      condition: "$speckit-converge-retry.output.gate == 'PASS'"
-      max_iterations: 3
-      routes:
-        positive: cargo-clean-before-pr
-        negative: speckit-converge-review-gate
-        exhausted: speckit-final-ralph-tasks-to-ralph
 
   - id: speckit-final-ralph-tasks-to-ralph
     script: *speckit_tasks_to_ralph
     runtime: bun
     timeout: 60000
-    depends_on: [speckit-converge-gate, speckit-converge-retry-gate]
-    trigger_rule: one_success
+    depends_on: [speckit-converge-gate]
 
 
   - id: speckit-final-ralph-implement
+    workflow: archon-ralph-dag-project-aware
+    input: '$speckit-final-ralph-tasks-to-ralph.output.prd_dir'
+    isolation: inherit
     depends_on: [speckit-final-ralph-tasks-to-ralph]
     when: "$speckit-final-ralph-tasks-to-ralph.output.has_tasks == true"
-    idle_timeout: 3600000
-    provider: omp
-    effort: high
-    model: xai-oauth/grok-4.5
-    output_format:
-      type: object
-      properties:
-        done:
-          type: boolean
-        mode:
-          type: string
-        story_id:
-          type: string
-        note:
-          type: string
-      required: [done]
-    loop:
-      command: archon-ralph-project-aware-iteration
-      fresh_context: true
-      max_iterations: 35
-      until_bash: |
-        set -euo pipefail
-        PRD_FILE="${ARTIFACTS_DIR}/speckit/prd-dir.txt"
-        [ -f "$PRD_FILE" ] || exit 1
-        PRD_DIR=$(tr -d '[:space:]' < "$PRD_FILE")
-        [ -n "$PRD_DIR" ] && [ -f "$PRD_DIR/prd.json" ] || exit 1
-        jq -e '.userStories | type == "array" and all(.[]; .passes == true)' "$PRD_DIR/prd.json" >/dev/null
+
+  - id: speckit-final-ralph-implementation-complete
+    depends_on: [speckit-final-ralph-implement]
+    when: "$speckit-final-ralph-implement.output.done == true"
+    bash: |
+      echo "Final Ralph implementation complete; continuing parent finalization."
+
+  - id: speckit-final-ralph-implementation-blocked
+    depends_on: [speckit-final-ralph-implement]
+    when: "$speckit-final-ralph-implement.output.done == false"
+    bash: |
+      echo "Final Ralph implementation returned a blocker; stopping before PR." >&2
+      exit 1
 
   - id: speckit-final-ralph-sync-back
     script: *speckit_ralph_sync
     runtime: bun
     timeout: 60000
     depends_on:
-      - speckit-final-ralph-implement
-    when: "$speckit-final-ralph-tasks-to-ralph.output.has_tasks == true"
+      - speckit-final-ralph-implementation-complete
+      - speckit-final-ralph-no-tasks
+    trigger_rule: one_success
 
   - id: speckit-final-ralph-no-tasks
     bash: |
@@ -1156,8 +1067,7 @@ nodes:
       if [ -f Cargo.toml ]; then
         cargo clean
       fi
-    depends_on: [speckit-converge-gate, speckit-converge-retry-gate]
-    trigger_rule: one_success
+    depends_on: [speckit-converge-gate]
 
 
   - id: speckit-final-cargo-clean-before-pr
@@ -1167,8 +1077,6 @@ nodes:
       fi
     depends_on:
       - speckit-final-ralph-sync-back
-      - speckit-final-ralph-no-tasks
-    trigger_rule: one_success
 
 
   - id: update-bmad-sprint-status
@@ -1221,7 +1129,7 @@ nodes:
       fi
       git diff --cached --name-status
       if git diff --cached --quiet; then
-        echo "no parent-owned changes to commit"
+        echo "no parent-owned metadata changes to commit"
       else
         git commit -m "chore: speckit ralph sync-back and sprint status"
       fi
@@ -1239,54 +1147,15 @@ nodes:
       # shellcheck disable=SC2086
       leftover=$(git status --porcelain -- $OWNED)
       if [ -n "$leftover" ]; then
-        echo "parent-owned paths still dirty after finalize:" >&2
+        echo "parent-owned metadata paths still dirty after finalize:" >&2
         printf '%s\n' "$leftover" >&2
         exit 1
       fi
-
     depends_on: [update-bmad-sprint-status]
-
-  - id: resolve-existing-pr
-    bash: |
-      set -euo pipefail
-      ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
-      PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
-      HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-      ORIGIN_OWNER=${ORIGIN_REPO%%/*}
-      if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
-        PR_HEAD="$HEAD_BRANCH"
-      else
-        PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
-      fi
-      PR_JSON=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number,url -q '.[0] // empty')
-      if [ -n "$PR_JSON" ]; then
-        PR_NUMBER=$(printf '%s' "$PR_JSON" | jq -r '.number')
-        PR_URL=$(printf '%s' "$PR_JSON" | jq -r '.url')
-        EXPECTED="$BASE_BRANCH"
-        ACTUAL=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
-        if [ "$ACTUAL" != "$EXPECTED" ]; then
-          gh pr edit "$PR_NUMBER" --repo "$PR_REPO" --base "$EXPECTED"
-        fi
-        jq -n --arg status found --arg number "$PR_NUMBER" --arg url "$PR_URL" \
-          '{status:$status,number:$number,url:$url}'
-      else
-        jq -n '{status:"missing",number:"",url:""}'
-      fi
-    depends_on: [finalize-parent-commits]
-
-  - id: report-existing-pr
-    bash: |
-      set -euo pipefail
-      url=$resolve-existing-pr.output.url
-      printf 'Existing PR for this head: %s\n' "$url"
-    depends_on: [resolve-existing-pr]
-    when: "$resolve-existing-pr.output.status == 'found'"
-    output_type: pull-request
 
   - id: create-pull-request
     command: archon-create-pr
-    depends_on: [resolve-existing-pr]
-    when: "$resolve-existing-pr.output.status == 'missing'"
+    depends_on: [finalize-parent-commits]
     context: fresh
     provider: omp
     model: cursor/composer-2.5
