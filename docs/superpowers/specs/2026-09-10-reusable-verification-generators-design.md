@@ -1,6 +1,6 @@
 # Reusable Verification Skill Generators
 
-Status: design proposal for review. The user approved the architecture and initial coverage policy in conversation; this detailed specification still requires review before implementation.
+Status: design and plugin implementation approved by the user on 2026-09-10, including packaging the new selector generator as a plugin.
 
 ## Objective
 
@@ -186,4 +186,6 @@ Keep transcripts, selections, proof results, scope limitations, and failure anal
 
 V1 delivers the updated `create-verification-skill`, the new `create-select-verify-target-skill`, their necessary references/assets/checks, and qualification evidence from the two projects. No workflow/CI changes, new runner service, product defect fixes, automatic commits of consumer work, PR creation, maintenance migration, or broad framework support matrix are included.
 
-Next gate: the user reviews this detailed design. Only after approval should an implementation plan be written and the generators changed.
+Implementation authorization: the installed generator comes from `oceanlabs-holding/skills`. After the source policy was disclosed, the user authorized plugin edits and explicitly requested the new skill in a plugin too. The source-repository PR required by its `AGENTS.md` is included in authoring delivery. The no-PR boundary above continues to apply to generated skills operating in consumer projects. No merge, marketplace release, or global installation is authorized.
+
+Next gate: qualify both generators in isolation before opening the source PR.
