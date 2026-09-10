@@ -3757,7 +3757,7 @@ nodes:
       expect(nodes.has('speckit-converge-exhausted')).toBe(false);
     });
 
-    it('loads pr-e2e-verify with AXI plan-tests artifacts and an unchanged Playwright run-e2e gate', async () => {
+    it('loads pr-e2e-verify with AXI authoring followed by exact-head catalog proof', async () => {
       const workflowPath = join(
         import.meta.dir,
         '..',
@@ -3795,13 +3795,58 @@ nodes:
         required: ['kind', 'path', 'purpose'],
       });
 
-      const runE2e = nodes.get('run-e2e');
-      expect(runE2e && isBashNode(runE2e)).toBe(true);
-      if (!runE2e || !isBashNode(runE2e)) {
-        throw new Error('pr-e2e-verify run-e2e bash node missing');
+      expect(nodes.has('run-e2e')).toBe(false);
+      expect(nodes.get('gate')?.route_loop?.routes.positive).toBe('commit-evidence');
+
+      const commitEvidence = nodes.get('commit-evidence');
+      expect(commitEvidence && isBashNode(commitEvidence)).toBe(true);
+      if (!commitEvidence || !isBashNode(commitEvidence)) {
+        throw new Error('pr-e2e-verify commit-evidence bash node missing');
       }
-      expect(runE2e.bash).toContain('npm run test:ui');
-      expect(runE2e.bash).not.toContain('chrome-devtools-axi');
+      expect(commitEvidence.bash).toContain('.verification-head-sha');
+      expect(commitEvidence.bash).toContain('headRefOid');
+
+      expect(nodes.get('begin-verify')?.depends_on).toEqual(['commit-evidence']);
+      const select = nodes.get('select-verify-targets');
+      expect(select && isPromptNode(select)).toBe(true);
+      if (!select || !isPromptNode(select)) {
+        throw new Error('pr-e2e-verify selector prompt node missing');
+      }
+      expect(select.skills).toEqual(['select-verify-archon-targets']);
+      expect(select.output_format).toMatchObject({
+        type: 'object',
+        required: [
+          'version',
+          'base_sha',
+          'head_sha',
+          'changed_paths',
+          'affected_behaviors',
+          'coverage_gaps',
+        ],
+      });
+      const prove = nodes.get('prove');
+      expect(prove && isBashNode(prove)).toBe(true);
+      if (!prove || !isBashNode(prove)) {
+        throw new Error('pr-e2e-verify prove bash node missing');
+      }
+      expect(prove.bash).toContain('verify-feature-gate.ts prove');
+      const report = nodes.get('report-pr');
+      expect(report && isBashNode(report)).toBe(true);
+      if (!report || !isBashNode(report)) {
+        throw new Error('pr-e2e-verify report-pr bash node missing');
+      }
+      expect(report.bash).toContain('verify/gate.json');
+      expect(report.bash).not.toContain('e2e-status.txt');
+
+      const githubWorkflow = await readFile(
+        join(import.meta.dir, '..', '..', '..', '.github', 'workflows', 'pr-e2e-verify.yml'),
+        'utf8'
+      );
+      expect(githubWorkflow).toContain('name: PR E2E Verify');
+      expect(githubWorkflow).toContain('branches: [develop]');
+      expect(githubWorkflow).toContain('verify/gate.json');
+      expect(githubWorkflow).toContain('headRefOid');
+      expect(githubWorkflow).not.toContain('e2e-status.txt');
     });
 
     it('loads the native Ralph Speckit workflow with fail-fast preflights', async () => {

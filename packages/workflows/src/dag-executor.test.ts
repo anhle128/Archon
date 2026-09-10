@@ -24367,6 +24367,106 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
   }, 30_000);
 });
 
+describe('bundled feature verification routing', () => {
+  for (const failures of [0, 1, 4]) {
+    it(`routes ${failures} proof failures without publishing an unverified PR`, async (): Promise<void> => {
+      const root = mkdtempSync(join(tmpdir(), 'feature-verify-routing-'));
+      const source = readFileSync(
+        join(
+          import.meta.dir,
+          '../../../.archon/workflows/defaults/archon-superpower-feature-verify-loop.yml'
+        ),
+        'utf8'
+      );
+      const parsed = parseWorkflow(source, 'archon-superpower-feature-verify-loop.yml');
+      if (!parsed.workflow) throw new Error(JSON.stringify(parsed.error));
+      const calls: string[] = [];
+      let attempts = 0;
+      // Preserve the shipped graph and route policy; replace costly AI/proof/PR bodies.
+      const nodes: DagNode[] = parsed.workflow.nodes.map((node): DagNode => {
+        if ('route_loop' in node) return node;
+        const base = {
+          id: node.id,
+          depends_on: node.depends_on,
+          trigger_rule: node.trigger_rule,
+          always_run: node.always_run,
+        };
+        if (node.id === 'verify-blocked') return { ...base, bash: 'exit 1' };
+        return { ...base, prompt: `Fixture ${node.id}`, provider: 'claude' };
+      });
+      mockGetAgentProviderDag.mockImplementation(() => ({
+        sendQuery: mock(function* (
+          _prompt: string,
+          _cwd: string,
+          _resumeSessionId?: string,
+          options?: SendQueryOptions
+        ) {
+          const id = options?.nodeConfig?.nodeId;
+          if (typeof id !== 'string') throw new Error('Fixture node id missing');
+          calls.push(id);
+          if (id === 'begin-verify') attempts++;
+          yield {
+            type: 'assistant' as const,
+            content: id === 'record-verify' ? JSON.stringify(attempts > failures) : id,
+          };
+          yield { type: 'result' as const, sessionId: `fixture-${id}` };
+        }),
+        getType: (): string => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      }));
+      const store = createMockStore();
+      try {
+        await executeDagWorkflow(
+          createMockDeps(store),
+          createMockPlatform(),
+          'feature-verify-fixture',
+          root,
+          {
+            ...parsed.workflow,
+            provider: 'claude',
+            model: undefined,
+            nodes,
+            mutates_checkout: false,
+          },
+          makeWorkflowRun(`feature-verify-${failures}`),
+          'claude',
+          undefined,
+          join(root, 'artifacts'),
+          join(root, 'state'),
+          join(root, 'logs'),
+          'main',
+          'docs/',
+          minimalConfig
+        );
+        const expectedAttempts = Math.min(failures + 1, 4);
+        for (const id of [
+          'begin-verify',
+          'finalize-change',
+          'prepare-verify',
+          'select-verify-targets',
+          'normalize-verify-targets',
+          'prove',
+          'record-verify',
+        ]) {
+          expect(calls.filter(call => call === id)).toHaveLength(expectedAttempts);
+        }
+        expect(calls.filter(id => id === 'fix-verify')).toHaveLength(expectedAttempts - 1);
+        expect(calls.filter(id => id === 'ralph-loop-run')).toHaveLength(1);
+        expect(calls.filter(id => id === 'create-pull-request')).toHaveLength(failures > 3 ? 0 : 1);
+        if (failures > 3) {
+          expect(store.failWorkflowRun).toHaveBeenCalled();
+          expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+        } else {
+          expect(calls.slice(-2)).toEqual(['authorize-pr', 'create-pull-request']);
+          expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 describe('executeDagWorkflow -- superseded plannotator supervisor', () => {
   let testDir: string;
   let executeGateSpy: ReturnType<typeof spyOn>;

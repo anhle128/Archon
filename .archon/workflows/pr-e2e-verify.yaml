@@ -1,9 +1,8 @@
 name: pr-e2e-verify
 description: >-
-  For a ready PR, check out the PR head in an isolated worktree, write and run
-  an end-to-end user-story test (Lane B), and gate on real third-party contract
-  coverage (Lane A). A route_loop self-heals missing coverage: an agent resolves
-  the gaps, then the gate re-checks; on exhaustion it comments the gaps on the PR.
+  For a ready PR, check out the PR head in an isolated worktree, author durable
+  user-story evidence, gate third-party contracts, commit that evidence, then
+  select and execute catalog-backed verification against the resulting exact PR head.
 requires: [github]
 provider: claude
 worktree:
@@ -107,7 +106,7 @@ nodes:
       echo "PR_BASE=$PR_BASE"
 
   # Lane B authoring — AXI live drive + screenshot evidence, then crystallize
-  # Playwright specs. run-e2e (Playwright npm run test:ui) stays the regression gate.
+  # durable Playwright scenarios consumed by the catalog-backed verifier.
   - id: plan-tests
     depends_on: [resolve-paths]
     skills:
@@ -209,7 +208,7 @@ nodes:
       condition: "$verify.output.allTicked == true"
       max_iterations: 3
       routes:
-        positive: run-e2e
+        positive: commit-evidence
         negative: resolve
         exhausted: comment-pr
 
@@ -232,35 +231,11 @@ nodes:
     effort: high
     
 
-  # positive — run the crystallized Playwright specs against the real app.
-  # Captures the outcome (never hard-fails) so report-pr always runs and posts it.
-  - id: run-e2e
-    bash: |
-      set -uo pipefail
-      mkdir -p "$ARTIFACTS_DIR"
-      # Isolated worktree already detached at the PR head — no e2e deps, no
-      # browser, and no built web bundle until we set them up.
-      bun run build:web > "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
-      cd e2e
-      npm ci >> "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
-      npx playwright install chromium >> "$ARTIFACTS_DIR/e2e-setup.log" 2>&1 || true
-      if npm run test:ui > "$ARTIFACTS_DIR/e2e-result.log" 2>&1; then
-        echo passed > "$ARTIFACTS_DIR/e2e-status.txt"
-      else
-        echo failed > "$ARTIFACTS_DIR/e2e-status.txt"
-      fi
-      cat "$ARTIFACTS_DIR/e2e-status.txt"
-
-  # Persist the authored evidence durably: commit the test files the run wrote
-  # and push them onto the PR head branch, so the PR carries a real commit — not
-  # just a verdict comment. The engine's per-node auto-checkpoints keep the spec
-  # only on a detached HEAD that garbage-collects at worktree teardown, so
-  # without this step the evidence never reaches the PR. Non-fatal: a push
-  # failure still leaves a local commit and the full log in report-pr.
+  # Persist authored evidence before proof. Selection and execution below bind
+  # the resulting commit, never the pre-evidence PR head.
   - id: commit-evidence
-    depends_on: [run-e2e]
     bash: |
-      set -uo pipefail
+      set -euo pipefail
       PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
       PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
       PR_HEAD=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-head")
@@ -273,12 +248,13 @@ nodes:
 
       # Unwind the engine's per-node auto-checkpoints back to the PR head, keeping
       # the working tree, so the evidence lands as ONE clean, well-named commit.
-      git reset -q "$PR_HEAD_SHA" || true
+      git reset -q "$PR_HEAD_SHA"
 
       # Stage ONLY the test SOURCE the run authored (git ignores node_modules and
       # test-results). Never `git add -A` — that would sweep build output onto the PR.
       git add -- e2e/ui e2e/lib e2e/fixtures 2>/dev/null || true
       git add -- e2e/playwright.config.ts e2e/package.json e2e/bun.lock 2>/dev/null || true
+      git add -- .agents/skills/verify-archon/features/*.json 2>/dev/null || true
       # Self-heal (resolve) may add provider contract anchors — stage only tests/fixtures.
       git ls-files -o -m --exclude-standard -- 'packages/*' 2>/dev/null \
         | grep -E '(\.test\.ts$|/__fixtures__/)' \
@@ -287,81 +263,179 @@ nodes:
       if git diff --cached --quiet; then
         echo "none" > "$ARTIFACTS_DIR/.evidence-status"
         echo "no new evidence files to commit"
-        exit 0
+      else
+        git commit -q -m "test(e2e): pr-e2e-verify evidence for PR #$PR_NUMBER"
+        echo "pending" > "$ARTIFACTS_DIR/.evidence-status"
       fi
-
-      git commit -q -m "test(e2e): pr-e2e-verify evidence for PR #$PR_NUMBER"
-      EVID_SHA=$(git rev-parse --short HEAD)
+      EVID_SHA=$(git rev-parse HEAD)
 
       PR_GIT_URL=$(gh repo view "$PR_REPO" --json sshUrl -q .sshUrl 2>/dev/null || true)
       if [ -z "$PR_GIT_URL" ] || [ "$PR_GIT_URL" = "null" ]; then
         PR_GIT_URL=$(gh repo view "$PR_REPO" --json url -q .url 2>/dev/null || true)
       fi
 
-      if [ -n "$PR_GIT_URL" ] && git push "$PR_GIT_URL" "HEAD:refs/heads/$PR_HEAD" > "$ARTIFACTS_DIR/.evidence-push.log" 2>&1; then
+      if [ "$(cat "$ARTIFACTS_DIR/.evidence-status")" != "none" ]; then
+        if ! git push "$PR_GIT_URL" "HEAD:refs/heads/$PR_HEAD" > "$ARTIFACTS_DIR/.evidence-push.log" 2>&1; then
+          echo "ERROR: evidence commit was not pushed; refusing to prove a local-only SHA" >&2
+          exit 1
+        fi
         echo "pushed $EVID_SHA" > "$ARTIFACTS_DIR/.evidence-status"
-        echo "evidence pushed: $EVID_SHA -> $PR_REPO@$PR_HEAD"
-      else
-        echo "local $EVID_SHA" > "$ARTIFACTS_DIR/.evidence-status"
-        echo "evidence committed locally ($EVID_SHA); push failed (see .evidence-push.log)"
       fi
 
-  # Always report the e2e verdict back to the PR — pass means the feature works
-  # end-to-end; fail means it has issues. The full Playwright output and the
-  # evidence commit sha are attached so the PR carries the proof, not just a tick.
-  - id: report-pr
+      REMOTE_SHA=""
+      for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        REMOTE_SHA=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefOid -q .headRefOid)
+        REMOTE_SHA=$(printf '%s' "$REMOTE_SHA" | tr -d '[:space:]')
+        [ "$REMOTE_SHA" = "$EVID_SHA" ] && break
+        sleep 2
+      done
+      if [ "$REMOTE_SHA" != "$EVID_SHA" ]; then
+        echo "ERROR: checkout HEAD $EVID_SHA is not current PR head $REMOTE_SHA" >&2
+        exit 1
+      fi
+      printf '%s\n' "$EVID_SHA" > "$ARTIFACTS_DIR/.pr-head-sha"
+      printf '%s\n' "$EVID_SHA" > "$ARTIFACTS_DIR/.verification-head-sha"
+
+  - id: begin-verify
+    description: Invalidate old proof and prepare an independently based snapshot of the committed PR head.
     depends_on: [commit-evidence]
+    always_run: true
     bash: |
       set -euo pipefail
       PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
       PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
-      status=$(cat "$ARTIFACTS_DIR/e2e-status.txt" 2>/dev/null || echo unknown)
-      evid=$(cat "$ARTIFACTS_DIR/.evidence-status" 2>/dev/null || echo unknown)
-      # Cap the embedded log so a verbose failure cannot exceed GitHub's comment limit.
-      log=$(tail -c 40000 "$ARTIFACTS_DIR/e2e-result.log" 2>/dev/null || echo "(no e2e output captured)")
-      # AXI authoring screenshots live in the run artifacts dir (not committed).
-      axi_shots=""
-      if [ -d "$ARTIFACTS_DIR/plan-tests" ]; then
-        axi_shots=$(find "$ARTIFACTS_DIR/plan-tests" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.webp' \) | sort || true)
+      PR_BASE=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-base")
+      EXPECTED_HEAD=$(tr -d '\n' < "$ARTIFACTS_DIR/.verification-head-sha")
+      test -z "$(git status --porcelain)"
+      test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      test "$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefOid -q .headRefOid)" = "$EXPECTED_HEAD"
+
+      PR_GIT_URL=$(gh repo view "$PR_REPO" --json sshUrl -q .sshUrl)
+      if [ -z "$PR_GIT_URL" ] || [ "$PR_GIT_URL" = "null" ]; then
+        PR_GIT_URL=$(gh repo view "$PR_REPO" --json url -q .url)
       fi
+      git fetch --force "$PR_GIT_URL" "refs/heads/$PR_BASE:refs/archon/pr-base"
+      mkdir -p "$ARTIFACTS_DIR/superpowers" "$ARTIFACTS_DIR/verify"
+      git merge-base refs/archon/pr-base HEAD > "$ARTIFACTS_DIR/superpowers/base-sha.txt"
 
-      case "$evid" in
-        pushed\ *) evid_line="📌 Evidence committed & pushed to this branch: \`${evid#pushed }\`" ;;
-        local\ *)  evid_line="📌 Evidence committed locally as \`${evid#local }\` — push to the PR branch failed (no write access?). Full test output below." ;;
-        none)      evid_line="ℹ️ No new test files to commit — the evidence is already on the branch." ;;
-        *)         evid_line="⚠️ Evidence commit status unknown." ;;
-      esac
+      ATTEMPT_ID=$(bun .archon/scripts/verify-feature-gate.ts begin)
+      bun install --frozen-lockfile >&2
+      npm ci --prefix e2e --no-audit --no-fund >&2
+      node e2e/node_modules/@playwright/test/cli.js install chromium >&2
+      bun .archon/scripts/verify-feature-gate.ts prepare
+      printf '%s\n' "$ATTEMPT_ID"
+    timeout: 600000
 
+  - id: select-verify-targets
+    description: Propose all affected observable behaviors from the exact PR diff.
+    depends_on: [begin-verify]
+    provider: codex
+    model: "gpt-5.6-sol"
+    effort: xhigh
+    context: fresh
+    always_run: true
+    skills:
+      - select-verify-archon-targets
+    prompt: |
+      Follow select-verify-archon-targets through its Proposal Contract only.
+      This checkout is the committed and remotely visible PR head. Read the PR
+      description, $plan-tests.output, the catalog, the complete base..head diff,
+      $ARTIFACTS_DIR/verify/current.json, and the current attempt snapshot.json.
+      Use exactly the snapshot base_sha, head_sha, and every changed_path.
+      Return all affected behavior IDs with evidence-based confidence. Record
+      unmapped behavior in coverage_gaps. Never substitute a smoke, omit paths,
+      mutate the checkout, or write verification artifacts. Return only JSON.
+    output_format:
+      type: object
+      additionalProperties: false
+      required: [version, base_sha, head_sha, changed_paths, affected_behaviors, coverage_gaps]
+      properties:
+        version:
+          type: integer
+          enum: [1]
+        base_sha:
+          type: string
+        head_sha:
+          type: string
+        changed_paths:
+          type: array
+          items:
+            type: string
+        affected_behaviors:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, confidence, rationale]
+            properties:
+              id:
+                type: string
+              confidence:
+                type: string
+                enum: [high, medium, low]
+              rationale:
+                type: string
+        coverage_gaps:
+          type: array
+          items:
+            type: string
+
+  - id: normalize-verify-targets
+    description: Normalize the proposal against the independently captured snapshot and runnable catalog.
+    depends_on: [select-verify-targets]
+    always_run: true
+    bash: |
+      set -euo pipefail
+      printf '%s\n' "$select-verify-targets.output" | bun .archon/scripts/verify-feature-gate.ts normalize
+    timeout: 180000
+
+  - id: prove
+    description: Execute the shared verify-archon runner for the normalized selection.
+    depends_on: [normalize-verify-targets]
+    always_run: true
+    bash: |
+      set -euo pipefail
+      bun .archon/scripts/verify-feature-gate.ts prove
+    timeout: 7200000
+
+  - id: record-verify
+    description: Aggregate result.json deterministically and bind it to the current PR head.
+    depends_on: [prove]
+    trigger_rule: all_done
+    always_run: true
+    bash: |
+      set -euo pipefail
+      bun .archon/scripts/verify-feature-gate.ts record $begin-verify.output
+    timeout: 60000
+
+  # Report the deterministic gate and fail the workflow when any required proof
+  # is missing, skipped, flaky, unsupported, stale, or behaviorally failed.
+  - id: report-pr
+    depends_on: [record-verify]
+    always_run: true
+    bash: |
+      set -euo pipefail
+      PR_NUMBER=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-number")
+      PR_REPO=$(tr -d '\n' < "$ARTIFACTS_DIR/.pr-repo")
+      GATE="$ARTIFACTS_DIR/verify/gate.json"
+      REPORT="$ARTIFACTS_DIR/verify/report.md"
+      test -f "$GATE"
+      VERDICT=$(jq -r .verdict "$GATE")
+      VERIFIED_HEAD=$(jq -r .head_sha "$GATE")
+      REMOTE_HEAD=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json headRefOid -q .headRefOid)
+      REMOTE_HEAD=$(printf '%s' "$REMOTE_HEAD" | tr -d '[:space:]')
       body_file="$ARTIFACTS_DIR/.report-body.md"
-      if [ "$status" = passed ]; then
-        {
-          printf '✅ **E2E verify passed** — the feature works end-to-end as the user story expects (third-party coverage anchored, Playwright specs green).\n\n'
-          printf '%s\n\n' "$evid_line"
-          if [ -n "$axi_shots" ]; then
-            printf '### AXI authoring screenshots\n\n'
-            printf '%s\n' "$axi_shots" | while IFS= read -r f; do
-              printf -- '- `%s`\n' "${f#"$ARTIFACTS_DIR"/}"
-            done
-            printf '\nThese files live in this run'\''s `$ARTIFACTS_DIR/plan-tests/` (reviewer evidence; not committed). Playwright specs under `e2e/ui/` are the durable gate.\n\n'
-          fi
-          printf '<details><summary>Playwright output</summary>\n\n```\n%s\n```\n</details>\n' "$log"
-        } > "$body_file"
-      else
-        {
-          printf '❌ **E2E verify FAILED** — the feature has issues end-to-end.\n\n'
-          printf '%s\n\n' "$evid_line"
-          if [ -n "$axi_shots" ]; then
-            printf '### AXI authoring screenshots\n\n'
-            printf '%s\n' "$axi_shots" | while IFS= read -r f; do
-              printf -- '- `%s`\n' "${f#"$ARTIFACTS_DIR"/}"
-            done
-            printf '\n'
-          fi
-          printf '<details open><summary>Playwright output</summary>\n\n```\n%s\n```\n</details>\n' "$log"
-        } > "$body_file"
-      fi
-
+      {
+        printf '**PR E2E Verify: %s**\n\n' "$VERDICT"
+        cat "$REPORT"
+        printf '\nRemote PR head: `%s`\n' "$REMOTE_HEAD"
+      } > "$body_file"
       gh pr comment "$PR_NUMBER" --repo "$PR_REPO" --body-file "$body_file"
+      if [ "$VERDICT" != "PASS" ] || [ "$VERIFIED_HEAD" != "$REMOTE_HEAD" ]; then
+        echo "ERROR: deterministic proof did not pass for the current remote PR head" >&2
+        exit 1
+      fi
 
   # exhausted — could not self-heal within max_iterations; escalate to the PR.
   - id: comment-pr

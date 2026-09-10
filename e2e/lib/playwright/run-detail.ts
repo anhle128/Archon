@@ -2,6 +2,7 @@ import {
   expect,
   type Browser,
   type BrowserContext,
+  type Locator,
   type Page,
   type Request,
 } from '@playwright/test';
@@ -102,6 +103,7 @@ export async function getRunDetail(
 ): Promise<{
   status?: string;
   user_id?: string | null;
+  viewer_is_starter?: boolean;
   parent_platform_id?: string;
   pending_interactions: {
     tool_use_id: string;
@@ -124,6 +126,7 @@ export async function getRunDetail(
   const res = await page.request.get(`/api/workflows/runs/${encodeURIComponent(runId)}`);
   expect(res.ok(), `run-detail API for ${runId} responded ${res.status()}`).toBeTruthy();
   const body = (await res.json()) as {
+    viewer_is_starter?: boolean;
     run?: {
       status?: string;
       user_id?: string | null;
@@ -150,6 +153,7 @@ export async function getRunDetail(
   return {
     status: body.run?.status,
     user_id: body.run?.user_id,
+    viewer_is_starter: body.viewer_is_starter,
     parent_platform_id: body.run?.parent_platform_id,
     pending_interactions: body.pending_interactions ?? [],
     nodeExecutions: body.nodeExecutions ?? [],
@@ -172,10 +176,30 @@ export async function createIdentityContext(
   });
 }
 
-export async function submitAskYes(page: Page): Promise<void> {
-  await expect(page.getByRole('button', { name: 'Awaiting input', exact: true })).toBeVisible();
-  await page.getByRole('radio', { name: 'yes' }).first().check();
-  await page.getByRole('button', { name: 'Submit' }).first().click();
+export async function submitAskYes(
+  page: Page,
+  card: Locator,
+  runId: string,
+  requestId: string
+): Promise<void> {
+  const yes = card.getByRole('radio', { name: 'yes', exact: true });
+  await expect(yes).toBeEnabled();
+  await yes.check();
+  const pathname = `/api/workflows/runs/${encodeURIComponent(runId)}/ask/${encodeURIComponent(requestId)}/answer`;
+  const responsePromise = page.waitForResponse(
+    res => new URL(res.url()).pathname === pathname && res.request().method() === 'POST'
+  );
+  // Register the response listener before the user action, including fast local responses.
+  const [response] = await Promise.all([
+    responsePromise,
+    card.getByRole('button', { name: 'Submit', exact: true }).click(),
+  ]);
+  expect(response.status()).toBe(200);
+  await expect(card.getByText(/Answered/).first()).toBeVisible();
+  const detail = await getRunDetail(page, runId);
+  const answered = detail.pending_interactions.find(row => row.tool_use_id === requestId);
+  expect(answered?.status).toBe('answered');
+  expect(answered?.answer).toEqual({ answers: [{ questionId: 'proceed', value: 'yes' }] });
 }
 
 export async function postConversationMessage(

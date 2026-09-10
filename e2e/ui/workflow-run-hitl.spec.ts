@@ -24,7 +24,7 @@ import { T } from '../lib/playwright/timeouts';
  * Inspect-file room must show the mockup `.ptool` card with visible wrapping output.
  */
 
-test('[P1] HITL CLI pause envelope and native Ask persist a pending interaction', async ({
+test('[P1] [V:hitl.cli-pause] HITL CLI pause envelope and native Ask persist a pending interaction', async ({
   page,
   archon,
 }) => {
@@ -42,7 +42,7 @@ test('[P1] HITL CLI pause envelope and native Ask persist a pending interaction'
   expect(pending[0]?.tool_use_id.length).toBeGreaterThan(0);
 });
 
-test('[P1] HITL transcript records the tool call and a second result row', async ({
+test('[P1] [V:hitl.tool-transcript] HITL transcript records the tool call and a second result row', async ({
   page,
   archon,
 }) => {
@@ -56,7 +56,7 @@ test('[P1] HITL transcript records the tool call and a second result row', async
   ).toBe(true);
 });
 
-test('[P1] inspect-twice occurrences stay distinct in execution history', async ({
+test('[P1] [V:hitl.loop-occurrences] inspect-twice occurrences stay distinct in execution history', async ({
   page,
   archon,
 }) => {
@@ -76,7 +76,7 @@ test('[P1] inspect-twice occurrences stay distinct in execution history', async 
   expect(occurrenceIds.size).toBeGreaterThanOrEqual(2);
 });
 
-test('[P1] inspect-file room shows visible tool output matching the mockup card', async ({
+test('[P1] [V:hitl.console-tool-output] inspect-file room shows visible tool output matching the mockup card', async ({
   page,
   archon,
 }) => {
@@ -91,7 +91,10 @@ test('[P1] inspect-file room shows visible tool output matching the mockup card'
   await expect(page.locator('.rounded-full', { hasText: 'Read' })).toHaveCount(0);
 });
 
-test('[P1] Legacy inspect-file room also shows the mockup tool card', async ({ page, archon }) => {
+test('[P1] [V:hitl.legacy-tool-output] Legacy inspect-file room also shows the mockup tool card', async ({
+  page,
+  archon,
+}) => {
   const started = await archon.runHitlWorkflow();
   await openLegacyRunDetail(page, started.runId);
   await expect(page.getByText(/e2e-hitl-run/i).first()).toBeVisible({ timeout: T.medium });
@@ -106,7 +109,7 @@ test('[P1] Legacy inspect-file room also shows the mockup tool card', async ({ p
   await expect(page.locator('.rounded-full', { hasText: 'Read' })).toHaveCount(0);
 });
 
-test('[P1] starter can answer Ask; teammate is forbidden; missing identity is 401', async ({
+test('[P1] [V:hitl.ask-authorization] starter can answer Ask; teammate is forbidden; missing identity is 401', async ({
   browser,
   archon,
 }) => {
@@ -119,6 +122,17 @@ test('[P1] starter can answer Ask; teammate is forbidden; missing identity is 40
   const anonPage = await anonCtx.newPage();
 
   try {
+    const authStatus = await starterPage.request.get('/api/auth/status');
+    expect(authStatus.ok()).toBe(true);
+    const auth = (await authStatus.json()) as { enabled: boolean };
+    if (!auth.enabled) {
+      test.info().annotations.push({ type: 'verification-setup', description: 'unsupported' });
+      test.skip(
+        true,
+        'Owned Ask authorization requires authenticated server mode; ' +
+          'this SQLite runtime is a solo install'
+      );
+    }
     const detail = await getRunDetail(starterPage, started.runId);
     const requestId = detail.pending_interactions.find(
       row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
@@ -145,7 +159,7 @@ test('[P1] starter can answer Ask; teammate is forbidden; missing identity is 40
   }
 });
 
-test('[P1] Console Ask card submit continues only after explicit CLI resume', async ({
+test('[P1] [V:hitl.console-ask-submit] Console Ask card submit continues only after explicit CLI resume', async ({
   browser,
   archon,
 }) => {
@@ -157,8 +171,13 @@ test('[P1] Console Ask card submit continues only after explicit CLI resume', as
     await expect(page.getByRole('region', { name: `${HITL_ASK_NODE} room` })).toBeVisible({
       timeout: T.medium,
     });
-    await submitAskYes(page);
-    await expect(page.getByText(/Answered/i).first()).toBeVisible({ timeout: T.medium });
+    const before = await getRunDetail(page, started.runId);
+    const requestId = before.pending_interactions.find(
+      row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
+    )?.tool_use_id;
+    if (!requestId) throw new Error('missing pending Ask request id');
+    const room = page.getByRole('region', { name: `${HITL_ASK_NODE} room` });
+    await submitAskYes(page, room, started.runId, requestId);
     const after = await getRunDetail(page, started.runId);
     // Last Ask answer unpauses the run row (`paused-ask`). CLI-origin has no
     // web parent, so the executor is not auto-dispatched — explicit resume required.
@@ -167,12 +186,77 @@ test('[P1] Console Ask card submit continues only after explicit CLI resume', as
 
     await archon.resumeWorkflow(started.runId);
     await archon.waitForRunStatus(started.runId, 'completed');
+    await page.reload();
+    await expect(page.getByText('Completed', { exact: true }).first()).toBeVisible();
+    await expect(room.getByText(/Answered/).first()).toBeVisible();
+    await expect(room.getByRole('button', { name: 'Submit' })).toHaveCount(0);
   } finally {
     await starterCtx.close();
   }
 });
 
-test('[P1] CLI-origin composer cannot approve; Chat tab stays visible without a web parent', async ({
+for (const surface of ['console', 'legacy'] as const) {
+  test(`[P1] [V:hitl.${surface}-unowned-ask] ${surface} solo unowned Ask can answer, persist, and resume`, async ({
+    browser,
+    archon,
+  }) => {
+    test.skip(
+      process.env.ARCHON_E2E_PROOF !== '1',
+      'Run this known-regression scenario through verify-archon against an explicit target'
+    );
+    const started = await archon.runUnownedHitlWorkflow();
+    const context = await createIdentityContext(browser, archon.baseURL, 'starter');
+    try {
+      const page = await context.newPage();
+      const before = await getRunDetail(page, started.runId);
+      expect(before.status).toBe('paused');
+      expect(before.user_id, 'CLI must create a genuinely unowned run').toBeNull();
+      expect(before.viewer_is_starter).toBe(false);
+      const requestId = before.pending_interactions.find(
+        row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
+      )?.tool_use_id;
+      if (!requestId) throw new Error('missing pending Ask request id');
+
+      if (surface === 'console') {
+        await openRunDetail(page, started.runId, HITL_ASK_NODE);
+      } else {
+        await openLegacyRunDetail(page, started.runId);
+        await page.getByRole('tab', { name: 'Logs', exact: true }).click();
+        await page
+          .getByRole('button', { name: new RegExp(HITL_ASK_NODE) })
+          .first()
+          .click();
+      }
+      const room = page.getByRole('region', { name: `${HITL_ASK_NODE} room` });
+      await expect(room).toBeVisible({ timeout: T.medium });
+      await submitAskYes(page, room, started.runId, requestId);
+      expect((await getRunDetail(page, started.runId)).status).toBe('running');
+      await archon.resumeWorkflow(started.runId);
+      await archon.waitForRunStatus(started.runId, 'completed');
+      await page.reload();
+      await expect(page.getByText(/^completed$/i).first()).toBeVisible();
+      if (surface === 'legacy') {
+        await page.getByRole('tab', { name: 'Logs', exact: true }).click();
+        await page
+          .getByRole('button', { name: new RegExp(HITL_ASK_NODE) })
+          .first()
+          .click();
+      }
+      await expect(room.getByText(/Answered/).first()).toBeVisible();
+      await expect(room.getByRole('button', { name: 'Submit' })).toHaveCount(0);
+      const after = await getRunDetail(page, started.runId);
+      expect(after.pending_interactions.find(row => row.tool_use_id === requestId)?.answer).toEqual(
+        {
+          answers: [{ questionId: 'proceed', value: 'yes' }],
+        }
+      );
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+test('[P1] [V:hitl.cli-composer] CLI-origin composer cannot approve; Chat tab stays visible without a web parent', async ({
   page,
   archon,
 }) => {
@@ -196,7 +280,7 @@ test('[P1] CLI-origin composer cannot approve; Chat tab stays visible without a 
   ).toBe(true);
 });
 
-test('[P1] web-origin Ask answer auto-resumes; composer text does not approve the gate', async ({
+test('[P1] [V:hitl.web-ask-resume] web-origin Ask answer auto-resumes; composer text does not approve the gate', async ({
   browser,
   archon,
 }) => {
@@ -230,7 +314,9 @@ test('[P1] web-origin Ask answer auto-resumes; composer text does not approve th
   }
 });
 
-test('[P1] live-start handle observes a run id before CLI exit', async ({ archon }) => {
+test('[P1] [V:hitl.live-cli] live-start handle observes a run id before CLI exit', async ({
+  archon,
+}) => {
   const live = await archon.startHitlWorkflow();
   const runId = await live.runId;
   expect(runId.length).toBeGreaterThan(0);
@@ -239,7 +325,7 @@ test('[P1] live-start handle observes a run id before CLI exit', async ({ archon
   expect(finished.state).toBe('paused');
 });
 
-test('[P1] production chrome keeps Artifacts and does not ship mockup Replay or view-as', async ({
+test('[P1] [V:hitl.production-controls] production chrome keeps Artifacts and does not ship mockup Replay or view-as', async ({
   page,
   archon,
 }) => {

@@ -12,8 +12,11 @@ export const test = base.extend<{}, { archon: ArchonRuntime }>({
   archon: [
     async ({}, use, workerInfo) => {
       const runtime = await createArchonRuntime(workerInfo.workerIndex);
-      await use(runtime);
-      await runtime.stop();
+      try {
+        await use(runtime);
+      } finally {
+        await runtime.stop();
+      }
     },
     { scope: 'worker' },
   ],
