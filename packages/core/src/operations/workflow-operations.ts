@@ -97,19 +97,7 @@ export class AskHumanRunNotFoundError extends Error {
   }
 }
 
-export class AskHumanAuthenticationRequiredError extends Error {
-  constructor() {
-    super('Authentication required');
-    this.name = 'AskHumanAuthenticationRequiredError';
-  }
-}
-
-export class AskHumanForbiddenError extends Error {
-  constructor(readonly runId: string) {
-    super(`Not allowed to answer AskHuman for run ${runId}`);
-    this.name = 'AskHumanForbiddenError';
-  }
-}
+const SOLO_ASK_ACTOR_ID = 'admin';
 
 export interface AnswerAskHumanInput {
   runId: string;
@@ -307,13 +295,17 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
 /**
  * Answer or decline one pending AskHuman interaction.
  *
- * Authorizes the run starter, invokes the persistence CAS once, then logs and
- * emits identifier-only signals after commit. Does not call resumeWorkflowRun;
+ * Any actor may answer. A missing actor is recorded as `admin` until a real
+ * user system exists. Invokes the persistence CAS once, then logs and emits
+ * identifier-only signals after commit. Does not call resumeWorkflowRun;
  * last-pending resume happens inside the persistence transaction.
  */
 export async function answerAskHuman(input: AnswerAskHumanInput): Promise<AnswerAskHumanResult> {
   const run = await loadAskHumanRun(input.runId);
-  const actorUserId = assertAskHumanActor(run, input.actorUserId);
+  const actorUserId =
+    input.actorUserId === undefined || input.actorUserId === ''
+      ? SOLO_ASK_ACTOR_ID
+      : input.actorUserId;
   const resolved = await resolvePendingInteraction({
     workflow_run_id: input.runId,
     tool_use_id: input.requestId,
@@ -362,16 +354,6 @@ async function loadAskHumanRun(runId: string): Promise<WorkflowRun> {
     throw new AskHumanRunNotFoundError(runId);
   }
   return run;
-}
-
-function assertAskHumanActor(run: WorkflowRun, actorUserId: string | undefined): string {
-  if (actorUserId === undefined || actorUserId === '') {
-    throw new AskHumanAuthenticationRequiredError();
-  }
-  if (run.user_id === null || run.user_id !== actorUserId) {
-    throw new AskHumanForbiddenError(run.id);
-  }
-  return actorUserId;
 }
 
 /**

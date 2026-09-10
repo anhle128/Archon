@@ -4660,7 +4660,7 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
     });
   });
 
-  test('returns 401 when no authenticated requester is present', async () => {
+  test('returns 200 and records admin when no authenticated requester is present', async () => {
     mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
     const { app } = makeApp();
     const response = await app.request(
@@ -4672,11 +4672,16 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
       }
     );
 
-    expect(response.status).toBe(401);
-    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-ask-1',
+      tool_use_id: ASK_REQUEST_ID,
+      answer: ASK_ANSWER_BODY,
+      resolved_by: 'admin',
+    });
   });
 
-  test('returns 401 before body validation when no authenticated requester is present', async () => {
+  test('returns 400 for an invalid body when no authenticated requester is present', async () => {
     mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
     const { app } = makeApp();
     const response = await app.request(
@@ -4688,12 +4693,12 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
       }
     );
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
     expect(mockGetWorkflowRun).not.toHaveBeenCalled();
     expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
   });
 
-  test('returns 401 before run lookup when no authenticated requester is present', async () => {
+  test('returns 404 for a missing run when no authenticated requester is present', async () => {
     mockGetWorkflowRun.mockResolvedValue(null);
     const { app } = makeApp();
     const response = await app.request(
@@ -4705,12 +4710,11 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
       }
     );
 
-    expect(response.status).toBe(401);
-    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+    expect(response.status).toBe(404);
     expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
   });
 
-  test('returns 403 when the requester is not the run starter, including admins', async () => {
+  test('returns 200 when the requester is not the run starter', async () => {
     mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
     const { app } = makeApp();
     const response = await app.request(
@@ -4725,8 +4729,13 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
       }
     );
 
-    expect(response.status).toBe(403);
-    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-ask-1',
+      tool_use_id: ASK_REQUEST_ID,
+      answer: ASK_ANSWER_BODY,
+      resolved_by: 'user-other-admin',
+    });
   });
 
   test('returns 404 when the run is missing', async () => {
@@ -4904,6 +4913,35 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
     expect(platformConvId).toBe('web-plat-ask');
     expect(dispatchedMessage).toBe('/workflow resume run-ask-1');
     expect(extraContext.userId).toBe(ASK_STARTER_USER_ID);
+  });
+
+  test('solo auto-resume omits userId rather than passing admin', async () => {
+    mockGetWorkflowRun.mockResolvedValue(
+      mockAskPausedRun({ parent_conversation_id: 'parent-conv-uuid' })
+    );
+    mockGetConversationById.mockResolvedValue({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-ask',
+      platform_type: 'web',
+    });
+    mockResolvePendingInteraction.mockResolvedValue(mockResolvedAskInteraction({ resumed: true }));
+
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({ resolved_by: 'admin' })
+    );
+    const extraContext = mockHandleMessage.mock.calls[0]?.[3] as { userId?: string };
+    expect(extraContext.userId).toBeUndefined();
   });
 
   test('does not auto-dispatch an intermediate answer', async () => {

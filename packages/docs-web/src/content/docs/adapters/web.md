@@ -160,7 +160,7 @@ Click on a workflow run (from the dashboard or progress card) to open the execut
 
 - The full DAG graph with per-node status
 - A **node transcript pane** -- click any graph node or Logs row to open that node's room. A running agent node streams its transcript live; a completed node replays the same pane as a static transcript.
-- **Ask cards** -- when a Claude or Pi agent node poses a mid-turn structured question (via `AskHuman`), the card appears inline in that node's room. The run shows an amber "awaiting input" badge until the run starter answers or declines. A teammate watching the same run can see the card but cannot submit.
+  - **Ask cards** -- when a Claude or Pi agent node poses a mid-turn structured question (via `AskHuman`), the card appears inline in that node's room. The run shows an amber "awaiting input" badge until an operator answers or declines. Anyone on the install can submit; there is no starter-only lock.
 - Artifacts produced by the workflow
 - Route-loop decisions, including selected target and redacted condition metadata
 - Actions to resume, retry eligible DAG nodes, cancel, or abandon the run

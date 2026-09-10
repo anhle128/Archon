@@ -14,11 +14,11 @@ description: |
   NOT for: quick one-file fixes, bug fixes, PR reviews, or running an existing plan
         (use archon-plan-to-pr for an existing plan).
 
-# Default provider for ck:plan (Claude Opus). The verify-fix and build-ralph-prd
-# nodes override to codex. The ralph-implement node runs the archon-ralph-dag
-# sub-run as authored (its own per-node providers). Codex reasoning effort may be
-# set with workflow/node `effort`; legacy assistants.codex.modelReasoningEffort
-# remains the provider default.
+# Default provider for ck:plan (Claude Opus). validate-plan overrides to Codex.
+# build-ralph-prd overrides to omp. The ralph-implement node runs the
+# archon-ralph-dag sub-run as authored (its own per-node providers). Codex
+# reasoning effort may be set with workflow/node `effort`; legacy
+# assistants.codex.modelReasoningEffort remains the provider default.
 provider: claude
 
 nodes:
@@ -158,10 +158,10 @@ nodes:
 
       Report the ABSOLUTE path of the Ralph directory as `prd_dir` (resolve it with
       `realpath` so it is stable regardless of cwd).
-    depends_on: [verify-fix]
+    depends_on: [validate-plan]
     provider: omp
-    model: cursor/gemini-3.8-flash  
-    effort: hight
+    model: cursor/gemini-3.8-flash
+    effort: high
     context: fresh
     output_format:
       type: object
