@@ -64,7 +64,7 @@ const ASK_HUMAN_INPUT_SCHEMA: Record<string, unknown> = {
   properties: {
     questions: {
       type: 'array',
-      description: 'Ordered structured questions for the run starter.',
+      description: 'Ordered structured questions for a human operator.',
       minItems: 1,
       items: {
         type: 'object',

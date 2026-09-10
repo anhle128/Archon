@@ -153,7 +153,7 @@ export async function insertPendingInteraction(
     if (!run) {
       throw new Error(`Workflow run not found: ${parsed.workflow_run_id}`);
     }
-    if (run.user_id == null) {
+    if (parsed.kind !== 'ask' && run.user_id == null) {
       throw new AskHumanNoStarterError(parsed.workflow_run_id);
     }
     if (run.status !== 'running' && run.status !== 'paused') {

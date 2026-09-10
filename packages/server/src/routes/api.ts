@@ -421,8 +421,6 @@ import {
   abandonWorkflow,
   answerAskHuman,
   approveWorkflow,
-  AskHumanAuthenticationRequiredError,
-  AskHumanForbiddenError,
   AskHumanRunNotFoundError,
   confirmPermission,
   PermissionAuthenticationRequiredError,
@@ -1511,7 +1509,6 @@ const answerAskHumanRoute = createRoute({
     },
     400: jsonError('Invalid AskHuman answer'),
     401: jsonError('Authentication required'),
-    403: jsonError('Forbidden'),
     404: jsonError('Not found'),
     409: jsonError('Conflict'),
     500: jsonError('Server error'),
@@ -4979,10 +4976,11 @@ export function registerApiRoutes(
     }
   });
 
-  // Enforce Ask answer auth before OpenAPI body validation so unauthenticated
-  // callers receive 401 even when the install-wide API gate is disabled.
+  // When web auth / the API gate is on, require an identity before OpenAPI
+  // body validation. Solo installs record answers as `admin`.
   app.use('/api/workflows/runs/:runId/ask/:requestId/answer', async (c, next) => {
     if (c.req.method !== 'POST') return next();
+    if (!isWebAuthEnabled() && !isApiGateEnabled()) return next();
     const requester = await resolveAuthContext(c);
     if (!requester) return apiError(c, 401, 'Authentication required');
     return next();
@@ -4994,7 +4992,7 @@ export function registerApiRoutes(
     const requestId = c.req.param('requestId') ?? '';
     try {
       const requester = await resolveAuthContext(c);
-      if (!requester) {
+      if ((isWebAuthEnabled() || isApiGateEnabled()) && !requester) {
         return apiError(c, 401, 'Authentication required');
       }
       const body = getValidatedBody(c, askAnswerRequestSchema);
@@ -5002,7 +5000,7 @@ export function registerApiRoutes(
         runId,
         requestId,
         body,
-        actorUserId: requester.userId,
+        actorUserId: requester?.userId,
       });
 
       if (!result.resumed) {
@@ -5012,7 +5010,7 @@ export function registerApiRoutes(
         });
       }
 
-      const autoResumed = await tryAutoResumeAfterGate(result.run, 'ask-answer', requester.userId);
+      const autoResumed = await tryAutoResumeAfterGate(result.run, 'ask-answer', requester?.userId);
       return c.json({
         success: true,
         message: autoResumed
@@ -5020,12 +5018,6 @@ export function registerApiRoutes(
           : `AskHuman answer accepted: ${result.run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or resume it from the originating conversation.`,
       });
     } catch (error) {
-      if (error instanceof AskHumanAuthenticationRequiredError) {
-        return apiError(c, 401, error.message);
-      }
-      if (error instanceof AskHumanForbiddenError) {
-        return apiError(c, 403, error.message);
-      }
       if (
         error instanceof AskHumanRunNotFoundError ||
         error instanceof workflowPendingInteractionDb.PendingInteractionNotFoundError
