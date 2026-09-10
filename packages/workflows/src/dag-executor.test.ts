@@ -7085,16 +7085,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(store.completeWorkflowRun).toHaveBeenCalled();
     });
 
-    it('skips the speckit-ralph-test loop when the PRD has no pending userStories', async () => {
+    it('skips a Ralph loop when the PRD has no pending userStories', async () => {
       const sourceRoot = join(import.meta.dir, '..', '..', '..');
       await git.execFileAsync('git', ['init', '--quiet'], { cwd: testDir });
-      const wfPath = join(
-        sourceRoot,
-        '.archon',
-        'workflows',
-        'defaults',
-        'speckit-ralph-test.yaml'
-      );
       const cmdPath = join(
         sourceRoot,
         '.archon',
@@ -7102,9 +7095,31 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         'defaults',
         'archon-speckit-ralph-iteration.md'
       );
-      const parsed = parseWorkflow(await readFile(wfPath, 'utf8'), basename(wfPath));
+      const parsed = parseWorkflow(
+        `name: ralph-skip-fixture
+description: Test-only Ralph loop skip fixture.
+nodes:
+  - id: ralph-native-preflight
+    bash: |
+      set -euo pipefail
+      RLN_PRD=$(jq -r '.ralph_prd_file' .specify/feature.json)
+      RLN_PENDING=$(jq '[.userStories[] | select(.completed == false)] | length' "$RLN_PRD")
+      if [ "$RLN_PENDING" -gt 0 ]; then RLN_HAS=true; else RLN_HAS=false; fi
+      printf '{"type":"loop_progress","targetNodeId":"ralph-loop-run","expectedIterations":%d,"hasPending":%s}\\n' "$RLN_PENDING" "$RLN_HAS"
+  - id: ralph-loop-run
+    loop:
+      command: archon-speckit-ralph-iteration
+      max_iterations: 2
+      until_bash: exit 0
+    depends_on: [ralph-native-preflight]
+    when: "$ralph-native-preflight.output.hasPending == 'true'"
+`,
+        'ralph-skip-fixture.yaml'
+      );
       if (parsed.error || !parsed.workflow) {
-        throw new Error(parsed.error ?? 'speckit-ralph-test did not load');
+        throw new Error(
+          parsed.error ? JSON.stringify(parsed.error) : 'Ralph skip fixture did not load'
+        );
       }
 
       const commandsDir = join(testDir, '.archon', 'commands');

@@ -284,31 +284,41 @@ test('[P1] [V:hitl.web-ask-resume] web-origin Ask answer auto-resumes; composer 
   browser,
   archon,
 }) => {
-  const webRun = await archon.runHitlWorkflowViaWeb();
-  const starterCtx = await createIdentityContext(browser, archon.baseURL, 'starter');
+  const webRun = await test.step('start a web-origin run and wait for Ask pause', async () =>
+    archon.runHitlWorkflowViaWeb());
+  const starterCtx = await test.step('open the starter identity context', async () =>
+    createIdentityContext(browser, archon.baseURL, 'starter'));
   const page = await starterCtx.newPage();
   try {
-    const detail = await getRunDetail(page, webRun.runId);
-    expect(detail.status).toBe('paused');
-    expect(detail.parent_platform_id).toBe(webRun.conversationId);
+    await test.step('confirm the run is paused on its web conversation', async () => {
+      const detail = await getRunDetail(page, webRun.runId);
+      expect(detail.status).toBe('paused');
+      expect(detail.parent_platform_id).toBe(webRun.conversationId);
+    });
 
-    const sendStatus = await postConversationMessage(page, webRun.conversationId, 'approve');
-    expect(sendStatus).toBeLessThan(500);
-    const afterComposer = await getRunDetail(page, webRun.runId);
-    expect(afterComposer.status).toBe('paused');
-    expect(
-      afterComposer.pending_interactions.some(
-        row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
-      )
-    ).toBe(true);
+    const afterComposer =
+      await test.step('send composer prose without resolving the Ask', async () => {
+        const sendStatus = await postConversationMessage(page, webRun.conversationId, 'approve');
+        expect(sendStatus).toBeLessThan(500);
+        const nextDetail = await getRunDetail(page, webRun.runId);
+        expect(nextDetail.status).toBe('paused');
+        expect(
+          nextDetail.pending_interactions.some(
+            row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
+          )
+        ).toBe(true);
+        return nextDetail;
+      });
 
     const requestId = afterComposer.pending_interactions.find(
       row => row.node_id === HITL_ASK_NODE && row.status === 'pending'
     )?.tool_use_id;
     expect(requestId).toBeTruthy();
     if (!requestId) throw new Error('missing Ask request id');
-    expect(await answerAskViaApi(page, webRun.runId, requestId)).toBe(200);
-    await archon.waitForRunStatus(webRun.runId, 'completed', T.xlong);
+    await test.step('answer the Ask and wait for automatic resume', async () => {
+      expect(await answerAskViaApi(page, webRun.runId, requestId)).toBe(200);
+      await archon.waitForRunStatus(webRun.runId, 'completed', T.xlong);
+    });
   } finally {
     await starterCtx.close();
   }

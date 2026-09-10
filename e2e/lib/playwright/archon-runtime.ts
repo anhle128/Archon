@@ -159,6 +159,7 @@ export function isolatedEnv(home: string, port?: number): NodeJS.ProcessEnv {
     BETTER_AUTH_SECRET: '',
     ARCHON_TELEMETRY_DISABLED: '1',
     ARCHON_E2E_FAKE_PROVIDER: '1',
+    DEFAULT_AI_ASSISTANT: 'e2e-fake',
     ARCHON_USER_ID: E2E_CLI_USER,
     LOG_LEVEL: 'warn',
     ...(port ? { PORT: String(port) } : {}),

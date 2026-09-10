@@ -181,6 +181,7 @@ test('browser runtime pins loopback and disables live integrations with empty va
   const env = isolatedEnv('/proof/home', 13900);
   expect(env.HOST).toBe('127.0.0.1');
   expect(env.DATABASE_URL).toBe('');
+  expect(env.DEFAULT_AI_ASSISTANT).toBe('e2e-fake');
   for (const key of [
     'SLACK_BOT_TOKEN',
     'SLACK_APP_TOKEN',

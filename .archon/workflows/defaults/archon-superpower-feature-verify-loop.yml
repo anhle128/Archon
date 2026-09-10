@@ -16,8 +16,8 @@ description: |
         Tailscale proofs, or review-only work. Never start or stop Oceanlabs Mini.
   Input: The approved brainstorm result, product notes, design spec path, or
          requirements from the manual Superpowers brainstorming step. Run from
-         the anhle128/Archon checkout that contains `.agents/skills/verify-archon/`
-         (Codex discovers `skills: [verify-archon]`).
+         the anhle128/Archon checkout that contains the project-local verification
+         catalog and deterministic helper under `.agents/skills/verify-archon/`.
 provider: omp
 model: 'xai-oauth/grok-4.6'
 effort: high
@@ -285,7 +285,7 @@ nodes:
     skills:
       - select-verify-archon-targets
     prompt: |
-      Follow select-verify-archon-targets through its Proposal Contract only.
+      Follow select-verify-archon-targets. Use only its Proposal Contract.
       The following deterministic node performs normalization; do not write
       selection, execution, result, or gate artifacts yourself.
       Plan: $review-fix-plan.output.plan_path
@@ -428,7 +428,7 @@ nodes:
       dirty-tree commit and push-conflict recovery steps: never commit, edit
       source/tests, rebase, merge, reset, or otherwise change HEAD here.
       Run bun .archon/scripts/verify-feature-gate.ts assert-pass $begin-verify.output immediately
-      before push and again before gh pr create/edit. If either fails, stop.
+      before push and again before creating or editing the pull request. If either fails, stop.
       Do not claim an older proof covers a new commit.
       Override issue-based existing-PR reuse too: never edit or return an existing
       PR solely because it mentions this issue. Resolve the intended head repository
