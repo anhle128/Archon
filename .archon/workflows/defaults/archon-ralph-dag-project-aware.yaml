@@ -679,7 +679,7 @@ nodes:
         - **PATTERNS_SHARED**: Discovered patterns added to progress.txt for future iterations
         - **NO_SCOPE_CREEP**: No unrelated changes, refactoring, or improvements
       until_field: terminal
-      max_iterations: 35
+      max_iterations: 600
       fresh_context: true
 
 
