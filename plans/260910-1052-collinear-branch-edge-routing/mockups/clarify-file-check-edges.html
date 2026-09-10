@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>clarify-file-check — overlapping then/else edges</title>
+  <style>
+    :root {
+      --bg: #0b0c10;
+      --panel: #12141a;
+      --grid: #1c1f28;
+      --ink: #e8eaed;
+      --muted: #8b919a;
+      --line: #2a303a;
+      --bash: #e8b84a;
+      --prompt: #7aa2ff;
+      --success: #3dd68c;
+      --accent: #6b9dff;
+      --accent-dim: #3d4c66;
+      --chip: #f4f6f8;
+      --warn: #f0c36a;
+      --paper: #faf7f2;
+      --ink-light: #1a1714;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; }
+    body { padding: 28px 24px 64px; }
+    h1 { font: 600 22px/1.2 ui-sans-serif, system-ui; margin: 0 0 6px; }
+    .lede { color: var(--muted); max-width: 72ch; margin: 0 0 22px; }
+    .meta { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); margin-bottom: 22px; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+    nav button {
+      appearance: none; border: 1px solid var(--line); background: transparent; color: var(--ink);
+      padding: 7px 12px; border-radius: 999px; cursor: pointer; font: 12px/1 ui-sans-serif, system-ui;
+    }
+    nav button[aria-selected="true"] { border-color: var(--accent); background: #1a2438; color: #cfe0ff; }
+    nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .stage { display: grid; grid-template-columns: minmax(320px, 560px) minmax(280px, 1fr); gap: 28px; align-items: start; }
+    .canvas {
+      background:
+        radial-gradient(circle, var(--grid) 1px, transparent 1px) 0 0 / 18px 18px,
+        var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    svg { display: block; width: 100%; height: auto; }
+    .notes { color: var(--muted); }
+    .notes h2 { font: 600 15px/1.3 ui-sans-serif, system-ui; color: var(--ink); margin: 0 0 8px; }
+    .notes ul { margin: 0; padding-left: 1.1em; }
+    .notes li { margin: 0 0 8px; }
+    .badge { display: inline-block; font: 11px/1 ui-monospace, Menlo, monospace; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--ink); }
+    .badge.rec { border-color: var(--success); color: var(--success); }
+    .badge.now { border-color: #c45c5c; color: #f0a8a8; }
+    table { width: 100%; border-collapse: collapse; margin-top: 28px; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-top: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; }
+    .callout { fill: #f4f6f8; stroke: none; }
+    .callout-text { fill: #111; font: 600 11px/1.2 ui-sans-serif, system-ui; }
+    .anno { fill: var(--warn); font: 600 11px/1.25 ui-sans-serif, system-ui; }
+    .label-chip { fill: #f4f6f8; }
+    .label-chip-text { fill: #111; font: 600 10px/1 ui-sans-serif, system-ui; }
+    .node-title { fill: var(--ink); font: 600 13px/1 ui-sans-serif, system-ui; }
+    .node-kind { font: 700 10px/1 ui-sans-serif, system-ui; letter-spacing: 0.04em; }
+    .hidden { display: none; }
+    @media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+  </style>
+</head>
+<body>
+  <h1>clarify-file-check: then / else đang đè lên một đường</h1>
+  <p class="lede">
+    Node bash <code>clarify-file-check</code> trong
+    <code>speckit-ralph-native-no-hitl-feature</code> không phải <code>route_loop</code>.
+    True path là <code>when == HAS_QUESTIONS</code> xuống <code>clarify-respond</code>.
+    False path là cạnh join <code>clarify-file-check → red-team</code>
+    (<code>trigger_rule: none_failed_min_one_success</code>).
+    Layout xếp cả chuỗi một cột, nên hai cạnh dùng chung <code>x = center</code>.
+  </p>
+  <p class="meta">
+    State trong mock: NO_QUESTIONS — check completed, respond/apply skipped, red-team running.
+    Trùng với screenshot.
+  </p>
+
+  <nav role="tablist" aria-label="Phương án routing">
+    <button type="button" role="tab" id="tab-now" aria-selected="true" aria-controls="panel-now" data-tab="now">Hiện tại — hỏng</button>
+    <button type="button" role="tab" id="tab-a" aria-selected="false" aria-controls="panel-a" data-tab="a">A — flank phải (đề xuất)</button>
+    <button type="button" role="tab" id="tab-b" aria-selected="false" aria-controls="panel-b" data-tab="b">B — offset song song</button>
+    <button type="button" role="tab" id="tab-c" aria-selected="false" aria-controls="panel-c" data-tab="c">C — cột nhánh</button>
+  </nav>
+
+  <div class="stage">
+    <div class="canvas" id="canvas"></div>
+    <div class="notes">
+      <div id="panel-now" role="tabpanel" aria-labelledby="tab-now">
+        <h2>Hiện tại <span class="badge now">bug</span></h2>
+        <ul>
+          <li><code>forwardGeometry</code> coi <code>|dx| ≤ 156px</code> là short-edge, kể cả khi nhảy 3 layer.</li>
+          <li>Cả then (dashed, label <code>HAS_QUESTIONS</code>) và skip (solid, taken) xuất phát từ <code>bottomCenter</code> cùng một điểm.</li>
+          <li>Cubic thẳng đứng xuyên qua <code>clarify-respond</code> và <code>clarify-apply</code>.</li>
+          <li>Test <code>vertically aligned multi-layer edge still enters the target top</code> đang khóa hành vi này.</li>
+        </ul>
+      </div>
+      <div id="panel-a" class="hidden" role="tabpanel" aria-labelledby="tab-a">
+        <h2>A — obstacle-aware right flank <span class="badge rec">recommend</span></h2>
+        <ul>
+          <li>Cạnh kề layer (then) giữ spine: bottom → top.</li>
+          <li>Cạnh nhảy &gt;1 layer mà cùng cột: đi gutter phải, vào <code>right</code> port của <code>red-team</code>.</li>
+          <li>Flank trái đã dùng cho back-edge retry. Skip đi phải, không đụng loop.</li>
+          <li>Không đổi YAML, không đổi vị trí node. Chỉ <code>routes.ts</code>.</li>
+          <li>Sửa luôn <code>respond → red-team</code> (cũng xuyên <code>apply</code>).</li>
+        </ul>
+      </div>
+      <div id="panel-b" class="hidden" role="tabpanel" aria-labelledby="tab-b">
+        <h2>B — lane offset ±12px</h2>
+        <ul>
+          <li>Hai cubic vẫn thẳng đứng, lệch trái/phải vài pixel.</li>
+          <li>Rẻ và dễ test, nhưng skip vẫn xuyên thân node — khó đọc khi zoom 100%.</li>
+          <li>Label then/else vẫn chồng gần nhau.</li>
+          <li>Fail case: 3+ cạnh cùng source (check còn fan-in khác).</li>
+        </ul>
+      </div>
+      <div id="panel-c" class="hidden" role="tabpanel" aria-labelledby="tab-c">
+        <h2>C — relayout cột nhánh</h2>
+        <ul>
+          <li>Đưa <code>respond</code>/<code>apply</code> sang cột phải. Skip ở spine trái.</li>
+          <li>Đúng flowchart if/else nhất. Đổi <code>positions.ts</code>, ảnh hưởng mọi DAG có skip.</li>
+          <li>Barycenter hiện kéo chain 1-node/layer về một cột — phải thêm rule “conditional cluster”.</li>
+          <li>Blast radius lớn hơn bug. Không cần nếu A đủ đọc.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th>Đổi file</th>
+        <th>Xuyên node?</th>
+        <th>Đọc then/else</th>
+        <th>Rủi ro</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>A flank phải</td>
+        <td><code>routes.ts</code> + test</td>
+        <td>Không</td>
+        <td>Tách không gian + label</td>
+        <td>Lane thứ 2 nếu nhiều skip. Gutter phải 46px.</td>
+      </tr>
+      <tr>
+        <td>B offset</td>
+        <td><code>routes.ts</code></td>
+        <td>Có</td>
+        <td>Yếu ở 100% zoom</td>
+        <td>Vẫn đè body node.</td>
+      </tr>
+      <tr>
+        <td>C cột nhánh</td>
+        <td><code>positions.ts</code> + routes</td>
+        <td>Không</td>
+        <td>Tốt nhất</td>
+        <td>Mọi workflow hẹp bị đẩy ngang.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <script>
+    const W = 208, H = 58;
+    const CX = 260;
+    const nodes = {
+      check:   { x: CX - W / 2, y: 36,  kind: "BASH",   title: "clarify-file-check", state: "completed" },
+      respond: { x: CX - W / 2, y: 168, kind: "PROMPT", title: "clarify-respond",     state: "skipped" },
+      apply:   { x: CX - W / 2, y: 300, kind: "PROMPT", title: "clarify-apply",       state: "skipped" },
+      red:     { x: CX - W / 2, y: 432, kind: "PROMPT", title: "red-team",            state: "running" },
+    };
+
+    function nodeSvg(n) {
+      const stroke = n.state === "completed" ? "#3dd68c" : n.state === "running" ? "#6b9dff" : "#2a303a";
+      const fill = n.state === "completed" ? "#0f1c16" : n.state === "running" ? "#101826" : "#12141a";
+      const glow = n.state === "running" ? "filter:url(#glow)" : "";
+      const kindFill = n.kind === "BASH" ? "#e8b84a" : "#7aa2ff";
+      const opacity = n.state === "skipped" ? "0.55" : "1";
+      return `
+        <g opacity="${opacity}">
+          <rect x="${n.x}" y="${n.y}" width="${W}" height="${H}" rx="10" fill="${fill}" stroke="${stroke}" stroke-width="1.4" style="${glow}"/>
+          <text class="node-kind" x="${n.x + 14}" y="${n.y + 22}" fill="${kindFill}">${n.kind}</text>
+          <text class="node-title" x="${n.x + 58}" y="${n.y + 23}">${n.title}</text>
+          <circle cx="${n.x + W / 2}" cy="${n.y}" r="3.2" fill="#0b0c10" stroke="#9aa3ad" stroke-width="1.2"/>
+          <circle cx="${n.x + W / 2}" cy="${n.y + H}" r="3.2" fill="#0b0c10" stroke="#9aa3ad" stroke-width="1.2"/>
+        </g>`;
+    }
+
+    function chip(x, y, text) {
+      const w = Math.max(120, text.length * 6.2 + 16);
+      return `
+        <g>
+          <rect class="label-chip" x="${x - w / 2}" y="${y - 11}" width="${w}" height="22" rx="4"/>
+          <text class="label-chip-text" x="${x}" y="${y + 4}" text-anchor="middle">${text}</text>
+        </g>`;
+    }
+
+    function callout(x, y, w, h, text) {
+      return `
+        <g>
+          <rect class="callout" x="${x}" y="${y}" width="${w}" height="${h}" rx="4"/>
+          <text class="callout-text" x="${x + 8}" y="${y + 15}">${text}</text>
+        </g>`;
+    }
+
+    const defs = `
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b9dff"/>
+        </marker>
+        <marker id="arrow-dim" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#5b6573"/>
+        </marker>
+        <filter id="glow"><feGaussianBlur stdDeviation="2.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>`;
+
+    const spineThen = `M ${CX} ${nodes.check.y + H} C ${CX} ${nodes.check.y + H + 22} ${CX} ${nodes.respond.y - 22} ${CX} ${nodes.respond.y}`;
+    const spineRest = `
+      M ${CX} ${nodes.respond.y + H} C ${CX} ${nodes.respond.y + H + 18} ${CX} ${nodes.apply.y - 18} ${CX} ${nodes.apply.y}
+      M ${CX} ${nodes.apply.y + H} C ${CX} ${nodes.apply.y + H + 18} ${CX} ${nodes.red.y - 18} ${CX} ${nodes.red.y}`;
+
+    const views = {
+      now: {
+        edges: `
+          <path d="M ${CX} ${nodes.check.y + H} C ${CX} ${nodes.check.y + 180} ${CX} ${nodes.red.y - 40} ${CX} ${nodes.red.y}" fill="none" stroke="#6b9dff" stroke-width="1.7" marker-end="url(#arrow)"/>
+          <path d="${spineThen}" fill="none" stroke="#5b6573" stroke-width="1.6" stroke-dasharray="5 5" marker-end="url(#arrow-dim)"/>
+          <path d="${spineRest}" fill="none" stroke="#2a303a" stroke-width="1.3"/>
+          ${chip(CX, nodes.check.y + H + 28, "$output == 'HAS_QUESTIONS'")}
+          <text class="anno" x="28" y="210">then + else</text>
+          <text class="anno" x="28" y="226">cùng một x</text>
+          ${callout(18, 248, 128, 36, "skip xuyên 2 node")}
+        `,
+      },
+      a: {
+        edges: `
+          <path d="${spineThen}" fill="none" stroke="#5b6573" stroke-width="1.6" stroke-dasharray="5 5" marker-end="url(#arrow-dim)"/>
+          <path d="${spineRest}" fill="none" stroke="#2a303a" stroke-width="1.3"/>
+          <path d="M ${CX} ${nodes.check.y + H} C 402 ${nodes.check.y + H + 8} 402 ${nodes.red.y + H / 2} 364 ${nodes.red.y + H / 2}" fill="none" stroke="#6b9dff" stroke-width="1.8" marker-end="url(#arrow)"/>
+          <circle cx="364" cy="${nodes.red.y + H / 2}" r="3.2" fill="#0b0c10" stroke="#6b9dff"/>
+          ${chip(CX, nodes.check.y + H + 28, "then · HAS_QUESTIONS")}
+          ${chip(430, 300, "else · skip")}
+          ${callout(390, 92, 118, 34, "gutter phải 46px")}
+        `,
+      },
+      b: {
+        edges: `
+          <path d="M ${CX - 10} ${nodes.check.y + H} C ${CX - 10} ${nodes.check.y + H + 22} ${CX - 10} ${nodes.respond.y - 22} ${CX - 10} ${nodes.respond.y}" fill="none" stroke="#5b6573" stroke-width="1.6" stroke-dasharray="5 5" marker-end="url(#arrow-dim)"/>
+          <path d="M ${CX + 10} ${nodes.check.y + H} C ${CX + 10} ${nodes.check.y + 180} ${CX + 10} ${nodes.red.y - 40} ${CX + 10} ${nodes.red.y}" fill="none" stroke="#6b9dff" stroke-width="1.7" marker-end="url(#arrow)"/>
+          <path d="${spineRest}" fill="none" stroke="#2a303a" stroke-width="1.3"/>
+          ${chip(CX - 70, nodes.check.y + H + 36, "then")}
+          ${chip(CX + 78, nodes.check.y + H + 36, "else")}
+          ${callout(18, 248, 140, 36, "vẫn xuyên body")}
+        `,
+      },
+      c: {
+        edges: (() => {
+          const rx = 380;
+          return `
+            <path d="M ${CX} ${nodes.check.y + H} C ${CX} ${nodes.check.y + H + 20} ${CX} ${nodes.red.y - 24} ${CX} ${nodes.red.y}" fill="none" stroke="#6b9dff" stroke-width="1.8" marker-end="url(#arrow)"/>
+            <path d="M ${CX} ${nodes.check.y + H} C ${rx + W / 2} ${nodes.check.y + H + 10} ${rx + W / 2} ${nodes.respond.y - 16} ${rx + W / 2} ${nodes.respond.y}" fill="none" stroke="#5b6573" stroke-width="1.6" stroke-dasharray="5 5" marker-end="url(#arrow-dim)"/>
+            <path d="M ${rx + W / 2} ${nodes.respond.y + H} C ${rx + W / 2} ${nodes.respond.y + H + 16} ${rx + W / 2} ${nodes.apply.y - 16} ${rx + W / 2} ${nodes.apply.y}" fill="none" stroke="#2a303a" stroke-width="1.3"/>
+            <path d="M ${rx + W / 2} ${nodes.apply.y + H} C ${rx + W / 2} ${nodes.apply.y + H + 20} ${CX + W / 2 + 20} ${nodes.red.y + H / 2} ${CX + W} ${nodes.red.y + H / 2}" fill="none" stroke="#2a303a" stroke-width="1.3" marker-end="url(#arrow-dim)"/>
+            ${chip(CX - 8, nodes.check.y + H + 36, "else · skip")}
+            ${chip(rx + W / 2, nodes.check.y + H + 86, "then")}
+          `;
+        })(),
+        extraNodes: true,
+      },
+    };
+
+    function render(tab) {
+      const view = views[tab];
+      const respond = tab === "c" ? { ...nodes.respond, x: 380 - W / 2 } : nodes.respond;
+      const apply = tab === "c" ? { ...nodes.apply, x: 380 - W / 2 } : nodes.apply;
+      document.getElementById("canvas").innerHTML = `
+        <svg viewBox="0 0 540 560" role="img" aria-label="DAG mockup ${tab}">
+          ${defs}
+          ${view.edges}
+          ${nodeSvg(nodes.check)}
+          ${nodeSvg(respond)}
+          ${nodeSvg(apply)}
+          ${nodeSvg(nodes.red)}
+        </svg>`;
+    }
+
+    function select(tab) {
+      for (const btn of document.querySelectorAll("nav [role='tab']")) {
+        const on = btn.dataset.tab === tab;
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+      }
+      for (const panel of document.querySelectorAll("[role='tabpanel']")) {
+        panel.classList.toggle("hidden", panel.id !== "panel-" + tab);
+      }
+      render(tab);
+    }
+
+    document.querySelector("nav").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-tab]");
+      if (btn) select(btn.dataset.tab);
+    });
+    select("now");
+  </script>
+</body>
+</html>
