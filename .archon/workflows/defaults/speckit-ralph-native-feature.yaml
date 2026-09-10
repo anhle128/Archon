@@ -118,7 +118,7 @@ nodes:
       3. Read <feature_directory>/clarification-questions.md. Confirm it
          exists and has `Status: PENDING`. If missing or already ARCHIVED,
          STOP and report BLOCKED — do NOT fabricate questions.
-      4. trigger clarification-answer-review skill
+      4. trigger speckit-clarification-answer-review skill
     depends_on:
       - clarify-file-check
     when: "$clarify-file-check.output == 'HAS_QUESTIONS'"
@@ -301,7 +301,7 @@ nodes:
       3. Read `<feature_directory>/spec.md` for context.
       4. If there is a grill-me reference, read it and follow all decisions.
 
-      5. trigger red-team-answer-review skill
+      5. trigger speckit-red-team-answer-review skill
     depends_on:
       - red-team
     effort: xhigh

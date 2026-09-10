@@ -1,18 +1,22 @@
-name: speckit-feature
+name: speckit-ralph-native-feature-new
 description: |
-  Use when: User wants to develop a feature using the speckit SDD (Spec-Driven Development) pipeline end-to-end.
-  Triggers: "speckit feature", "spec-driven", "sdd pipeline", "full speckit", "speckit full",
-            "specify plan implement", "speckit end-to-end", "feature with speckit",
-            "speckit pipeline", "sdd feature".
-  Does: Specify → clarify (with Plannotator live review when questions exist) → red-team
-        (with Plannotator live review gate) → plan → tasks → analyze → tasks-to-ralph →
-        ralph.sh → sync-back →
-        converge gate → human review before retry → final Ralph pass on exhaustion →
-        BMAD sprint status update → PR creation.
+  Use when: User wants the Speckit SDD pipeline whose Ralph implement step is
+            archon-ralph-dag-project-aware, one tasks.md Tnnn per iteration.
+  Triggers: "speckit ralph native new", "speckit ralph one task",
+            "ralph one task per loop", "speckit project-aware ralph".
+  Does: Specify → clarify (Plannotator when questions exist) → red-team
+        (Plannotator) → plan → tasks → analyze → convert each unchecked Tnnn
+        into one Ralph userStory → archon-ralph-dag-project-aware once
+        (isolation: inherit; one story per loop) → sync-back → converge.
+        Converge FAIL: Plannotator then no-PR project-aware iteration
+        (archon-ralph-project-aware-iteration) so the child is not re-invoked.
+        Exhausted: one final no-PR Ralph pass → BMAD sprint status → PR.
+  NOT for: The batch Ralph loop (speckit-ralph-native-feature / tasks-to-prd.sh).
   NOT for: Quick one-file fixes, bug fixes, PR reviews.
   NOT for: When a spec already exists (use archon-speckit-plan-to-tasks instead).
   NOT for: Spec generation only without planning (use archon-speckit-spec instead).
 provider: codex
+model: gpt-5.5
 effort: xhigh
 # Human gates (plannotator_gate) require foreground on web so the live annotate URL is usable.
 interactive: true
@@ -41,16 +45,11 @@ nodes:
       don't guess, spawn sub-agents for help
     depends_on:
       - setup
-    effort: high
+    effort: xhigh
     provider: claude
-    model: "claude-opus-4-8[1M]"
-    # effort: xhigh
-    # provider: omp
-    # model: "anthropic/claude-opus-4-8"
-    # model: "xai-oauth/grok-4.6"
+    model: "fable"
     context: fresh
 
-    skills: [speckit-specify]
   - id: clarify
     prompt: |
       $speckit-clarifybatch --turn 10
@@ -130,12 +129,6 @@ nodes:
     provider: omp
     model: "xai-oauth/grok-4.6"
     context: fresh
-    allowed_tools:
-      - Read
-      - Edit
-      - Glob
-      - Grep
-      - Bash
 
   - id: clarify-gate
     plannotator_gate:
@@ -189,6 +182,9 @@ nodes:
         Crash recovery: `archon workflow review-open <run-id>` (then `resume` if the process died).
       capture_response: true
       rework:
+        provider: codex
+        model: gpt-5.5
+        effort: xhigh
         prompt: |
           You are handling human Plannotator annotations on clarification artifacts.
           Annotations are freeform reviewer notes. Classify each one before editing.
@@ -312,16 +308,9 @@ nodes:
     depends_on:
       - red-team
     effort: xhigh
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    provider: codex
+    model: "gpt-5.6-sol"
     context: fresh
-    allowed_tools:
-      - Read
-      - Edit
-      - Glob
-      - Grep
-      - Bash
-      - Task
 
   - id: red-team-gate
     plannotator_gate:
@@ -370,6 +359,9 @@ nodes:
         Crash recovery: `archon workflow review-open <run-id>` (then `resume` if needed).
       capture_response: true
       rework:
+        provider: codex
+        model: gpt-5.5
+        effort: xhigh
         prompt: |
           You are handling human Plannotator annotations on red-team findings.
           Annotations are freeform reviewer notes. Classify each one before editing.
@@ -420,32 +412,28 @@ nodes:
     effort: xhigh
     model: sonnet
     context: fresh
-
     skills: [speckit-red-team-apply]
+
   - id: plan
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
       /speckit-plan create detail plan <feature_directory>
     depends_on:
       - red-team-apply
-    # effort: xhigh
-    # provider: omp
-    # model: "xai-oauth/grok-4.6"
-    effort: high
-    provider: claude
-    model: "claude-opus-4-8[1M]"
+    effort: xhigh
+    provider: codex
+    model: "gpt-6-astra"
     context: fresh
 
-    skills: [speckit-plan]
   - id: tasks
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit-tasks <feature_directory>, don't create task relate to gitnexus
+      /speckit-tasks <feature_directory>
     depends_on:
       - plan
     effort: xhigh
-    provider: codex
-    model: "gpt-5.6-sol"
+    provider: omp
+    model: "xai-oauth/grok-4.6"
     context: fresh
 
   - id: analyze
@@ -583,12 +571,6 @@ nodes:
     provider: omp
     model: "xai-oauth/grok-4.6"
     context: fresh
-    allowed_tools:
-      - Read
-      - Edit
-      - Glob
-      - Grep
-      - Bash
 
   - id: analyze-apply
     prompt: |
@@ -601,32 +583,329 @@ nodes:
     context: fresh
 
     skills: [speckit-analyzebatch]
+    
+  # One unchecked Tnnn → one project-aware userStory. Do NOT call tasks-to-prd.sh
+  # (that script batches by Phase/###). Initial implement is the child workflow
+  # once. Converge retry/final use the no-PR project-aware iteration command.
   - id: ralph-tasks-to-ralph
-    bash: |
-      set -euo pipefail
-      bash .specify/extensions/ralph-loop/scripts/bash/tasks-to-prd.sh
+    script: &speckit_tasks_to_ralph |
+      import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+      import { isAbsolute, join, resolve } from "node:path";
+      
+      interface SpeckitTask {
+        id: string;
+        text: string;
+        parallel: boolean;
+        done: boolean;
+        phaseTitle: string;
+        subgroupTitle: string;
+      }
+      
+      interface RalphStory {
+        id: string;
+        title: string;
+        description: string;
+        acceptanceCriteria: string[];
+        technicalNotes: string;
+        dependsOn: string[];
+        priority: number;
+        passes: boolean;
+        notes: string;
+      }
+      
+      interface FeatureJson {
+        feature_directory?: unknown;
+        ralph_prd_file?: string;
+        ralph_progress_file?: string;
+        [key: string]: unknown;
+      }
+      
+      interface ConvertResult {
+        prd_dir: string;
+        story_count: number;
+        has_tasks: boolean;
+      }
+      
+      function spawnText(cmd: string, args: string[]): string {
+        const r = Bun.spawnSync([cmd, ...args], { stdout: "pipe", stderr: "pipe" });
+        const err = typeof r.stderr === "string" ? r.stderr : new TextDecoder().decode(r.stderr || new Uint8Array());
+        const out = typeof r.stdout === "string" ? r.stdout : new TextDecoder().decode(r.stdout || new Uint8Array());
+        if (r.exitCode !== 0) throw new Error(err.trim() || cmd + " failed");
+        return out.trim();
+      }
+      
+      function relFromRoot(root: string, abs: string): string {
+        const resolvedRoot = resolve(root);
+        const resolvedAbs = resolve(abs);
+        if (resolvedAbs === resolvedRoot) return ".";
+        if (resolvedAbs.startsWith(resolvedRoot + "/")) return resolvedAbs.slice(resolvedRoot.length + 1);
+        return resolvedAbs;
+      }
+      
+      function parseTasksMd(text: string): SpeckitTask[] {
+        const lines = text.split(/\r?\n/);
+        let phase = 0;
+        let phaseTitle = "";
+        let subgroupTitle = "";
+        const tasks: SpeckitTask[] = [];
+        for (const line of lines) {
+          if (/^##\s+Phase\s+\d+/i.test(line)) {
+            phase += 1;
+            subgroupTitle = "";
+            phaseTitle = line.replace(/^##\s+/, "").replace(/\t/g, "    ").trim();
+            continue;
+          }
+          if (/^###\s+/.test(line)) {
+            if (phase === 0) continue;
+            subgroupTitle = line.replace(/^###\s+/, "").replace(/\t/g, "    ").trim();
+            continue;
+          }
+          const m = line.match(/^(\s*)-\s+\[([ xX])\]\s+(T\d{3})\b(.*)$/);
+          if (!m) continue;
+          const textRest = m[4].replace(/^\s+/, "").replace(/\t/g, "    ");
+          if (phase === 0) {
+            phase = 1;
+            phaseTitle = "Phase 1";
+          }
+          tasks.push({
+            id: m[3],
+            text: textRest,
+            parallel: /(^|\s)\[P\](\s|$)/.test(textRest),
+            done: m[2] !== " ",
+            phaseTitle,
+            subgroupTitle,
+          });
+        }
+        return tasks;
+      }
+      
+      function computeDepends(all: SpeckitTask[]): Map<string, string[]> {
+        const depends = new Map<string, string[]>();
+        let checkpoint: string[] = [];
+        let parallelGroup: string[] = [];
+        for (const t of all) {
+          if (t.parallel) {
+            depends.set(t.id, checkpoint.slice());
+            parallelGroup.push(t.id);
+          } else {
+            const prev = parallelGroup.length > 0 ? parallelGroup.slice() : checkpoint.slice();
+            depends.set(t.id, prev);
+            checkpoint = [t.id];
+            parallelGroup = [];
+          }
+        }
+        return depends;
+      }
+      
+      const root = spawnText("git", ["rev-parse", "--show-toplevel"]);
+      const featureJsonPath = join(root, ".specify/feature.json");
+      if (!existsSync(featureJsonPath)) throw new Error("missing .specify/feature.json");
+      const feature = JSON.parse(readFileSync(featureJsonPath, "utf8")) as FeatureJson;
+      let featureDir = feature.feature_directory;
+      if (typeof featureDir !== "string" || featureDir.length === 0) {
+        throw new Error("feature.json has no feature_directory");
+      }
+      if (!isAbsolute(featureDir)) featureDir = join(root, featureDir);
+      const tasksPath = join(featureDir, "tasks.md");
+      if (!existsSync(tasksPath)) throw new Error("tasks.md missing at " + tasksPath);
+      const raw = readFileSync(tasksPath, "utf8");
+      const specRel = relFromRoot(root, featureDir);
+      let project = specRel.split("/").pop() || "feature";
+      const fm = raw.match(/^---\n([\s\S]*?)\n---/);
+      if (fm) {
+        const d = fm[1].match(/^description:\s*(.*)$/m);
+        if (d) {
+          const desc = d[1].replace(/^["']|["']$/g, "").trim();
+          if (desc) project = desc;
+        }
+      }
+      let description = project;
+      const header = raw.match(/^# Tasks:\s*(.+)$/m);
+      if (header) description = header[1].trim();
+      
+      const all = parseTasksMd(raw);
+      const dependsAll = computeDepends(all);
+      const emitted = all.filter((t: SpeckitTask) => !t.done);
+      const emittedIds = new Set(emitted.map((t: SpeckitTask) => t.id));
+      const userStories: RalphStory[] = emitted.map((t: SpeckitTask, i: number) => {
+        const title = t.text.replace(/(^|\s)\[P\](\s|$)/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+        const ac: string[] = ["Implement " + t.id + " exactly as specified in tasks.md"];
+        if (/test|spec/i.test(t.text)) ac.push("Tests pass");
+        ac.push("Typecheck passes");
+        if (/(^|\s)\[GATE\](\s|$)/.test(t.text)) ac.push("Named gate commands in the task text exit 0");
+        const noteParts = [
+          "Phase: " + t.phaseTitle,
+          t.subgroupTitle ? "Slice: " + t.subgroupTitle : "",
+          "Read " + specRel + "/spec.md, " + specRel + "/plan.md, and the " + t.id + " line in " + specRel + "/tasks.md.",
+          "Implement ONLY this task. Finish, update prd.json passes, commit, and exit the iteration.",
+        ].filter((part: string) => part.length > 0);
+        return {
+          id: t.id,
+          title: title || t.id,
+          description: t.text,
+          acceptanceCriteria: ac,
+          technicalNotes: noteParts.join(" "),
+          dependsOn: (dependsAll.get(t.id) || []).filter((id: string) => emittedIds.has(id)),
+          priority: i + 1,
+          passes: false,
+          notes: "",
+        };
+      });
+      
+      const prdPath = join(featureDir, "prd.json");
+      const mdPath = join(featureDir, "prd.md");
+      const progressPath = join(featureDir, "progress.txt");
+      writeFileSync(prdPath, JSON.stringify({ feature: description, userStories }, null, 2) + "\n");
+      const rows = userStories.map((s: RalphStory) => {
+        const deps = s.dependsOn.length > 0 ? s.dependsOn.join(", ") : "—";
+        return "| " + s.id + " | " + s.priority + " | " + s.title.replace(/\|/g, "/") + " | " + deps + " |";
+      });
+      writeFileSync(
+        mdPath,
+        [
+          "# " + description,
+          "",
+          project,
+          "",
+          "Spec directory: `" + specRel + "`",
+          "",
+          "Each Ralph iteration implements **exactly one** `tasks.md` task (one `userStories[]` row).",
+          "Do not batch Phase or slice groups. Finish the selected story, update `prd.json`, commit, and exit.",
+          "",
+          "## Stories",
+          "",
+          "| ID | Priority | Title | Depends on |",
+          "|----|----------|-------|------------|",
+          rows.length ? rows.join("\n") : "| — | — | (no unchecked Tnnn tasks) | — |",
+          "",
+        ].join("\n"),
+      );
+      writeFileSync(progressPath, "");
+      feature.ralph_prd_file = relFromRoot(root, prdPath);
+      feature.ralph_progress_file = relFromRoot(root, progressPath);
+      writeFileSync(featureJsonPath, JSON.stringify(feature, null, 2) + "\n");
+      
+      const artifactsDir = process.env.ARTIFACTS_DIR;
+      if (!artifactsDir) throw new Error("ARTIFACTS_DIR is required");
+      mkdirSync(join(artifactsDir, "speckit"), { recursive: true });
+      mkdirSync(join(artifactsDir, "superpowers"), { recursive: true });
+      writeFileSync(join(artifactsDir, "speckit", "prd-dir.txt"), resolve(featureDir) + "\n");
+      writeFileSync(join(artifactsDir, "superpowers", "prd-dir.txt"), resolve(featureDir) + "\n");
+      
+      const result: ConvertResult = {
+        prd_dir: resolve(featureDir),
+        story_count: userStories.length,
+        has_tasks: userStories.length > 0,
+      };
+      process.stderr.write("converted " + String(userStories.length) + " unchecked Tnnn task(s) to one-story Ralph PRD\n");
+      process.stdout.write(JSON.stringify(result) + "\n");
+    runtime: bun
+    timeout: 60000
     depends_on:
       - analyze-apply
-      - speckit-converge-review-gate
-    trigger_rule: one_success
 
-  - id: ralph-loop-run
-    bash: |
-      bash .specify/extensions/ralph-loop/ralph.sh
+
+  - id: ralph-implement
+    workflow: archon-ralph-dag-project-aware
+    input: '$ralph-tasks-to-ralph.output.prd_dir'
+    isolation: inherit
     depends_on:
       - ralph-tasks-to-ralph
-    timeout: 86400000
+    when: "$ralph-tasks-to-ralph.output.has_tasks == true"
 
   - id: ralph-sync-back
-    prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit.ralph-loop.sync-back <feature_directory>
+    script: &speckit_ralph_sync |
+      import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+      import { isAbsolute, join } from "node:path";
+      
+      function spawnText(cmd: string, args: string[]): string {
+        const r = Bun.spawnSync([cmd, ...args], { stdout: "pipe", stderr: "pipe" });
+        const err = typeof r.stderr === "string" ? r.stderr : new TextDecoder().decode(r.stderr || new Uint8Array());
+        const out = typeof r.stdout === "string" ? r.stdout : new TextDecoder().decode(r.stdout || new Uint8Array());
+        if (r.exitCode !== 0) throw new Error(err.trim() || cmd + " failed");
+        return out.trim();
+      }
+      
+      function resolveFromRoot(root: string, value: string): string {
+        if (!value) return value;
+        return isAbsolute(value) ? value : join(root, value);
+      }
+      
+      const artifactsDir = process.env.ARTIFACTS_DIR;
+      if (!artifactsDir) throw new Error("ARTIFACTS_DIR is required");
+      
+      const root = spawnText("git", ["rev-parse", "--show-toplevel"]);
+      const featureJsonPath = join(root, ".specify/feature.json");
+      if (!existsSync(featureJsonPath)) throw new Error("Missing " + featureJsonPath);
+      const feature = JSON.parse(readFileSync(featureJsonPath, "utf8")) as {
+        ralph_prd_file?: unknown;
+        ralph_progress_file?: unknown;
+        feature_directory?: unknown;
+      };
+      if (typeof feature.feature_directory !== "string" || feature.feature_directory.length === 0) {
+        throw new Error("feature.json has no feature_directory");
+      }
+      const featureDir = resolveFromRoot(root, feature.feature_directory);
+      const tasksPath = join(featureDir, "tasks.md");
+      if (!existsSync(tasksPath)) throw new Error("Missing " + tasksPath);
+      
+      const prdRel = typeof feature.ralph_prd_file === "string" ? feature.ralph_prd_file : "";
+      const prdPath = resolveFromRoot(root, prdRel);
+      if (!prdRel || !existsSync(prdPath)) {
+        console.log("[info] no prd.json; nothing to sync");
+        process.exit(0);
+      }
+      const progressRel = typeof feature.ralph_progress_file === "string" ? feature.ralph_progress_file : "";
+      const progressPath = progressRel ? resolveFromRoot(root, progressRel) : "";
+      
+      const prd = JSON.parse(readFileSync(prdPath, "utf8")) as {
+        userStories?: Array<{ passes?: boolean; id?: string; tasks?: Array<{ passes?: boolean; id?: string }> }>;
+      };
+      const passed = new Set<string>();
+      for (const story of prd.userStories ?? []) {
+        if (story.passes === true && typeof story.id === "string") passed.add(story.id);
+        for (const task of story.tasks ?? []) {
+          if (task.passes === true && typeof task.id === "string") passed.add(task.id);
+        }
+      }
+      
+      const taskLines = readFileSync(tasksPath, "utf8").split(/\r?\n/);
+      let flipped = 0;
+      const next = taskLines.map((line) => {
+        if (!/^\s*-\s+\[ \]\s+T\d{3}\b/.test(line)) return line;
+        const parts = line.trim().split(/\s+/);
+        const id = parts.find((p) => /^T\d{3}$/.test(p));
+        if (!id || !passed.has(id)) return line;
+        flipped += 1;
+        console.error("[flip] " + id);
+        return line.replace("[ ]", "[X]");
+      });
+      writeFileSync(tasksPath, next.join("\n"));
+      console.error("[summary] flipped " + String(flipped) + " task(s)");
+      
+      const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+      let archiveDir = join(featureDir, "archive", stamp);
+      if (existsSync(archiveDir)) archiveDir = archiveDir + "-" + String(process.pid);
+      mkdirSync(archiveDir, { recursive: true });
+      renameSync(prdPath, join(archiveDir, "prd.json"));
+      if (progressPath && existsSync(progressPath)) renameSync(progressPath, join(archiveDir, "progress.txt"));
+      const mdPath = join(featureDir, "prd.md");
+      if (existsSync(mdPath)) renameSync(mdPath, join(archiveDir, "prd.md"));
+      mkdirSync(join(artifactsDir, "speckit"), { recursive: true });
+      appendFileSync(join(artifactsDir, "speckit", "archive-dirs.txt"), archiveDir + "\n");
+      console.log("[archive] " + archiveDir);
+    runtime: bun
+    timeout: 60000
     depends_on:
-      - ralph-loop-run
-    provider: codex
-    effort: medium
-    model: gpt-5.6-terra
-    context: fresh
+      - ralph-implement
+    when: "$ralph-tasks-to-ralph.output.has_tasks == true"
+
+  - id: ralph-no-tasks
+    bash: |
+      echo "no unchecked Tnnn tasks; skipping Ralph implement"
+    depends_on:
+      - ralph-tasks-to-ralph
+    when: "$ralph-tasks-to-ralph.output.has_tasks == false"
 
   - id: speckit-converge
     prompt: |
@@ -636,6 +915,8 @@ nodes:
       Return FAIL when it added one or more tasks to tasks.md .
     depends_on:
       - ralph-sync-back
+      - ralph-no-tasks
+    trigger_rule: one_success
     provider: codex
     effort: xhigh
     model: gpt-5.6-sol
@@ -703,6 +984,9 @@ nodes:
         Crash recovery: `archon workflow review-open <run-id>` (then `resume` if needed).
       capture_response: true
       rework:
+        provider: codex
+        model: gpt-5.5
+        effort: xhigh
         prompt: |
           You are handling human Plannotator annotations on the tasks added by
           this `speckit-converge` pass.
@@ -723,41 +1007,169 @@ nodes:
           7. Print only the absolute path to the updated `tasks.md`.
              Do not add a Markdown fence or commentary.
 
-  - id: speckit-final-ralph-tasks-to-ralph
-    bash: |
-      set -euo pipefail
-      bash .specify/extensions/ralph-loop/scripts/bash/tasks-to-prd.sh
-    depends_on: [speckit-converge-gate]
+  - id: ralph-retry-tasks-to-ralph
+    script: *speckit_tasks_to_ralph
+    runtime: bun
+    timeout: 60000
+    depends_on: [speckit-converge-review-gate]
 
-  - id: speckit-final-ralph-loop-run
+
+  - id: ralph-retry-implement
+    depends_on: [ralph-retry-tasks-to-ralph]
+    when: "$ralph-retry-tasks-to-ralph.output.has_tasks == true"
+    idle_timeout: 3600000
+    provider: omp
+    effort: high
+    model: xai-oauth/grok-4.5
+    output_format:
+      type: object
+      properties:
+        done:
+          type: boolean
+        mode:
+          type: string
+        story_id:
+          type: string
+        note:
+          type: string
+      required: [done]
+    loop:
+      command: archon-ralph-project-aware-iteration
+      fresh_context: true
+      max_iterations: 35
+      until_bash: |
+        set -euo pipefail
+        PRD_FILE="${ARTIFACTS_DIR}/speckit/prd-dir.txt"
+        [ -f "$PRD_FILE" ] || exit 1
+        PRD_DIR=$(tr -d '[:space:]' < "$PRD_FILE")
+        [ -n "$PRD_DIR" ] && [ -f "$PRD_DIR/prd.json" ] || exit 1
+        jq -e '.userStories | type == "array" and all(.[]; .passes == true)' "$PRD_DIR/prd.json" >/dev/null
+
+  - id: ralph-retry-sync-back
+    script: *speckit_ralph_sync
+    runtime: bun
+    timeout: 60000
+    depends_on:
+      - ralph-retry-implement
+    when: "$ralph-retry-tasks-to-ralph.output.has_tasks == true"
+
+  - id: ralph-retry-no-tasks
     bash: |
-      bash .specify/extensions/ralph-loop/ralph.sh
+      echo "no unchecked Tnnn tasks; skipping retry Ralph implement"
+    depends_on:
+      - ralph-retry-tasks-to-ralph
+    when: "$ralph-retry-tasks-to-ralph.output.has_tasks == false"
+
+  - id: speckit-converge-retry
+    prompt: |
+      Read .specify/feature.json to resolve <feature_directory>.
+      run speckit-converge
+      Return PASS only when there are no any problem.
+      Return FAIL when it added one or more tasks to tasks.md .
+    depends_on:
+      - ralph-retry-sync-back
+      - ralph-retry-no-tasks
+    trigger_rule: one_success
+    provider: codex
+    effort: xhigh
+    model: gpt-5.6-sol
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        gate:
+          type: string
+          enum: [PASS, FAIL]
+        tasks_added:
+          type: number
+      required:
+        - gate
+        - tasks_added
+    output_type: speckit-convergence
+
+  - id: speckit-converge-retry-gate
+    depends_on: [speckit-converge-retry]
+    route_loop:
+      condition: "$speckit-converge-retry.output.gate == 'PASS'"
+      max_iterations: 3
+      routes:
+        positive: cargo-clean-before-pr
+        negative: speckit-converge-review-gate
+        exhausted: speckit-final-ralph-tasks-to-ralph
+
+  - id: speckit-final-ralph-tasks-to-ralph
+    script: *speckit_tasks_to_ralph
+    runtime: bun
+    timeout: 60000
+    depends_on: [speckit-converge-gate, speckit-converge-retry-gate]
+    trigger_rule: one_success
+
+
+  - id: speckit-final-ralph-implement
     depends_on: [speckit-final-ralph-tasks-to-ralph]
-    timeout: 86400000
+    when: "$speckit-final-ralph-tasks-to-ralph.output.has_tasks == true"
+    idle_timeout: 3600000
+    provider: omp
+    effort: high
+    model: xai-oauth/grok-4.5
+    output_format:
+      type: object
+      properties:
+        done:
+          type: boolean
+        mode:
+          type: string
+        story_id:
+          type: string
+        note:
+          type: string
+      required: [done]
+    loop:
+      command: archon-ralph-project-aware-iteration
+      fresh_context: true
+      max_iterations: 35
+      until_bash: |
+        set -euo pipefail
+        PRD_FILE="${ARTIFACTS_DIR}/speckit/prd-dir.txt"
+        [ -f "$PRD_FILE" ] || exit 1
+        PRD_DIR=$(tr -d '[:space:]' < "$PRD_FILE")
+        [ -n "$PRD_DIR" ] && [ -f "$PRD_DIR/prd.json" ] || exit 1
+        jq -e '.userStories | type == "array" and all(.[]; .passes == true)' "$PRD_DIR/prd.json" >/dev/null
 
   - id: speckit-final-ralph-sync-back
-    prompt: |
-      Read .specify/feature.json to resolve <feature_directory>, then run:
-      /speckit.ralph-loop.sync-back <feature_directory>
-    depends_on: [speckit-final-ralph-loop-run]
-    provider: codex
-    effort: medium
-    model: gpt-5.6-terra
-    context: fresh
+    script: *speckit_ralph_sync
+    runtime: bun
+    timeout: 60000
+    depends_on:
+      - speckit-final-ralph-implement
+    when: "$speckit-final-ralph-tasks-to-ralph.output.has_tasks == true"
+
+  - id: speckit-final-ralph-no-tasks
+    bash: |
+      echo "no unchecked Tnnn tasks; skipping final Ralph implement"
+    depends_on:
+      - speckit-final-ralph-tasks-to-ralph
+    when: "$speckit-final-ralph-tasks-to-ralph.output.has_tasks == false"
 
   - id: cargo-clean-before-pr
     bash: |
       if [ -f Cargo.toml ]; then
         cargo clean
       fi
-    depends_on: [speckit-converge-gate]
+    depends_on: [speckit-converge-gate, speckit-converge-retry-gate]
+    trigger_rule: one_success
+
 
   - id: speckit-final-cargo-clean-before-pr
     bash: |
       if [ -f Cargo.toml ]; then
         cargo clean
       fi
-    depends_on: [speckit-final-ralph-sync-back]
+    depends_on:
+      - speckit-final-ralph-sync-back
+      - speckit-final-ralph-no-tasks
+    trigger_rule: one_success
+
 
   - id: update-bmad-sprint-status
     prompt: |
@@ -778,12 +1190,107 @@ nodes:
     context: fresh
     model: gpt-5.6-terra
 
+  - id: finalize-parent-commits
+    bash: |
+      set -euo pipefail
+      ROOT=$(git rev-parse --show-toplevel)
+      cd "$ROOT"
+      add_if_exists() {
+        local p
+        for p in "$@"; do
+          if [ -e "$p" ]; then
+            git add -- "$p"
+          fi
+        done
+      }
+      add_if_exists .specify/feature.json
+      add_if_exists _bmad-output/implementation-artifacts/sprint-status.yaml
+      FEATURE_DIR=$(jq -r '.feature_directory // empty' .specify/feature.json 2>/dev/null || true)
+      if [ -n "$FEATURE_DIR" ]; then
+        case "$FEATURE_DIR" in /*) : ;; *) FEATURE_DIR="$ROOT/$FEATURE_DIR" ;; esac
+        add_if_exists "$FEATURE_DIR/tasks.md" "$FEATURE_DIR/spec.md" "$FEATURE_DIR/plan.md"
+        git add -u -- "$FEATURE_DIR/prd.json" "$FEATURE_DIR/progress.txt" "$FEATURE_DIR/prd.md" 2>/dev/null || true
+      fi
+      ARCHIVE_LIST="$ARTIFACTS_DIR/speckit/archive-dirs.txt"
+      if [ -f "$ARCHIVE_LIST" ]; then
+        while IFS= read -r archive_dir; do
+          [ -n "$archive_dir" ] || continue
+          [ -d "$archive_dir" ] || { echo "missing recorded archive dir: $archive_dir" >&2; exit 1; }
+          git add -- "$archive_dir"
+        done < "$ARCHIVE_LIST"
+      fi
+      git diff --cached --name-status
+      if git diff --cached --quiet; then
+        echo "no parent-owned changes to commit"
+      else
+        git commit -m "chore: speckit ralph sync-back and sprint status"
+      fi
+      git push -u origin HEAD
+      OWNED=".specify/feature.json _bmad-output/implementation-artifacts/sprint-status.yaml"
+      if [ -n "${FEATURE_DIR:-}" ]; then
+        OWNED="$OWNED $FEATURE_DIR/tasks.md $FEATURE_DIR/spec.md $FEATURE_DIR/plan.md $FEATURE_DIR/prd.json $FEATURE_DIR/progress.txt $FEATURE_DIR/prd.md"
+      fi
+      if [ -f "$ARCHIVE_LIST" ]; then
+        while IFS= read -r archive_dir; do
+          [ -n "$archive_dir" ] || continue
+          OWNED="$OWNED $archive_dir"
+        done < "$ARCHIVE_LIST"
+      fi
+      # shellcheck disable=SC2086
+      leftover=$(git status --porcelain -- $OWNED)
+      if [ -n "$leftover" ]; then
+        echo "parent-owned paths still dirty after finalize:" >&2
+        printf '%s\n' "$leftover" >&2
+        exit 1
+      fi
+
+    depends_on: [update-bmad-sprint-status]
+
+  - id: resolve-existing-pr
+    bash: |
+      set -euo pipefail
+      ORIGIN_REPO=$(gh repo view "$(git remote get-url origin)" --json nameWithOwner -q .nameWithOwner)
+      PR_REPO=$(gh repo view "$(git remote get-url "$PR_REMOTE")" --json nameWithOwner -q .nameWithOwner)
+      HEAD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+      ORIGIN_OWNER=${ORIGIN_REPO%%/*}
+      if [ "$ORIGIN_REPO" = "$PR_REPO" ]; then
+        PR_HEAD="$HEAD_BRANCH"
+      else
+        PR_HEAD="${ORIGIN_OWNER}:$HEAD_BRANCH"
+      fi
+      PR_JSON=$(gh pr list --repo "$PR_REPO" --head "$PR_HEAD" --state open --json number,url -q '.[0] // empty')
+      if [ -n "$PR_JSON" ]; then
+        PR_NUMBER=$(printf '%s' "$PR_JSON" | jq -r '.number')
+        PR_URL=$(printf '%s' "$PR_JSON" | jq -r '.url')
+        EXPECTED="$BASE_BRANCH"
+        ACTUAL=$(gh pr view "$PR_NUMBER" --repo "$PR_REPO" --json baseRefName -q '.baseRefName')
+        if [ "$ACTUAL" != "$EXPECTED" ]; then
+          gh pr edit "$PR_NUMBER" --repo "$PR_REPO" --base "$EXPECTED"
+        fi
+        jq -n --arg status found --arg number "$PR_NUMBER" --arg url "$PR_URL" \
+          '{status:$status,number:$number,url:$url}'
+      else
+        jq -n '{status:"missing",number:"",url:""}'
+      fi
+    depends_on: [finalize-parent-commits]
+
+  - id: report-existing-pr
+    bash: |
+      set -euo pipefail
+      url=$resolve-existing-pr.output.url
+      printf 'Existing PR for this head: %s\n' "$url"
+    depends_on: [resolve-existing-pr]
+    when: "$resolve-existing-pr.output.status == 'found'"
+    output_type: pull-request
+
   - id: create-pull-request
     command: archon-create-pr
-    provider: codex
-    effort: medium
-    depends_on: [update-bmad-sprint-status]
+    depends_on: [resolve-existing-pr]
+    when: "$resolve-existing-pr.output.status == 'missing'"
     context: fresh
-    model: gpt-5.6-terra
+    provider: omp
+    model: cursor/composer-2.5
+    effort: high
     idle_timeout: 900000
     output_type: pull-request
+
