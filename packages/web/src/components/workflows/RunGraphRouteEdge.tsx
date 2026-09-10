@@ -24,9 +24,10 @@ function strokeForRoute(route: LayoutRoute): string {
   switch (route.kind) {
     case 'route':
       return takenRouteStroke(route.outcome);
-    case 'dependency':
     case 'conditional':
-      return 'var(--accent-bright)';
+      return 'var(--success)';
+    case 'dependency':
+      return route.outcome === 'negative' ? 'var(--accent)' : 'var(--accent-bright)';
   }
 }
 

@@ -58,6 +58,19 @@ describe('RunGraphRouteEdge', () => {
     expect(markup).toContain('stroke:var(--accent-bright)');
   });
 
+  test('taken conditional uses success', () => {
+    const markup = render(route({ taken: true, kind: 'conditional', label: '$a.ok' }));
+    expect(markup).toContain('stroke:var(--success)');
+    expect(markup).toContain('stroke-dasharray');
+  });
+
+  test('taken else dependency uses accent', () => {
+    const markup = render(
+      route({ taken: true, kind: 'dependency', outcome: 'negative', label: 'else' })
+    );
+    expect(markup).toContain('stroke:var(--accent)');
+  });
+
   test('taken positive route uses success', () => {
     const markup = render(
       route({ taken: true, kind: 'route', outcome: 'positive', label: 'positive' })

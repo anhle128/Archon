@@ -87,6 +87,29 @@ describe('layout', () => {
     expect(result.routes[0].taken).toBe(true);
   });
 
+  test('conditional source tags the sibling skip as else', () => {
+    const result = layout({
+      nodes: [node('check', 'completed'), node('respond', 'skipped'), node('red', 'running')],
+      edges: [
+        {
+          id: 'check->respond',
+          source: 'check',
+          target: 'respond',
+          kind: 'conditional',
+          label: 'HAS_QUESTIONS',
+        },
+        { id: 'check->red', source: 'check', target: 'red', kind: 'dependency' },
+        { id: 'respond->red', source: 'respond', target: 'red', kind: 'dependency' },
+      ],
+    });
+    const skip = result.routes.find(item => item.edgeId === 'check->red');
+    const join = result.routes.find(item => item.edgeId === 'respond->red');
+    expect(skip?.label).toBe('else');
+    expect(skip?.outcome).toBe('negative');
+    expect(join?.label).toBeUndefined();
+    expect(join?.outcome).toBeUndefined();
+  });
+
   test('index exports layout as the only runtime value', () => {
     expect(Object.keys(runGraph)).toEqual(['layout']);
     expect(runGraph.layout).toBe(layout);
