@@ -1,7 +1,7 @@
-# Single UI merge-gate on PRs into `dev`.
+# Single UI merge-gate on PRs into `develop`.
 #
 # Stable GitHub check name: **PR E2E Verify** (this job's `name:`). Pin that
-# exact string in a `dev` ruleset when Kevin wants it required. Do not rename
+# exact string in a `develop` ruleset when Kevin wants it required. Do not rename
 # after pinning — required checks bind the check-run name.
 #
 # Trigger choice: `pull_request` (not `pull_request_target`).
@@ -9,8 +9,7 @@
 # approve/merge with write secrets even for the marketplace path. This gate
 # also comments and may push evidence, but it does that with the
 # `pull_request` GITHUB_TOKEN + explicit write permissions — same-repo PRs
-# into `dev` get write; fork PRs stay read-only (evidence push is already
-# non-fatal in the DAG; a comment failure fails the job). We do **not** use
+# into `develop` get write; fork PRs stay read-only. We do **not** use
 # `pull_request_target` so a fork PR cannot run this YAML against write
 # secrets. The runner checkouts the *base* SHA (trusted CLI + DAG) and the
 # Archon workflow fetches the PR head into its own worktree.
@@ -27,7 +26,7 @@ name: PR E2E Verify
 
 on:
   pull_request:
-    branches: [dev]
+    branches: [develop]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
@@ -38,7 +37,9 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
-  cancel-in-progress: true
+  # Evidence authoring can push a new PR-head commit mid-run. Let that run finish
+  # exact-head proof; a queued synchronize run then verifies the published head again.
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -70,6 +71,9 @@ jobs:
               - 'e2e/**'
               - '.github/workflows/pr-e2e-verify.yml'
               - '.archon/workflows/pr-e2e-verify.yaml'
+              - '.archon/scripts/verify-feature-gate.ts'
+              - '.agents/skills/select-verify-archon-targets/**'
+              - '.agents/skills/verify-archon/**'
               - '.claude/skills/web-automation-test-pr/**'
               - '.claude/skills/chrome-devtools-axi/**'
               - '.claude/skills/verify-thirdparties-e2e-test-pr/**'
@@ -245,30 +249,35 @@ jobs:
           GET_JSON=$(bun run cli workflow get "$RUN_ID" --json --verbose)
           printf '%s\n' "$GET_JSON" | jq '{state: .result.state, nodes: .result.nodes}'
 
-          if [ "$wf_code" -ne 0 ]; then
-            echo "::error::pr-e2e-verify workflow failed (exit $wf_code). plan-tests / verify / a bash node did not complete." >&2
-            exit 1
-          fi
-
           COMMENT_DONE=$(printf '%s' "$GET_JSON" | jq -r '[.result.nodes[]? | select(.nodeId == "comment-pr" and .state == "completed")] | length')
           if [ "$COMMENT_DONE" -gt 0 ]; then
             echo "::error::third-party coverage exhausted (comment-pr). Missing anchors must be added before merge." >&2
             exit 1
           fi
 
-          STATUS_FILE=$(find "$ARCHON_HOME/workspaces" -name e2e-status.txt -path '*/artifacts/runs/*' 2>/dev/null | sort | tail -1 || true)
-          if [ -z "$STATUS_FILE" ]; then
-            echo "::error::no e2e-status.txt under ARCHON_HOME — run-e2e did not record a Playwright verdict." >&2
+          GATE_FILE=$(find "$ARCHON_HOME/workspaces" -path "*/artifacts/runs/$RUN_ID/verify/gate.json" -print -quit 2>/dev/null || true)
+          if [ -z "$GATE_FILE" ]; then
+            echo "::error::no verify/gate.json under ARCHON_HOME — deterministic verification did not complete." >&2
+            if [ "$wf_code" -ne 0 ]; then
+              echo "::error::pr-e2e-verify workflow failed with exit $wf_code before producing a gate." >&2
+            fi
             exit 1
           fi
-          status=$(tr -d '[:space:]' < "$STATUS_FILE")
-          echo "e2e-status=$status (from $STATUS_FILE)"
-          if [ "$status" != "passed" ]; then
-            echo "::error::Playwright run-e2e $status. See e2e-result.log in uploaded artifacts." >&2
+          verdict=$(jq -r .verdict "$GATE_FILE")
+          verified_head=$(jq -r .head_sha "$GATE_FILE")
+          current_head=$(gh pr view "$PR_REF" --json headRefOid -q .headRefOid)
+          current_head=$(printf '%s' "$current_head" | tr -d '[:space:]')
+          echo "verification=$verdict verified_head=$verified_head current_pr_head=$current_head"
+          if [ "$verdict" != "PASS" ] || [ "$verified_head" != "$current_head" ]; then
+            echo "::error::catalog-backed verification did not pass for the current PR head. See verify/report.md and result.json in uploaded artifacts." >&2
+            exit 1
+          fi
+          if [ "$wf_code" -ne 0 ]; then
+            echo "::error::pr-e2e-verify exited $wf_code despite a passing gate; inspect node state." >&2
             exit 1
           fi
 
-          ART_DIR=$(dirname "$STATUS_FILE")
+          ART_DIR=$(dirname "$(dirname "$GATE_FILE")")
           SHOTS=$(find "$ART_DIR/plan-tests" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.webp' \) 2>/dev/null | wc -l | tr -d ' ')
           echo "AXI screenshots in plan-tests/: $SHOTS"
           if [ "${REQUIRE_AXI_SCREENSHOTS}" = "true" ] && [ "${SHOTS:-0}" -lt 1 ]; then
