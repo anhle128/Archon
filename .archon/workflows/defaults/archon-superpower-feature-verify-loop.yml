@@ -132,7 +132,7 @@ nodes:
     depends_on:
       - review-fix-plan
     provider: omp
-    model: cursor/gemini-3.8-flash
+    model: cursor/composer-2.5
     effort: high
     context: fresh
     prompt: |
@@ -455,7 +455,7 @@ nodes:
     description: Create the pull request only after verify-archon PASS.
     command: archon-create-pr
     provider: omp
-    model: cursor/gemini-3.8-flash
+    model: cursor/composer-2.5
     effort: high
     context: fresh
     idle_timeout: 900000

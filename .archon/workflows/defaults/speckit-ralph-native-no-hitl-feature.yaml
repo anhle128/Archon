@@ -657,7 +657,7 @@ nodes:
   - id: create-pull-request
     command: archon-create-pr
     provider: omp
-    model: cursor/gemini-3.8-flash  
+    model: cursor/composer-2.5  
     effort: hight
     depends_on: [update-bmad-sprint-status]
     context: fresh
