@@ -35,9 +35,9 @@ Preconditions:
 
 - **Dry-run routing.** Run `verify-archon prove --scenario workflows.dry-run`. It supplies stubs, asserts `outcome: completed`, and compares the complete before/after run listings. A missing stub or changed listing fails.
 - **Confirm dry-run isolation.** Observe that no provider was contacted and no new run id appeared. Run `verify-archon cli -- workflow runs --json` again. The run count matches the pre-dry-run count.
-- **Optional exec-code.** Execute trusted nodes. Run `verify-archon cli -- workflow run e2e-deterministic --dry-run --exec-code --json`. Exit code `0` if `bun` and `uv` both exist. If `uv` is missing, record the failure and do not claim `script-python` ran.
+- **Optional exec-code.** Execute trusted nodes. Run `verify-archon cli -- workflow run e2e-deterministic --dry-run --exec-code --json`. Exit code `0` if `bun` and `uv` both exist. If `uv` is missing, record the `script-python` failure (`Executable not found … uv`) and do not claim that node ran. Still no run row.
 - **Optional real run.** Create a run only when proving this feature live (not required for the generator's one-feature pass). Run `verify-archon cli -- workflow run e2e-deterministic --no-worktree --json` is **not** a clean JSON document unless `--detach` is also set. Prefer the human stream, then `workflow runs --json` / `workflow get <id> --json`. `result.state` is `completed` and `result.terminal` is true on success.
-- **Proof.** Keep the dry-run JSON and the before/after `workflow runs` payloads. Evidence names `dry-run.cli.json` and `runs-after-dry-run.cli.json`.
+- **Proof.** The automated recipe keeps `dry-run.cli.json` and the unchanged listing (`runs-before.cli.json` / `runs-after-dry-run.cli.json`). A manual bare dry-run also records `dry-run.cli.exit`. Optional exec-code writes `dry-run-exec-code.cli.json`.
 
 ## Gotchas
 
