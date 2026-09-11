@@ -694,6 +694,9 @@ drive_diagnose_install() {
   printf '%s\n' "$payload" >"$ev/health.http.json"
   [[ "$code" == "200" ]] || die "GET /api/health HTTP $code"
   assert_jq "$ev/health.http.json" '.status == "ok"' "health status is not ok"
+  assert_jq "$ev/health.http.json" '.adapter == "web"' "health adapter is not web"
+  assert_jq "$ev/health.http.json" '.is_docker == false' \
+    "expected host-native bun server (is_docker false)"
   product_cli doctor >"$ev/doctor.cli.txt" 2>&1 || die "product doctor failed"
   jq -n --arg feature diagnose-install --arg evidenceDir "$ev" \
     '{feature:$feature, evidenceDir:$evidenceDir, ok:true}' >"$ev/summary.json"
@@ -741,8 +744,8 @@ drive_discover_workflows() {
   printf '%s\n' "$payload" >"$ev/workflows-project.http.json"
   [[ "$code" == "200" ]] || die "GET /api/workflows?cwd= HTTP $code"
   assert_jq "$ev/workflows-project.http.json" \
-    '[.workflows[] | select(.workflow.name == "e2e-deterministic")] | length >= 1' \
-    "project catalog missing e2e-deterministic"
+    '[.workflows[] | select(.workflow.name == "e2e-deterministic" and .source == "project")] | length >= 1' \
+    "project catalog missing e2e-deterministic with source=project"
   jq '{count:(.workflows|length), names:[.workflows[].name]}' \
     "$ev/workflow-list.cli.json" >"$ev/workflow-list.cli.names.json"
   jq '{count:(.workflows|length), names:[.workflows[].workflow.name]}' \
@@ -810,8 +813,8 @@ drive_inspect_run() {
       '(if type == "array" then . else .runs end) | any(.id == $id and .status == "paused")' \
       "$ev/runs.$view.json" >/dev/null || die "$view listing omitted the actual paused run"
   done
-  jq -n --arg feature inspect-run --arg evidenceDir "$ev" \
-    '{feature:$feature, evidenceDir:$evidenceDir, ok:true}' >"$ev/summary.json"
+  jq -n --arg feature inspect-run --arg evidenceDir "$ev" --arg runId "$run_id" \
+    '{feature:$feature, evidenceDir:$evidenceDir, runId:$runId, ok:true}' >"$ev/summary.json"
 }
 
 drive_verification_contract() {
