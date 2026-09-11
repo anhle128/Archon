@@ -92,9 +92,13 @@ The local runtime requires macOS/Linux (or WSL), Bash, jq, curl, and lsof.
 Owned POSIX process groups bound timeout cleanup, including CLI descendants.
 
 Install root dependencies with `bun install --frozen-lockfile`, and standalone
-E2E dependencies with `npm ci --prefix e2e`. Install Playwright Chromium, or
-set `ARCHON_PW_CHANNEL=chrome` for installed Google Chrome. Check `e2e/README.md`
-for runtime settings. Browser proof rebuilds the **target** web bundle first.
+E2E dependencies with `npm ci --prefix e2e`. Bun's default isolated linker does
+not hoist `@hono/zod-openapi` to the repo root; `catalog` / `prove` then fail
+to resolve that import from this skill directory. Reinstall with
+`bun install --frozen-lockfile --linker=hoisted` when that happens. Install
+Playwright Chromium, or set `ARCHON_PW_CHANNEL=chrome` for installed Google
+Chrome. Check `e2e/README.md` for runtime settings. Browser proof rebuilds the
+**target** web bundle first.
 
 All runs use isolated SQLite, loopback ports, fake AI at the provider boundary,
 and separate `ARCHON_HOME`. Never target the operator's instance or Mini
