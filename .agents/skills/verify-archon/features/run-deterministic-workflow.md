@@ -41,7 +41,7 @@ Preconditions:
 
 ## Gotchas
 
-- `--dry-run` does not execute bash/script nodes unless `--exec-code` is set. A bare dry-run that emits a trace (exit `78` / `missingStubs` on this workflow) proves routing, not node bodies. Do not treat that exit as instance death.
+- `--dry-run` does not execute bash/script nodes unless `--exec-code` is set. A green stubbed dry-run proves routing, not node bodies. A bare dry-run that emits a trace (exit `78` / `missingStubs` on this workflow) is also routing proof — do not treat that exit as instance death.
 - `--exec-code` can write files. Only use it on this repo's `e2e-deterministic` nodes, never on an untrusted workflow.
 - A real run can emit progress before its JSON envelope. Read its structured final envelope, not a detached acknowledgement or prose status.
 - Detached ack has `conversationId` and `logPath`, not the run id. Wait for `workflow runs --json` and match `worker_platform_id`.
