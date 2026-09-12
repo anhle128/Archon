@@ -6,13 +6,14 @@ companions:
   - test-plan.md
   - ../../planning-artifacts/ux-designs/ux-Archon-2026-09-09/DESIGN.md
   - ../../planning-artifacts/ux-designs/ux-Archon-2026-09-09/EXPERIENCE.md
+  - ../../planning-artifacts/architecture/architecture-Archon-2026-09-12/ARCHITECTURE-SPINE.md
   - ../../../plans/260909-2130-live-interactive-agent-view/findings.md
   - ../../project-context.md
 sources:
   - ../../../plans/260909-2130-live-interactive-agent-view/design.md
 ---
 
-> **Canonical contract.** This SPEC and the files in `companions:` are the complete, preservation-validated contract for what to build, test, and validate. Source documents listed in frontmatter are for traceability — consult them only if you need narrative rationale this contract intentionally omits. `findings.md` is a required companion, not background: it carries the `file:line` evidence and the real provider payloads every capability below was derived from. `DESIGN.md` and `EXPERIENCE.md` are the UX run's two spines, adopted here rather than summarised: they own how the transcript looks and how it behaves, and they win over any mockup. This kernel does not restate them — a reader who needs a colour, a state rule, or a keyboard contract goes there.
+> **Canonical contract.** This SPEC and the files in `companions:` are the complete, preservation-validated contract for what to build, test, and validate. Source documents listed in frontmatter are for traceability — consult them only if you need narrative rationale this contract intentionally omits. `findings.md` is a required companion, not background: it carries the `file:line` evidence and the real provider payloads every capability below was derived from. `DESIGN.md` and `EXPERIENCE.md` are the UX run's two spines, adopted here rather than summarised: they own how the transcript looks and how it behaves, and they win over any mockup. `ARCHITECTURE-SPINE.md` is the architecture run's spine, adopted the same way: its fifteen `AD`s own where logic lives and which divergences are forbidden. This kernel does not restate any of the three — a reader who needs a colour, a state rule, a keyboard contract, or a boundary goes there.
 
 # Readable Agent Transcript
 
@@ -46,7 +47,7 @@ That is what separates this from the live/interactive work, which needs persiste
 
 - **CAP-5** — See what a file edit changed
   - **intent:** A reader can see the actual change a file edit made, inline, without leaving the transcript.
-  - **success:** When the payload carries both before and after content, a line diff renders through the existing `react-diff-view` adapter. Claude always qualifies — `FileEditInput` declares `old_string` and `new_string` as required, so this is guaranteed by the SDK's own type rather than assumed. Codex never does, attaching no tool input at all, and falls back to path plus preview. A diff is never fabricated from one side.
+  - **success:** When the payload carries both before and after content, a line diff renders through `react-diff-view`. Claude always qualifies — `FileEditInput` declares `old_string` and `new_string` as required, so this is guaranteed by the SDK's own type rather than assumed. Codex never does, attaching no tool input at all, and falls back to path plus preview. A diff is never fabricated from one side.
 
 - **CAP-6** — Tell attempts and loop iterations apart
   - **intent:** A reader can tell which attempt or loop iteration produced a given tool call.

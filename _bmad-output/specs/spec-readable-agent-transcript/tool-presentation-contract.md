@@ -9,6 +9,9 @@ One pure, React-free, provider-agnostic module produces a `ToolPresentation`; bo
 Input is structural rather than tied to `AgentHistoryItem`, so the chat card can adopt it later without a rewrite.
 
 ```ts
+import type { components } from './api.generated';
+type GitDiffHunk = components['schemas']['GitDiffHunk']; // re-aliased, not a named export
+
 export interface ToolPresentationInput {
   name: string;
   input: unknown;
@@ -28,7 +31,7 @@ export type ToolFamily =
 
 export interface ToolPresentation {
   family: ToolFamily;
-  /** Chip text. The normalised tool name when short and stable, else the family name. Never the raw name unchecked. */
+  /** Chip text. The tool name AS SENT when it is a single token of <=24 chars, else the family name. */
   label: string;
   /** The single salient argument — command, path, pattern. Never JSON. */
   headline: string;
@@ -38,7 +41,7 @@ export interface ToolPresentation {
   badges: string[];
   body:
     | { kind: 'terminal'; command: string }
-    | { kind: 'diff'; path: string; before: string; after: string }
+    | { kind: 'diff'; path: string; before: string; after: string; hunks: GitDiffHunk[] }
     | { kind: 'matches'; pattern: string; scope: string | null }
     | { kind: 'paths'; pattern: string; scope: string | null }
     | { kind: 'code'; language: string | null; source: string }
@@ -133,7 +136,9 @@ Choosing the arm from the family alone would mis-parse the majority of Claude's 
 **Tier 3 — name-only.** When `input` is absent or empty, which is every Codex call: family `shell`, headline from the name.
 This is 4,911 of 22,867 real rows, so it is a main path, not an edge case.
 
-**The name is frequently multi-line.** Real rows carry whole shell scripts as the tool name — loops, `&&` chains, heredocs. A collapsed row is one line, so the headline is the **first non-empty line** of the name, with a trailing `…` when more lines follow; the full text belongs to the terminal body.
+**Strip the Codex wrapper first.** The name arrives wrapped in a fixed `/bin/zsh -lc '` or `/bin/bash -lc '` prefix with a matching closing quote. Remove both **before** choosing the headline; the untouched name stays available for the terminal body and the Raw toggle. Without this the prefix is the first thing every Codex row shows, and the rule would otherwise exist only in `EXPERIENCE.md`, forcing each renderer to implement it for itself.
+
+**The name is frequently multi-line.** Real rows carry whole shell scripts as the tool name — loops, `&&` chains, heredocs. A collapsed row is one line, so the headline is the **first non-empty line** of the stripped name, with a trailing `…` when more lines follow; the full text belongs to the terminal body.
 Never feed the raw name into a single-line row.
 
 Emoji-bearing names pass through unchanged; they are already human-readable.
@@ -157,7 +162,9 @@ chev glyph chip    headline (flex, min-width:0)        badges (right)
 Five characters for the five values that type carries (`agent-history.ts:36`). `⚠` is `interrupted` — a tool that was **stopped**, not one that failed, so it takes its own character rather than a recoloured `✕`. Only Claude produces it, from the `PostToolUseFailure` hook when `is_interrupt` is true (`claude/provider.ts:952-959`); Codex cannot, its union being `success`/`error`/`unknown` (`codex/provider.ts:644-650`).
 Colour is applied _in addition to_ the glyph, never instead of it.
 
-**Chip** is the normalised tool name when that name is a single token of at most 24 characters, else the family name.
+**Chip** is the tool name **as the provider sent it** — `read_file`, `Edit`, `Grep`, `eval` — when that name is a single token of at most 24 characters, else the family name.
+Normalisation (case-folding, stripping `_` and `-`) is a **matching** device for the resolver only, never a display transform: a chip reading `readfile` would contradict every example in the UX run.
+The family-name fallback is unchanged and is the rule; the 24-character cap is its guard, never an instruction to truncate with an ellipsis.
 Codex is the case the fallback exists for: the name is the whole command, so the chip reads `shell` and the command becomes the headline.
 `label` is resolved in the module, so renderers never re-derive it.
 
@@ -182,9 +189,18 @@ The headline element needs `min-width: 0` inside the flex row or it will not shr
 
 ## Inline diff
 
-When before and after are both present, compute a line diff and adapt it to `react-diff-view` through the existing pure `source-control/git-hunk-adapter.ts` (58 lines).
-**That file moves to `packages/web/src/lib/`** so Console can import it without crossing the `@/components/` boundary; Legacy's import path updates.
-It is pure, so the move is mechanical.
+`packages/web` has **no** line-diff algorithm. The existing adapter at `packages/web/src/components/workflows/source-control/git-hunk-adapter.ts` (57 lines) only **converts** an already-computed `GitDiffHunk` — one the server's git routes produced — into `react-diff-view`'s shape. It computes nothing, and no differ is among the package's declared dependencies.
+
+So CAP-5 needs two modules, not one.
+
+**`diff` (jsdiff) `9.0.0` is declared as a dependency of `@archon/web`**, and a new `packages/web/src/lib/diff-hunks.ts` is the **only** caller of `structuredPatch` in the tree — options fixed inside it, results memoized on the two input strings. Neither renderer imports `diff`.
+
+`StructuredPatchHunk` is `{oldStart, oldLines, newStart, newLines, lines: string[]}` with prefix-encoded lines, so the module walks `lines` with running old/new counters and synthesises the `@@ -a,b +c,d @@` header to produce `GitDiffHunk`. Two details it must not miss:
+
+- **Bounds are mandatory.** jsdiff ships no default timeout and no default edit-length limit, and an unbounded synchronous Myers diff **hangs the thread** rather than failing. The module refuses inputs above a byte ceiling and passes an explicit `maxEditLength`; both answers are `null`, degrading to path plus preview. The bound is `maxEditLength`, never a wall-clock timeout — an edit-length bound is a function of the inputs, so the same pair yields the same result on every machine and in every test run.
+- **The no-newline marker is not trailing.** A line beginning with `\` is skipped **wherever it appears and however often**, advancing no counter: real jsdiff 9 output places it mid-array and can emit it twice in one hunk, and it is excluded from `oldLines`/`newLines`. Treating it as one trailing line desynchronises every counter after it.
+
+**The existing adapter then runs unchanged, and moves to `packages/web/src/lib/`** so Console can import it without crossing the `@/components/` boundary. It re-aliases `GitDiffHunk`/`GitDiffChange` from `api.generated` rather than `@/lib/api`, which the Console lint rule bans outright — including for `import type`. Its two consumers, `virtualized-diff.tsx` and its test, update their import path.
 
 Claude always qualifies.
 Codex never does — no tool input at all — so it falls back to path plus preview.
@@ -215,6 +231,11 @@ See `todo-fold-contract.md`. OMP folds nine ops; Claude's whole-list `TodoWrite`
 
 ## Changes to the existing shared layer
 
-`buildAgentHistory()` gains the presentation on each tool item and the folded todo state for the node.
-`TOOL_CONTEXT_KEYS` and `toolContext()` are superseded by the resolver and go away.
+`buildAgentHistory()` **returns** an object carrying `items` plus the node's `TodoPhase[]`. A flat per-item array cannot hold node-level state, so the return type widens and its three call sites take a one-line edit each — `ConsoleNodeRoom.tsx:607`, `ConsoleExecutionHistory.tsx:204`, `NodeTranscriptPane.tsx:236`.
+
+Each tool item gains the presentation.
+`TOOL_CONTEXT_KEYS` and `toolContext()` are superseded by the resolver and go away; their only readers are `NodeRoom.tsx:246` and `ConsoleAgentHistoryList.tsx:178`, both JSX this work rewrites.
+
+**The exit code must reach the item.** It is parsed at `agent-history.ts:115` and consumed at `:126` only to decide `failed`, then discarded — so today CAP-1's own success signal, the failing `bash` call showing its exit code with no click, is unimplementable. Carry it through to the badges.
+
 No renderer reads execution identity today, so occurrence grouping is new plumbing through the same layer.

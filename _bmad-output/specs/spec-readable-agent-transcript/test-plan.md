@@ -22,6 +22,8 @@ Table-driven over the resolver tiers.
 - `target_file` resolves as a path key, alongside `file_path` and `path`
 - `eval` with `{code, language}` resolves to family `code` with a `code` body; the headline is the source's first line and the language is a badge. Assert the source is **not** truncated to 80 characters — that truncation is what this family exists to avoid
 - a Codex name containing newlines headlines only its **first non-empty line**, with the remainder reachable in the body. Assert the headline contains no `\n`
+- a Codex name wrapped in `/bin/zsh -lc '…'` headlines the command **without** the prefix or the closing quote, and the same for `/bin/bash -lc '…'`. Assert the headline does not start with `/bin/`, and that the untouched name is still reachable for the terminal body
+- chip text is the name **as sent**: `read_file` stays `read_file`, `Edit` stays `Edit`. Assert the chip is never the case-folded separator-stripped form — `readfile` appearing anywhere is the regression this asserts against
 - Codex shape (`{name:'npm test'}`, no input) resolves to `shell` with headline `npm test`
 - an emoji-bearing name passes through unchanged
 - `mcp__server__tool` resolves to `generic` with label `server · tool`
@@ -30,6 +32,16 @@ Table-driven over the resolver tiers.
 - chip rule: a short name is kept verbatim; a long Codex-style name falls back to the family. **Assert `label.length <= 24` for every row in the table**, so no future tool can burst the chip
 - `headlineKind` is `'path'` for the file and glob families, `'text'` for shell and content search
 - a diff is produced only when both sides are present, and never fabricated from one
+- the exit code reaches the row: a `bash` call recording `exit_code: 1` carries an `exit 1` badge on the **collapsed** row. This is CAP-1's own success signal and it is currently unreachable, the code discarding the value after deriving the outcome
+
+## `diff-hunks.test.ts` — CAP-5
+
+The module is the only caller of `structuredPatch`, so its traps are tested here rather than through a renderer.
+
+- line numbers survive the `\ No newline at end of file` marker: a fixture whose hunk carries the marker **mid-array**, and one carrying it **twice**, both produce `oldLine`/`newLine` values matching a hand-checked expectation. Asserting only the trailing case passes while the counters are already desynchronised
+- an input above the byte ceiling returns `null` without calling `structuredPatch`, and a pair exceeding `maxEditLength` returns `null` — both degrade to path plus preview, neither throws and neither hangs
+- the same pair of strings yields the identical result on repeat calls, which is what an edit-length bound buys over a wall-clock timeout
+- the produced `GitDiffHunk` feeds `git-hunk-adapter` without tripping its `requiredLine()` guard
 
 ## `task-normalize.test.ts` — CAP-4
 
@@ -70,4 +82,6 @@ Extending `NodeRoom.test.tsx` and `ConsoleNodeRoom.test.tsx`, on **both** surfac
 ## Boundary checks
 
 - Console imports nothing from `@/components/` after the `git-hunk-adapter.ts` move — the existing console isolation test covers this and must stay green
+- neither renderer imports `diff`; `structuredPatch` appears in exactly one module
+- the moved `git-hunk-adapter.ts` imports its types from `api.generated`, not `@/lib/api` — the lint rule bans that path for Console including `import type`
 - `@archon/web` imports nothing from `@archon/workflows`
