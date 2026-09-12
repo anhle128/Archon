@@ -37,5 +37,5 @@ Preconditions:
 - `GET /api/workflows?cwd=<path>` returns `400 Invalid cwd: must match a registered codebase path` until the path is registered. Do not pass `cwd` on a fresh isolated home.
 - `bun --filter @archon/server` runs with cwd `packages/server`. Never assume the server process cwd is the repo root; pass `--cwd` / `?cwd=` explicitly after registration.
 - `bun run cli --cwd <path>` can be stolen by Bun's own `--cwd`. Use `verify-archon cli -- …` or `bun run cli -- --cwd <path> …`.
-- CLI list from this git repo includes project + bundled + global. HTTP without `cwd` is bundled + home only. Those catalogs are not the same set.
+- CLI list from this git repo includes project + bundled + global. HTTP without `cwd` is bundled + home only **when no codebase is registered**. After any registration, the handler falls back to the first codebase `default_cwd` and the project catalog appears even without `?cwd=`. Capture the bundled list before `POST /api/codebases`.
 - Do not invoke `archon-assist` or any AI workflow as a substitute for list/validate.
