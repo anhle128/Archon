@@ -1,12 +1,15 @@
 ---
 name: Archon
-description: Readable agent transcript inside the node room, on both web surfaces. shadcn/Radix on Tailwind v4, dark-only; this DESIGN.md specifies the transcript delta over two inherited token sets and forks neither palette.
-status: final # one open question in Colors: --node-prompt, on both backgrounds it carries text
-updated: 2026-09-10
+description: The node room on both web surfaces — the readable agent transcript that is read, and the steering dock it is written from. shadcn/Radix on Tailwind v4, dark-only; this DESIGN.md specifies both deltas over two inherited token sets and forks neither palette.
+status: final # one open question: --node-prompt contrast (Colors)
+updated: 2026-09-13
 sources:
   - ../../../specs/spec-readable-agent-transcript/SPEC.md
   - ../../../specs/spec-readable-agent-transcript/tool-presentation-contract.md
   - ../../../specs/spec-readable-agent-transcript/todo-fold-contract.md
+  - ../../../specs/spec-live-agent-steering/SPEC.md
+  - ../../../specs/spec-live-agent-steering/control-states.md
+  - ../../../specs/spec-live-agent-steering/engine-integration.md
   - ../../../specs/spec-workflow-run-view-hitl/ux-mockup/README.md
   - ../../../project-context.md
   - ../../../../packages/web/src/index.css
@@ -92,6 +95,9 @@ typography:
   subtask-agent:
     fontSize: 11.5px
     fontWeight: '600'
+  control:
+    fontSize: 11.5px
+    fontWeight: '500' # dock buttons only; nothing in the transcript carries weight 500
 rounded:
   sm: 4px # family chip, Raw button. Same radius as the room's node type-pill.
   md: 6px # row hover, body box, sub-card. Equals the inherited --radius-sm (calc(0.625rem - 4px)).
@@ -113,6 +119,11 @@ spacing:
   subcard-pad: 6px 9px
   occurrence-margin: 10px 0 5px
   kv-key-w: 11ch
+  dock-pad: 8px 10px
+  dock-gap: 6px
+  draft-item-pad: 4px 8px
+  composer-min-h: 56px
+  control-min-h: 32px # clears SC 2.5.8 by 8px, unlike the 22px tool row
 components:
   tool-row:
     font: '{typography.mono}'
@@ -262,6 +273,117 @@ components:
     lineHeight: '{typography.assistant.lineHeight}'
     text-legacy: '{colors.text-secondary-legacy}'
     text-console: '{colors.text-secondary-console}'
+  # ── Steering dock ──────────────────────────────────────────────────────────
+  # Write affordances. Every value resolves to a variable already shipped on the
+  # surface; the dock introduces no colour and no hue of its own.
+  operator-text:
+    font: '{typography.sans}'
+    fontSize: '{typography.assistant.fontSize}'
+    lineHeight: '{typography.assistant.lineHeight}'
+    # One step ABOVE assistant prose. The operator's own words are the only prose
+    # in the transcript a human wrote, and the strength difference plus the role
+    # label are what separate the two without a hue.
+    text-legacy: '{colors.text-primary-legacy}'
+    text-console: '{colors.text-primary-console}'
+    label: '{typography.phase-label}'
+    label-legacy: '{colors.text-secondary-legacy}'
+    label-console: '{colors.text-secondary-console}'
+  message-status:
+    fontSize: '{typography.badge.fontSize}'
+    sent-legacy: '{colors.text-secondary-legacy}'
+    sent-console: '{colors.text-secondary-console}'
+    delivered-legacy: '{colors.success-legacy}'
+    delivered-console: '{colors.success-console}'
+  composer-dock:
+    padding: '{spacing.dock-pad}'
+    gap: '{spacing.dock-gap}'
+    background-legacy: '{colors.surface-elevated-legacy}'
+    background-console: '{colors.surface-elevated-console}'
+    borderTop-legacy: '{colors.border-legacy}'
+    borderTop-console: '{colors.border-console}'
+  composer-field:
+    font: '{typography.sans}'
+    fontSize: '{typography.assistant.fontSize}'
+    lineHeight: '{typography.assistant.lineHeight}'
+    minHeight: '{spacing.composer-min-h}'
+    radius: '{rounded.md}'
+    background-legacy: '{colors.surface-inset-legacy}'
+    background-console: '{colors.surface-inset-console}'
+    border-legacy: '{colors.border-legacy}'
+    border-console: '{colors.border-console}'
+    text-legacy: '{colors.text-primary-legacy}'
+    text-console: '{colors.text-primary-console}'
+    placeholder-legacy: '{colors.text-secondary-legacy}'
+    placeholder-console: '{colors.text-secondary-console}'
+    focus-legacy: '{colors.focus-legacy}'
+    focus-console: '{colors.focus-console}'
+  send-control:
+    fontSize: '{typography.control.fontSize}'
+    fontWeight: '{typography.control.fontWeight}'
+    radius: '{rounded.md}'
+    minHeight: '{spacing.control-min-h}'
+    background: transparent
+    border-legacy: '{colors.border-bright-legacy}'
+    border-console: '{colors.border-bright-console}'
+    text-legacy: '{colors.text-primary-legacy}'
+    text-console: '{colors.text-primary-console}'
+    focus-legacy: '{colors.focus-legacy}'
+    focus-console: '{colors.focus-console}'
+    # BORDERED on both shells, and this reverses an earlier draft. Inheriting Legacy's
+    # filled shadcn Button (--primary-foreground on --primary, AskCard.tsx:377) would
+    # have put an 11.5px label at 3.06:1 — a clean SC 1.4.3 failure. Bordered measures
+    # 14.08:1 / 16.72:1. Primacy is carried by POSITION (the right edge) rather than by
+    # a fill, which costs nothing when the row holds only two controls.
+    # The pending-ask-blocked Send is aria-disabled (not the disabled attribute), so like
+    # `Stopping…` it forfeits SC 1.4.3's inactive-component exemption and its label must still
+    # clear 4.5:1. The dim floor is text-SECONDARY (5.33:1 / 7.90:1), never the shadcn/
+    # aria-disabled tertiary convention (2.3:1 / 3.9:1, a failure) — mirroring stop-control.
+    blocked-legacy: '{colors.text-secondary-legacy}'
+    blocked-console: '{colors.text-secondary-console}'
+  stop-control:
+    fontSize: '{typography.control.fontSize}'
+    fontWeight: '{typography.control.fontWeight}'
+    radius: '{rounded.md}'
+    minHeight: '{spacing.control-min-h}'
+    background: transparent
+    border-legacy: '{colors.border-bright-legacy}'
+    border-console: '{colors.border-bright-console}'
+    text-legacy: '{colors.text-primary-legacy}'
+    text-console: '{colors.text-primary-console}'
+    focus-legacy: '{colors.focus-legacy}'
+    focus-console: '{colors.focus-console}'
+    # The `Stopping…` dim floor is text-SECONDARY (5.33:1 / 7.90:1), not tertiary.
+    # The control stays focusable via aria-disabled rather than the disabled
+    # attribute, so SC 1.4.3's inactive-component exemption is not relied on.
+    stopping-legacy: '{colors.text-secondary-legacy}'
+    stopping-console: '{colors.text-secondary-console}'
+    # Never filled and never in the error colour. A stop is recoverable; painting
+    # it as a failure would misreport what it does.
+  draft-box:
+    padding: '{spacing.dock-pad}'
+    radius: '{rounded.md}'
+    background-legacy: '{colors.surface-inset-legacy}'
+    background-console: '{colors.surface-inset-console}'
+    label: '{typography.phase-label}'
+    label-legacy: '{colors.text-secondary-legacy}'
+    label-console: '{colors.text-secondary-console}'
+    maxHeight: 33vh
+    # On a FINISHED node the same block renders read-only and is the only part of the dock
+    # left standing — no field, no controls. Same tokens, no new colour: read-only is carried
+    # by the absence of the controls and by the header word, never by a dimmed fill.
+  stop-disclosure:
+    fontSize: '{typography.body-bar.fontSize}'
+    text-legacy: '{colors.text-secondary-legacy}'
+    text-console: '{colors.text-secondary-console}'
+  draft-item:
+    padding: '{spacing.draft-item-pad}'
+    controlMinSize: 24px # SC 2.5.8, NOT the dock's 32px — an 11px row cannot carry 32px
+    radius: '{rounded.sm}'
+    fontSize: '{typography.badge.fontSize}'
+    text-legacy: '{colors.text-secondary-legacy}'
+    text-console: '{colors.text-secondary-console}'
+    focus-legacy: '{colors.focus-legacy}'
+    focus-console: '{colors.focus-console}'
 ---
 
 ## Brand & Style
@@ -352,12 +474,27 @@ Diff lines use success for `+` and error for `−`; `FAILED`/`ok` markers use er
 | focus ring today — Console's `--accent-ring` (30% alpha)                  | n/a       | **1.4:1** |
 | focus ring today — Legacy's `outline-ring/50` (`index.css:179`)           | **2.3:1** | n/a       |
 | focus ring on surface — `--accent-bright`, the token this spine specifies | 7.4:1     | 4.9:1     |
+| **— the steering dock, measured this run —**                              |           |           |
+| send control label, text-primary on surface-elevated (11.5px)             | 14.1:1    | 16.7:1    |
+| stop control label, text-primary on surface-elevated (11.5px)             | 14.1:1    | 16.7:1    |
+| `Stopping…`, text-secondary on surface-elevated (11.5px)                  | 5.3:1     | 7.9:1     |
+| composer placeholder, text-secondary on surface-inset (12.5px)            | 6.3:1     | 8.9:1     |
+| composer typed text, text-primary on surface-inset (12.5px)               | 16.5:1    | 18.8:1    |
+| draft item, text-secondary on surface-inset (11px)                        | 6.3:1     | 8.9:1     |
+| `delivered` badge, success on surface (11px)                              | 6.3:1     | 9.5:1     |
+| `sent` badge, text-secondary on surface (11px)                            | 5.8:1     | 8.4:1     |
+| operator prose, text-primary on surface (12.5px)                          | 15.3:1    | 17.7:1    |
+| dock focus ring on surface-elevated (SC 1.4.11)                           | 6.8:1     | 4.6:1     |
+| stop/send border-bright edge on surface-elevated (SC 1.4.11)              | **1.5:1** | **1.6:1** |
+| send control REJECTED: primary-foreground on primary fill (11.5px)        | **3.1:1** | n/a       |
 
-Every bold cell has a disposition. `--node-prompt` on both backgrounds is the open question above; the Legacy `--error` badge is an accepted shortfall, recorded below; the two focus rows are the departure this spine makes deliberately, explained next. The last two rows are the exception to "used exactly as the mocks use them", and the difference matters:
+Every bold cell has a disposition. `--node-prompt` on both backgrounds is the open question above; the Legacy `--error` badge is an accepted shortfall, recorded below; the two focus rows are the departure this spine makes deliberately, explained next.
+
+The dock's three bold cells: the **border edge at 1.5:1 / 1.6:1** takes the same disposition the Raw toggle's border already takes below — SC 1.4.11 asks for the information _required to identify_ the control, and the label at 14.1:1 / 16.7:1 does that, so the border is redundant reinforcement rather than the affordance. The **3.1:1 row is a rejected option, not a shipped one**: it is what Legacy's send control would have measured had it inherited the shipped filled ask-card `Button`, and it is recorded because the measurement is the reason the design changed. That shipped button is still out there — the Legacy ask card's own Submit reads 3.1:1 today — which is a production finding this run surfaces and does not own; it is recorded with the accepted shortfalls at the end of this file. The last two rows are the exception to "used exactly as the mocks use them", and the difference matters:
 
 **The focus ring is the one place this spine knowingly departs from the shipped surface.** Console's `:focus-visible` is `outline: 2px solid var(--accent-ring)` (`theme.css:153-156`), and `--accent-ring` is magenta at 30% alpha (`theme.css:68`), which composites over `--surface` to **1.4:1** — under the 3:1 floor of SC 1.4.11, and a keyboard reader effectively cannot see where they are. All three mocks quietly drew the opaque token instead, and this spine now states that on purpose: **the transcript row's focus ring is `--accent-bright`**, which is an existing token, so the no-new-token constraint holds.
 
-That is scoped to the transcript row. The same 1.4:1 ring is on every other focusable element in the console, which is room chrome and out of scope here — recorded so the next person finds it, not silently inherited.
+That applies to **every focusable element this spine owns — the transcript row and all four focusable parts of the dock** (send control, stop control, composer field, draft item), each of which carries the token explicitly in `components`. Over the dock's `--surface-elevated` the fixed ring measures **6.83:1 Legacy / 4.57:1 Console**, clearing SC 1.4.11. The unfixed 1.4:1 ring remains on focusable elements **outside this panel**, which is room chrome — recorded so the next person finds it, not silently inherited. On Legacy this means a dock control must override shadcn's `focus-visible:ring-ring/50` (`button.tsx:8`, 2.25:1) rather than inherit it.
 
 This spine changes no token the user has ruled out changing.
 
@@ -365,14 +502,14 @@ This spine changes no token the user has ruled out changing.
 
 Monospace is the transcript's voice.
 Rows, chips, badges, bodies, checklists, occurrence headers, and key-value lists all set `{typography.mono}` at the sizes in the frontmatter ramp.
-Assistant prose is the one exception and sets `{typography.sans}` at `{typography.assistant.fontSize}` / `{typography.assistant.lineHeight}`, so the model's sentences read as sentences between the machine's lines.
+Prose is the exception and sets `{typography.sans}` at `{typography.assistant.fontSize}` / `{typography.assistant.lineHeight}`, so sentences read as sentences between the machine's lines. Three things qualify, and the line between them and everything else is clean: **what a human wrote (the operator's row), what a human is writing (the composer field), and what the model wrote (assistant prose)**. Everything a machine reported stays mono.
 
 The ramp is narrow on purpose: 12px row, 11px chip and badge, 11.5px body, 10.5px body bar and occurrence header, 10px phase label.
 Two pixels separate a row from its body and a body from its bar; that is enough hierarchy for a panel 460–520px wide.
 
-Only the status glyph is bold (`{typography.glyph.fontWeight}`).
+Inside the transcript, only the status glyph is bold (`{typography.glyph.fontWeight}`). The dock's controls sit at weight 500 (`{typography.control}`), the one place in the panel that carries weight without being a fact — a control is not a fact.
 A subtask's agent name is semibold (`{typography.subtask-agent.fontWeight}`); everything else is regular weight.
-Uppercase with tracking marks exactly two things: the occurrence header (`{typography.occurrence-header.letterSpacing}`) and a todo phase label (`{typography.phase-label.letterSpacing}`).
+Uppercase with tracking marks section labels and nothing else — four of them now: the draft box header (`QUEUED · 2` / `WILL SEND · 2`) and the role labels above prose (`assistant`, `operator`) join the occurrence header (`{typography.occurrence-header.letterSpacing}`) and a todo phase label (`{typography.phase-label.letterSpacing}`).
 
 Chip text is the tool name as the provider sent it — `read_file`, `Edit`, `Grep`, `eval` — because that is what the reader recognises; only the colour says which family it resolved to.
 
@@ -401,10 +538,12 @@ Grep results flow `path:line` inline, not in a fixed line-number column; the fix
 The transcript adapts by elision and badge priority, never by wrapping a row.
 See `mockups/key-console-node-room.html` and `mockups/key-legacy-node-room.html` for the transcript at each width.
 
+**The dock's layout is one rule.** It is a column — draft box, field, control row — at `{spacing.dock-pad}` with `{spacing.dock-gap}` between children, and the control row is a single flex row whose two controls are pushed to **opposite edges**. That separation is the layout carrying a safety property: the control that stops an agent and the control that sends to it are never a thumb's width apart. Every dock measurement lives in `{spacing}` alongside the row's.
+
 ## Elevation & Depth
 
 No shadows.
-Depth is tonal: chips and subtask cards sit on `surface-elevated`, body boxes sink to `surface-inset`, everything else rests on `surface`.
+Depth is tonal: chips and subtask cards sit on `surface-elevated`, body boxes sink to `surface-inset`, everything else in the transcript rests on `surface`. **The dock inverts the middle of that stack**: the dock itself is `surface-elevated` (it is chrome lifted off the transcript) while the composer field and draft box sink to `surface-inset` (they are wells written into). Same two tokens, used for the same reasons — lifted means chrome, sunk means content.
 The body rail (`{spacing.body-rail}` of `border`) is the only line that says "this belongs to the row above".
 A hovered row lifts to `surface-hover`; a focused row gets a 2px outline in the surface's focus colour and no fill.
 The occurrence header's horizontal rule is `border`, 1px, and fills the width after the label.
@@ -416,10 +555,13 @@ The occurrence header's horizontal rule is `border`, 1px, and fills the width af
 `{rounded.full}` is reserved for the room's run and node status badges; a transcript chip is never a pill, so a family chip can never be mistaken for a status badge.
 `{rounded.lg}` belongs to the room chrome and does not appear inside the transcript.
 
+The dock takes the same two radii and adds nothing: `{rounded.md}` on the composer field, draft box, and both controls — they are boxes and rows, the same class the transcript's rows and body boxes belong to — and `{rounded.sm}` on a draft item, which is a chip-scale object. `{rounded.full}` stays banned here too.
+
 ## Components
 
 Visual spec only. Behaviour is in `EXPERIENCE.md` Component Patterns.
 All nine families, four hard cases, glyph row, occurrence header options, and the open Raw toggle are rendered in `mockups/key-transcript-states.html`.
+The panel holds two halves: the transcript, which is read, and the **Composer dock**, which it is written from. Everything from **Composer dock** down is the dock.
 
 **Tool row** (`{components.tool-row}`) — a `<details>` whose `<summary>` is the scan-line; the native marker is hidden and replaced by the chevron.
 Padding `{spacing.row-y} {spacing.row-x}`, radius `{rounded.md}`, `{typography.row}`.
@@ -475,6 +617,38 @@ The card is itself a `<details>`, so it carries the same chevron as a tool row a
 **Assistant text** (`{components.assistant-text}`) — sans, text-secondary, with a 10px uppercase text-secondary `assistant` role label above it on the room screens.
 Inline code inside it is mono at 11px.
 
+**Operator text** (`{components.operator-text}`) — the same anatomy as Assistant text, one step up: sans, **text-primary**, under a 10px uppercase text-secondary `operator` role label.
+Two channels separate the operator's words from the model's, and neither is a hue: the label says who wrote it — and on a node with more than one operator that label names the **sender** (`operator_user_id`) rather than a bare `operator`, still in the same `{components.operator-text.label}` token, so distinguishing operators adds no colour — and full-strength text against the model's secondary says it a second time. A reader who can distinguish no colour at all still cannot confuse them.
+A message-status badge sits on the label line, right-aligned.
+
+**Message status** (`{components.message-status}`) — `{typography.badge}`, the words `sent` and `delivered`, never a dot and never a colour alone.
+`sent` is text-secondary; `delivered` takes the success colour **in addition to** the word. Most providers never reach `delivered`, so the resting state of this badge is the grey one.
+
+**Composer dock** (`{components.composer-dock}`) — pinned to the bottom of the node panel on both shells, `surface-elevated` with a 1px `border` top edge, padding `{spacing.dock-pad}`, children `{spacing.dock-gap}` apart.
+Top to bottom: the **Draft box** when it holds something, the **stop disclosure** when the agent is idle-after-interrupt, the **Composer field**, then one control row.
+The control row puts the **Stop control** at the left edge and the **Send control** at the right, pushed apart by the full dock width. That gap is the point — the recoverable-but-disruptive control and the primary control must never sit under the same thumb.
+
+**Composer field** (`{components.composer-field}`) — a `surface-inset` textarea, 1px `border`, radius `{rounded.md}`, min-height `{spacing.composer-min-h}`, set in the same sans face and size as assistant and operator prose.
+It is written in, so it is set the way it will be read.
+
+**Send control** (`{components.send-control}`) — bordered on both shells: transparent fill, `border-bright`, text-primary, the fixed focus ring.
+The label is the state: `Queue` while the agent generates, `Send now` while the agent is idle-after-interrupt. Nothing else about the control changes between the two — **same box, same position, and a width held to the wider of the two labels** — because a control that moves or resizes as well as renames is two controls, and the operator's pointer is already travelling toward the first one.
+An earlier draft inherited Legacy's shipped filled ask-card `Button` instead, so that the operator would meet a button they already knew. It was reversed on measurement: `--primary-foreground` on `--primary` is **3.06:1**, and an 11.5px label needs 4.5:1. Bordered measures **14.08:1 / 16.72:1**. Primacy is carried by the right-edge position, which is enough in a row that holds two controls.
+
+**Stop control** (`{components.stop-control}`) — bordered on both shells, transparent fill, `border-bright`, text-primary, the fixed focus ring. It interrupts the **agent** and leaves the node `running` — the whole-node teardown is the separate **Cancel** button, not this control. Never filled, and never in the error colour: an interrupt leaves the agent able to continue, and painting it red would report a failure that did not happen.
+Reads `Stop`, then — if the sub-second `Stopping…` transient is shown — `Stopping…` while the interrupt is in flight.
+**`Stopping…` is `aria-disabled`, never the `disabled` attribute, and dims no further than text-secondary.** Both halves of that are one decision. The native attribute blurs the element that carries it, so a keyboard operator who presses `Stop` is returned to `<body>` — and then to the _top_ of the document, with the whole transcript between them and the dock, however brief the interrupt is. Keeping it focusable also means the SC 1.4.3 inactive-component exemption is no longer being leaned on, which is why the dim floor is `--text-secondary` (**5.33:1 / 7.90:1**) rather than tertiary (**2.31:1 / 3.88:1**). The requirement was always "it may not disappear"; secondary does not make it disappear.
+
+**Draft box** (`{components.draft-box}`) — a `surface-inset` panel above the composer field, rendered only when it holds something — never an empty shell.
+Its header is a `{typography.phase-label}` uppercase text-secondary word plus a count: `QUEUED · 2` while the agent generates, `WILL SEND · 2` while the agent is idle-after-interrupt. That one word is the whole signal that the control below has changed meaning, so it is a heading, not a caption.
+Scrolls internally past `33vh`; the dock never grows to swallow the transcript.
+
+**Stop disclosure** (`{components.stop-disclosure}`) — one line of `{typography.body-bar}` text-secondary between the draft box and the field, rendered only while the agent is idle-after-interrupt: `stopped after the last completed tool call · files already written stay written`.
+It is a slot in the dock's anatomy rather than a caption on another component, because it is the one place the interface corrects a belief the operator is likely to hold, and a caption can be dropped by someone rearranging the thing it hangs off.
+
+**Draft item** (`{components.draft-item}`) — one line per waiting message, `{typography.badge}` text-secondary, end-elided, radius `{rounded.sm}`.
+Per-item controls are text buttons at the row's right edge, at the 24×24 SC 2.5.8 floor grown on padding — not the dock's 32px, which an 11px row cannot carry without becoming a card.
+
 ## Do's and Don'ts
 
 | Do                                                                       | Don't                                                               |
@@ -489,6 +663,11 @@ Inline code inside it is mono at 11px.
 | Use `{rounded.sm}` on chips, `{rounded.md}` on rows and boxes            | Use `{rounded.full}` on anything in the transcript                  |
 | Keep raw JSON in a text-secondary body box behind Raw                    | Render JSON as a default presentation anywhere on the row or body   |
 | Set assistant prose in sans                                              | Set tool rows, chips, or badges in sans                             |
+| Set the operator's prose one strength above the model's                  | Separate the two by hue, avatar, or bubble                          |
+| Keep the send control's box, size, and position fixed as its label flips | Move or restyle it between `Queue` and `Send now`                   |
+| Draw the stop control bordered, in text-primary                          | Fill it, or colour it with `error` — a stop is not a failure        |
+| Render the draft box only when it holds something                        | Show an empty queue panel above the composer                        |
+| Put the stop and the send at opposite ends of the control row            | Set them side by side, where the wrong one is one thumb away        |
 
 ## Open Questions
 
@@ -515,6 +694,7 @@ One question is open, above. Everything else this run opened is answered, and wh
 - The old question about the `exit 101` badge is folded into the accepted shortfalls: the word `exit` and the duration moved to `--text-secondary` with the tier decision, and the digits keep `--error` at **4.3:1** on Legacy. That 0.2 shortfall is accepted, not cleared — it rides on the surface being replaced, and the `✕` glyph carries the same fact beside it.
 - **The Raw toggle carries `min-height: 24px`; the tool row keeps its 22px** — a user decision. Raw was the target that genuinely missed SC 2.5.8: about 15–17px, at the far right of the body bar, near the panel's drag-to-resize edge. It grows through padding, so the painted box does not change. The row's 2px shortfall is accepted deliberately, because density is the feature the transcript exists to deliver and the audience reaches it with a pointer — recorded here so a later audit inherits a reason rather than a surprise. Revisit if the surface is ever targeted at touch.
 - **The family reaches a colour-blind reader through the body bar and a tooltip, not a chip prefix** — a user decision. A prefix would have cost row width on the one line that must never wrap, and at 460px the path headline pays first. See **Components → Tool body**.
+- **The shipped Legacy ask-card `Submit` measures 3.1:1 and this run does not own it.** Surfaced by measuring the send control: `--primary-foreground` on `--primary` is 3.1:1 on a small label, and `AskCard.tsx:377` ships exactly that pairing today. The dock avoided it by specifying a bordered control instead. The ask card is outside this spine's scope, so the finding is recorded here rather than fixed — someone should carry it to whoever owns that component.
 - `interrupted` takes `⚠` in `--warning` — see **Colors → Status**.
 - The Console focus ring is `--accent-bright`, opaque, **not** `--accent-ring`. The frontmatter previously named the 30%-alpha glow token, which composites to 1.35:1 over `--surface` and would leave every keyboard user on the default route without a visible position. The mocks always used the opaque token at 4.85:1; the spine now agrees with them.
 - The folded-todo `✓` renders at full strength. Dimming it to 55% measured 2.69:1 on Legacy and 3.56:1 on Console — see **Colors → Status**.

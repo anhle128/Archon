@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Agent Steering</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --ground:#fbf9fc; --surface:#ffffff; --surface-sub:#f4f1f7;
+    --ink:#1a161f; --ink-2:#443c4f; --muted:#6d6577;
+    --line:#e4dfe9; --line-strong:#cdc5d5;
+    --accent:#b30b7d; --accent-soft:#fbeaf5;
+    --danger:#c93a1e; --danger-soft:#fdeae5;
+    --adopted:#1d6b52; --adopted-soft:#e5f4ee;
+    --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    --sans:'IBM Plex Sans',system-ui,-apple-system,'Segoe UI',sans-serif;
+    --measure:70ch; --r:4px;
+  }
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+    --ground:#131017; --surface:#1a1621; --surface-sub:#221c2b;
+    --ink:#ece8f1; --ink-2:#c3bbcf; --muted:#978ea6;
+    --line:#2d2637; --line-strong:#443a52;
+    --accent:#f27cc6; --accent-soft:#33122a;
+    --danger:#ff8365; --danger-soft:#3a1a12;
+    --adopted:#6ed0a8; --adopted-soft:#10291f;
+  }}
+  :root[data-theme="dark"]{
+    --ground:#131017; --surface:#1a1621; --surface-sub:#221c2b;
+    --ink:#ece8f1; --ink-2:#c3bbcf; --muted:#978ea6;
+    --line:#2d2637; --line-strong:#443a52;
+    --accent:#f27cc6; --accent-soft:#33122a;
+    --danger:#ff8365; --danger-soft:#3a1a12;
+    --adopted:#6ed0a8; --adopted-soft:#10291f;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:860px;margin:0 auto;padding:0 24px 120px;}
+  header{padding:64px 0 40px;border-bottom:1px solid var(--line);}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;margin:0 0 14px;}
+  h1{font-size:38px;line-height:1.1;margin:0 0 16px;letter-spacing:-.02em;font-weight:700;}
+  .thesis{font-size:18px;color:var(--ink-2);max-width:var(--measure);margin:0;}
+  .thesis strong{color:var(--ink);}
+  .meta{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:22px;display:flex;
+    gap:18px;flex-wrap:wrap;}
+  h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);font-weight:600;margin:56px 0 20px;padding-bottom:10px;border-bottom:1px solid var(--line);}
+  h3{font-size:20px;margin:40px 0 10px;letter-spacing:-.01em;}
+  p{max-width:var(--measure);color:var(--ink-2);}
+  code{font-family:var(--mono);font-size:.88em;background:var(--surface-sub);padding:1px 5px;
+    border-radius:3px;color:var(--ink);}
+  .lede{color:var(--ink);font-size:16px;}
+  .fig{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:24px;margin:24px 0;overflow-x:auto;}
+  .fig svg{display:block;margin:0 auto;max-width:100%;height:auto;}
+  .cap{font-family:var(--mono);font-size:11.5px;color:var(--muted);text-align:center;margin-top:14px;}
+  details{margin-top:14px;}
+  summary{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--muted);cursor:pointer;padding:4px 0;}
+  summary:hover{color:var(--accent);}
+  pre{background:var(--surface-sub);border:1px solid var(--line);border-radius:var(--r);
+    padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:11.5px;line-height:1.55;
+    color:var(--ink-2);margin:8px 0 0;}
+  pre code{background:none;padding:0;font-size:1em;color:var(--ink-2);}
+  .ad{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:var(--r);padding:18px 20px;margin:14px 0;}
+  .ad .id{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);}
+  .ad h4{margin:6px 0 12px;font-size:16.5px;line-height:1.3;}
+  .ad dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13.5px;}
+  .ad dt{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--muted);padding-top:3px;}
+  .ad dd{margin:0;color:var(--ink-2);}
+  .ad dd strong{color:var(--ink);}
+  .ad.keystone{background:var(--accent-soft);}
+  .tag{display:inline-block;font-family:var(--mono);font-size:10px;font-weight:600;padding:1px 8px;
+    border-radius:20px;vertical-align:middle;margin-left:8px;letter-spacing:.02em;}
+  .tag.new{background:var(--accent);color:var(--surface);}
+  .tag.assume{background:var(--surface-sub);color:var(--ink-2);border:1px solid var(--line-strong);}
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.5px;}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+  td code{font-size:.85em;}
+  .yes{color:var(--adopted);font-weight:600;}
+  .no{color:var(--danger);font-weight:600;}
+  .cap-id{font-family:var(--mono);font-weight:600;color:var(--accent);white-space:nowrap;}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0;}
+  .col{border:1px solid var(--line);border-radius:var(--r);padding:18px 20px;background:var(--surface);}
+  .col h4{margin:0 0 4px;font-size:16px;}
+  .col .sub{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+    margin:0 0 12px;}
+  .col p{font-size:13.5px;margin:0 0 10px;max-width:none;}
+  .col ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--ink-2);}
+  .col li{margin:4px 0;}
+  .col.exists{border-style:dashed;border-color:var(--line-strong);}
+  .col.exists .sub{color:var(--muted);}
+  .col.steer{border-left:3px solid var(--accent);}
+  .col.steer .sub{color:var(--accent);}
+  .shared{background:var(--surface-sub);border:1px solid var(--line);border-radius:var(--r);
+    padding:14px 18px;margin:4px 0 0;font-size:13.5px;color:var(--ink-2);}
+  .shared strong{color:var(--ink);}
+  .gone{background:var(--danger-soft);border:1px solid var(--danger);border-radius:var(--r);
+    padding:18px 20px;margin:18px 0;}
+  .gone h3{margin:0 0 8px;font-size:17px;}
+  .gone p{color:var(--ink-2);margin:0 0 12px;max-width:none;}
+  .gone .retired{display:flex;flex-wrap:wrap;gap:8px;margin:0;}
+  .gone .retired span{font-family:var(--mono);font-size:11.5px;text-decoration:line-through;
+    color:var(--danger);background:var(--surface);border:1px solid var(--line-strong);
+    padding:2px 9px;border-radius:3px;opacity:.85;}
+  .note{font-size:13px;color:var(--muted);border-left:2px solid var(--line-strong);
+    padding-left:14px;margin:14px 0;max-width:var(--measure);}
+  .toggle{position:fixed;top:16px;right:16px;font-family:var(--mono);font-size:11px;
+    background:var(--surface);border:1px solid var(--line-strong);color:var(--ink-2);
+    padding:6px 11px;border-radius:20px;cursor:pointer;}
+  .toggle:hover{border-color:var(--accent);color:var(--accent);}
+  @media(max-width:640px){.cols{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<button class="toggle" id="tg" aria-label="Toggle theme">&#9680; theme</button>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Architecture Spine &middot; feature &middot; ports-and-adapters</p>
+  <h1>Live Agent Steering</h1>
+  <p class="thesis">The read half of the node room already ships. This is the <strong>write half &mdash; and it is not &ldquo;stop the node.&rdquo;</strong> Two operations act on the <strong>live agent</strong> while the node keeps running: <strong>send</strong> it a message, and <strong>interrupt</strong> its current thinking to redirect it. Stopping the whole node already exists (<strong>Cancel</strong>); steering never touches the node lifecycle.</p>
+  <div class="meta">
+    <span>11 decisions</span><span>2 parent spines</span><span>CAP-1..6</span><span>status: final</span>
+  </div>
+</header>
+
+<h2>The reframe</h2>
+<p class="lede">The provider already gives us the primitive. An interrupt ends the current <em>turn</em> but keeps the <em>session</em> alive &mdash; so the operator&rsquo;s next message continues the same session. The elegant part: <strong>steering-interrupt and Cancel share the same low-level stream-abort; the only difference is what the executor does after.</strong> Cancel ends the node (existing path); steering keeps the node open and re-runs the same session. The one genuinely new engine behavior is that a <strong>steered node runs multiple turns on one live session</strong> instead of ending after the first.</p>
+
+<div class="gone">
+  <h3>What we are NOT doing &mdash; the superseded model</h3>
+  <p>The prior design in this run modelled steering as a <strong>durable stop-and-resume</strong>: pause the run, persist a control marker, re-deliver on hydration. That conflated steering with Cancel and was ratified as over-engineering. It is gone &mdash; there is <strong>no durable steering state</strong> of any kind. These terms do not appear anywhere below except here:</p>
+  <div class="retired">
+    <span>metadata.steering marker</span><span>run-pause</span><span>node pending</span><span>phase / CAS</span>
+    <span>stop-and-resume</span><span>at-least-once delivery</span><span>consume-on-resume</span>
+    <span>attempt-key guard</span><span>per-node suspend</span><span>stopping / stopped enum</span>
+  </div>
+</div>
+
+<h2>The two operations</h2>
+<p class="lede">The single most important distinction. Both act while the node is <code>running</code>, but only one is in scope.</p>
+
+<div class="cols">
+  <div class="col exists">
+    <h4>Cancel node</h4>
+    <p class="sub">Existing &middot; out of scope</p>
+    <p>The teardown / abort feature that already ships. Stops the <strong>whole node</strong> and the agent inside it; the node&rsquo;s lifecycle ends.</p>
+    <ul>
+      <li>Untouched by this feature.</li>
+      <li>Shown only as a separate dashed &ldquo;already exists&rdquo; path.</li>
+      <li>Governed by the HITL pause/resume invariants &mdash; see below.</li>
+    </ul>
+  </div>
+  <div class="col steer">
+    <h4>Steer</h4>
+    <p class="sub">New &middot; this spine</p>
+    <p><strong>Send</strong> a message to the running agent, and <strong>interrupt</strong> its current generation to redirect it &mdash; both <strong>without stopping the node</strong>.</p>
+    <ul>
+      <li>Node stays <code>running</code> the whole time &mdash; a send or an interrupt never fails it (no pause, no <code>pending</code>, no resume).</li>
+      <li>Interrupt ends the current <strong>turn</strong>; the provider <strong>session stays alive</strong>.</li>
+      <li>Everything in-process / in-session; multi-turn on one session.</li>
+    </ul>
+  </div>
+</div>
+<div class="shared"><strong>One shared abort primitive, two signals.</strong> The same stream-abort ends a turn either way &mdash; but <strong>Cancel</strong> aborts the one-shot node-level <code>nodeAbortController</code> (which fails the node at <code>:3124</code>), while <strong>steering</strong> aborts a <strong>fresh per-turn signal</strong> beside it, so the node-level <code>:3124</code> check is <em>never tripped by steering</em>. <code>operatorInterrupt</code> names which signal fired; Cancel&rsquo;s path is byte-for-byte unchanged (AD-2).</div>
+
+<p class="note">Inherited, read-only &mdash; and the line that anchors the distinction: <strong>the pause/resume HITL invariants do NOT apply to steering.</strong> HITL/AD-1 &amp; AD-2 (pause-without-approval + resume CAS) and HITL/AD-6 (<code>resumeInteractions</code>) govern the Cancel / Ask lifecycle. Steering does not pause, does not resume, and does not reuse <code>resumeInteractions</code>. What steering <em>does</em> inherit: HITL/AD-3 (executor is sole appender, store assigns <code>seq</code>), HITL/AD-7 (split typed routes, server-side authorization), HITL/AD-8 (additive schema, both dialects), and Track A/AD-1, AD-2, AD-3, AD-10 (one core / two shells; the Console lint boundary).</p>
+
+<h2>Dependency direction</h2>
+<p>Each layer may depend only downward.</p>
+
+<div class="fig">
+<svg viewBox="0 0 620 486" role="img" aria-label="Dependency direction: web composer dock and operator row depend on the server Send/Interrupt routes, which depend on the in-process steering registry, which depends on the executor per-node turn loop, which depends on the IAgentProvider port, which depends on the provider adapters.">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="var(--line-strong)"/>
+    </marker>
+    <style>
+      .bx{fill:var(--surface-sub);stroke:var(--line-strong);stroke-width:1;}
+      .ba{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1;}
+      .t{font-family:var(--mono);font-size:11px;fill:var(--ink);}
+      .tm{font-family:var(--mono);font-size:10px;fill:var(--muted);}
+      .ln{stroke:var(--line-strong);stroke-width:1.4;fill:none;}
+    </style>
+  </defs>
+
+  <rect class="bx" x="70" y="16" width="480" height="46" rx="5"/>
+  <text x="310" y="36" text-anchor="middle" class="t">web: composer dock + operator row</text>
+  <text x="310" y="52" text-anchor="middle" class="tm">shells render from one projected sub-state (AD-9)</text>
+  <path class="ln" d="M310,62 L310,94" marker-end="url(#ar)"/>
+
+  <rect class="bx" x="70" y="94" width="480" height="46" rx="5"/>
+  <text x="310" y="114" text-anchor="middle" class="t">server: Send / Interrupt routes</text>
+  <text x="310" y="130" text-anchor="middle" class="tm">resolveAuthContext &middot; queue absorbs races (AD-11)</text>
+  <path class="ln" d="M310,140 L310,172" marker-end="url(#ar)"/>
+
+  <rect class="ba" x="70" y="172" width="480" height="50" rx="5"/>
+  <text x="310" y="192" text-anchor="middle" class="t">workflows: in-process steering registry</text>
+  <text x="310" y="208" text-anchor="middle" class="tm">(runId, nodeId) &rarr; live session handle + inbound queue (AD-5)</text>
+  <path class="ln" d="M310,222 L310,254" marker-end="url(#ar)"/>
+
+  <rect class="bx" x="70" y="254" width="480" height="46" rx="5"/>
+  <text x="310" y="274" text-anchor="middle" class="t">workflows: executor per-node turn loop</text>
+  <text x="310" y="290" text-anchor="middle" class="tm">multiple turns on one session (AD-4)</text>
+  <path class="ln" d="M310,300 L310,332" marker-end="url(#ar)"/>
+
+  <rect class="ba" x="70" y="332" width="480" height="50" rx="5"/>
+  <text x="310" y="352" text-anchor="middle" class="t">providers: IAgentProvider</text>
+  <text x="310" y="368" text-anchor="middle" class="tm">sendQuery stream + interrupt &mdash; no new named primitive (AD-2, AD-3)</text>
+  <path class="ln" d="M310,382 L310,414" marker-end="url(#ar)"/>
+
+  <rect class="bx" x="70" y="414" width="480" height="46" rx="5"/>
+  <text x="310" y="434" text-anchor="middle" class="t">providers: claude / codex / omp / grok / deepseek adapters</text>
+  <text x="310" y="450" text-anchor="middle" class="tm">interrupt-then-continue floor; soft-inject where transport allows</text>
+</svg>
+<p class="cap">Adds no new port and no durable store: it drives the provider&rsquo;s native interrupt + streaming-input on the live session handle held in the registry.</p>
+<details>
+<summary>Spine source (mermaid, exact)</summary>
+<pre><code>flowchart TD
+  Dock["web: composer dock + operator row"] --&gt; Routes["server: Send / Interrupt routes"]
+  Routes --&gt; Reg["workflows: in-process steering registry (runId,nodeId -&gt; live handle)"]
+  Reg --&gt; Exec["workflows: executor per-node turn loop"]
+  Exec --&gt; Port["providers: IAgentProvider (sendQuery stream + interrupt)"]
+  Port --&gt; Adapters["providers: claude / codex / omp / grok / deepseek adapters"]</code></pre>
+</details>
+</div>
+
+<h2>The in-session flow</h2>
+<p>The node never leaves <code>running</code>. Its agent moves between the two projected sub-states (AD-9). Cancel is a separate dashed teardown.</p>
+
+<div class="fig">
+<svg viewBox="0 0 910 560" role="img" aria-label="In-session flow. A running node generates turn N. The operator can soft-inject (folded into turn N with no interrupt, returning to generating), Queue a message held in the registry, interrupt to redirect, or Cancel. An interrupt ends turn N with the session alive and moves the agent to idle-after-interrupt. From idle, Send now runs turn N+1 on the same session; a 30-minute idle-await timeout fails the node; and a /workflow cancel, reached by idle-await's own status poll, tears the node down. A queued message runs as turn N+1 when turn N ends naturally, or moves into idle-after-interrupt if the operator then interrupts. When a turn ends naturally with an empty queue the node completes. Cancel is a separate dashed teardown that ends the node.">
+  <defs>
+    <marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="var(--line-strong)"/>
+    </marker>
+    <style>
+      .n{fill:var(--surface-sub);stroke:var(--line-strong);stroke-width:1;}
+      .na{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2;}
+      .ng{fill:var(--adopted-soft);stroke:var(--adopted);stroke-width:1;}
+      .nbad{fill:var(--danger-soft);stroke:var(--danger);stroke-width:1;stroke-dasharray:5 4;}
+      .et{font-family:var(--mono);font-size:11px;fill:var(--ink);}
+      .etm{font-family:var(--mono);font-size:9.5px;fill:var(--muted);}
+      .ed{stroke:var(--line-strong);stroke-width:1.4;fill:none;}
+      .edbad{stroke:var(--danger);stroke-width:1.3;fill:none;stroke-dasharray:5 4;}
+      .el{font-family:var(--sans);font-size:10.5px;font-weight:600;fill:var(--muted);}
+    </style>
+  </defs>
+
+  <!-- top row: DONE (good) | GEN | KILL (cancel, dashed) -->
+  <rect class="ng" x="16" y="56" width="176" height="46" rx="5"/>
+  <text x="104" y="83" text-anchor="middle" class="et">node completes</text>
+
+  <rect class="na" x="360" y="56" width="200" height="50" rx="5"/>
+  <text x="460" y="77" text-anchor="middle" class="et">node running:</text>
+  <text x="460" y="93" text-anchor="middle" class="et">agent GENERATING (turn N)</text>
+
+  <rect class="nbad" x="688" y="56" width="176" height="46" rx="5"/>
+  <text x="776" y="83" text-anchor="middle" class="et">teardown: node ends</text>
+
+  <!-- GEN -> DONE -->
+  <path class="ed" d="M360,79 L200,79" marker-end="url(#ar2)"/>
+  <text x="278" y="70" text-anchor="middle" class="el">turn ends naturally,</text>
+  <text x="278" y="98" text-anchor="middle" class="el">queue empty</text>
+
+  <!-- operator diamond -->
+  <polygon class="n" points="460,124 548,156 460,188 372,156"/>
+  <text x="460" y="160" text-anchor="middle" class="et">operator acts</text>
+  <path class="ed" d="M460,106 L460,124" marker-end="url(#ar2)"/>
+
+  <!-- OP -> KILL (Cancel, dashed) -->
+  <path class="edbad" d="M548,150 C610,120 650,108 686,102" marker-end="url(#ar2)"/>
+  <text x="624" y="126" text-anchor="middle" class="el">Cancel (existing, separate)</text>
+
+  <!-- mid row -->
+  <rect class="n" x="16" y="264" width="216" height="50" rx="5"/>
+  <text x="124" y="285" text-anchor="middle" class="et">fold into turn N,</text>
+  <text x="124" y="301" text-anchor="middle" class="et">no interrupt</text>
+
+  <rect class="n" x="360" y="268" width="200" height="40" rx="5"/>
+  <text x="460" y="293" text-anchor="middle" class="et">hold in registry</text>
+
+  <rect class="na" x="608" y="260" width="256" height="56" rx="5"/>
+  <text x="736" y="284" text-anchor="middle" class="et">provider interrupt / stream-abort:</text>
+  <text x="736" y="300" text-anchor="middle" class="et">end turn N, session ALIVE</text>
+
+  <!-- OP -> INJ (soft-inject) -->
+  <path class="ed" d="M372,156 C300,178 220,230 180,264" marker-end="url(#ar2)"/>
+  <text x="248" y="200" text-anchor="middle" class="el">soft-inject where offered</text>
+  <text x="248" y="214" text-anchor="middle" class="el">(claude streaming input)</text>
+
+  <!-- OP -> Q (Queue) -->
+  <path class="ed" d="M460,188 L460,268" marker-end="url(#ar2)"/>
+  <text x="470" y="216" class="el">Queue (any provider,</text>
+  <text x="470" y="230" class="el">non-interrupting)</text>
+
+  <!-- OP -> INT (interrupt) -->
+  <path class="ed" d="M548,162 C590,195 620,228 656,260" marker-end="url(#ar2)"/>
+  <text x="600" y="210" text-anchor="middle" class="el">interrupt to redirect</text>
+
+  <!-- INJ -> GEN (loop back, far left then across) -->
+  <path class="ed" d="M124,264 L124,120 C124,108 300,96 358,86" marker-end="url(#ar2)"/>
+
+  <!-- INT -> IDLE -->
+  <path class="ed" d="M736,316 L736,346" marker-end="url(#ar2)"/>
+
+  <!-- IDLE -->
+  <rect class="na" x="608" y="346" width="256" height="62" rx="5"/>
+  <text x="736" y="368" text-anchor="middle" class="et">node running: agent</text>
+  <text x="736" y="384" text-anchor="middle" class="et">IDLE-AFTER-INTERRUPT</text>
+  <text x="736" y="400" text-anchor="middle" class="etm">(session alive, awaiting operator)</text>
+
+  <!-- NEXT -->
+  <rect class="n" x="360" y="470" width="200" height="52" rx="5"/>
+  <text x="460" y="491" text-anchor="middle" class="et">turn N+1 on same session</text>
+  <text x="460" y="507" text-anchor="middle" class="etm">(attemptResumeId)</text>
+
+  <!-- FAIL (dashed bad) -->
+  <rect class="nbad" x="608" y="474" width="256" height="48" rx="5"/>
+  <text x="736" y="495" text-anchor="middle" class="et">node FAILS:</text>
+  <text x="736" y="511" text-anchor="middle" class="et">interrupted, no redirect</text>
+
+  <!-- Q -> NEXT -->
+  <path class="ed" d="M460,308 L460,470" marker-end="url(#ar2)"/>
+  <text x="470" y="392" class="el">turn N ends naturally</text>
+
+  <!-- Q -> IDLE (operator then interrupts: the held message waits in idle-await) -->
+  <path class="ed" d="M560,296 C588,322 600,346 606,366" marker-end="url(#ar2)"/>
+  <text x="572" y="330" class="el">then interrupt</text>
+
+  <!-- IDLE -> NEXT (Send now) -->
+  <path class="ed" d="M608,382 C560,420 540,452 562,470" marker-end="url(#ar2)"/>
+  <text x="566" y="436" class="el">Send now: ordinary</text>
+  <text x="566" y="450" class="el">prompt on idle session</text>
+
+  <!-- IDLE -> FAIL (dashed) -->
+  <path class="edbad" d="M736,408 L736,474" marker-end="url(#ar2)"/>
+  <text x="620" y="437" class="el">30-min idle-await</text>
+  <text x="620" y="451" class="el">timeout &rarr; FAIL</text>
+
+  <!-- NEXT -> GEN (loop back up the left) -->
+  <path class="ed" d="M360,496 L306,496 L306,110 C306,98 360,92 400,90" marker-end="url(#ar2)"/>
+
+  <!-- IDLE -> KILL (/workflow cancel, reached by idle-await's status poll) -->
+  <path class="edbad" d="M864,372 C892,368 892,290 892,220 C892,150 892,120 826,104" marker-end="url(#ar2)"/>
+  <text x="882" y="228" transform="rotate(-90 882 228)" text-anchor="middle" class="el">/workflow cancel (idle-await status poll)</text>
+</svg>
+<p class="cap">An interrupted turn never completes the node (AD-4): its partial output is not validated. The node completes only when a turn ends naturally with nothing queued.</p>
+<details>
+<summary>Spine source (mermaid) &mdash; the SVG above also renders two decided refinements: the 30-min idle-await bound and the queue-then-interrupt path</summary>
+<pre><code>flowchart TD
+  GEN["node running: agent GENERATING (turn N)"] --&gt; OP{"operator acts"}
+  OP --&gt;|"soft-inject where offered (claude streaming input)"| INJ["fold into turn N, no interrupt"]
+  OP --&gt;|"Queue (any provider, non-interrupting)"| Q["hold in registry"]
+  OP --&gt;|"interrupt to redirect"| INT["provider interrupt / stream-abort: end turn N, session ALIVE"]
+  INJ --&gt; GEN
+  INT --&gt; IDLE["node running: agent IDLE-AFTER-INTERRUPT (session alive, awaiting operator)"]
+  IDLE --&gt;|"Send now: ordinary prompt on idle session"| NEXT["turn N+1 on same session (attemptResumeId)"]
+  IDLE --&gt;|"idle timeout, nothing sent"| FAIL["node FAILS: interrupted, no redirect"]
+  Q --&gt;|"turn N ends naturally"| NEXT
+  NEXT --&gt; GEN
+  GEN --&gt;|"turn ends naturally, queue empty"| DONE["node completes"]
+  OP --&gt;|"Cancel (existing, separate)"| KILL["teardown: node ends"]
+  KILL:::bad
+  FAIL:::bad
+  classDef bad stroke-dasharray: 4 3</code></pre>
+</details>
+</div>
+
+<h2>Decisions</h2>
+<p class="lede">Eleven ADs. No &ldquo;gate fix&rdquo; cards &mdash; the durable model they patched is gone. Two cards carry the only genuinely new code: AD-4 (multi-turn on one session) and AD-2 (the one seam &mdash; a fresh per-turn abort signal beside Cancel&rsquo;s one-shot node-level controller, with <code>operatorInterrupt</code> naming which fired).</p>
+
+<h3>Lifecycle &amp; interrupt</h3>
+
+<div class="ad">
+  <span class="id">AD-1</span>
+  <h4>Steering acts on the live agent, never on the node lifecycle</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-1, CAP-2, CAP-3, CAP-5; the executor; the registry.</dd>
+    <dt>Prevents</dt><dd>modelling steering as a run pause / node stop (that is <strong>Cancel</strong>, which already exists); any durable stop-and-resume state.</dd>
+    <dt>Rule</dt><dd><em>Send</em> and <em>interrupt</em> both operate on the <strong>live provider session</strong> of the running node. The node stays <code>running</code> throughout &mdash; <strong>no pause, no <code>pending</code>, no resume; a send or an interrupt never fails the node.</strong> (The one way a steered node ends in failure is the operator <em>abandoning</em> an interrupted node past its idle bound &mdash; AD-4 &mdash; the operator&rsquo;s absence, not a steering act.) Stopping the whole node is the existing Cancel / abort path: out of scope, untouched. Steering only exists where there is a live agent session to act on.</dd>
+  </dl>
+</div>
+
+<div class="ad keystone">
+  <span class="id">AD-2</span><span class="tag new">the one seam</span>
+  <h4>Interrupt is the provider&rsquo;s own primitive (or a stream-abort); it ends the turn, not the session</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-2, <code>IAgentProvider</code>, the adapters, the executor&rsquo;s abort seam.</dd>
+    <dt>Prevents</dt><dd>an engine-side kill; a bespoke steer channel; conflating interrupt with Cancel&rsquo;s teardown; a steering abort falling through to <code>node_failed</code>.</dd>
+    <dt>Rule</dt><dd>Ending the agent&rsquo;s thinking ends the <strong>current turn</strong> and leaves the <strong>session alive</strong>. Claude uses the SDK-native <code>interrupt()</code> (= <code>query.interrupt()</code>); a provider with no native keep-alive interrupt uses a <strong>stream-abort</strong> &mdash; codex re-runs the resumed thread (<code>codex.resumeThread(sessionId)</code>, <code>providers/src/codex/provider.ts:1006</code>). The session, not a durable marker, carries continuity.</dd>
+    <dt>The abort seam</dt><dd>The executor&rsquo;s <code>nodeAbortController</code> (<code>dag-executor.ts:2209</code>, created <strong>once per node, one-shot</strong>) is <strong>Cancel&rsquo;s</strong>, and steering leaves it byte-for-byte untouched: it feeds <code>sendQuery</code> (<code>:2223</code>), the idle-timeout and cancel-poll abort it (<code>:2298</code>/<code>:2325</code>), the re-ask loop stops on it (<code>:3032</code>), and the inline <code>:3124</code> check fails the node on it. Steering must <strong>not</strong> abort that controller &mdash; one-shot means a steering abort would kill turn N+1&rsquo;s <code>sendQuery</code> and block multi-turn. Instead steering interrupts through a <strong>fresh per-turn signal</strong>: <code>sendQuery</code> receives the combination <code>AbortSignal.any([nodeAbortController.signal, perTurnSignal])</code>, so <strong>Cancel (node-level) or a steering interrupt (per-turn) both end the current turn</strong> &mdash; but each new turn gets a fresh per-turn signal while the node-level controller persists, which is what lets a node run more than one turn. The registry aborts the active turn&rsquo;s per-turn signal <strong>synchronously</strong> (no <code>await</code> between reading the handle and aborting), so on the single-threaded loop it can never fire a torn-down controller.</dd>
+    <dt>Placement, not ordering, resolves the flag</dt><dd><code>operatorInterrupt</code> is set when steering fires the per-turn abort and read at post-stream points all resolved by <strong>position</strong> in the existing flow (<code>stream &rarr; validation &rarr; canReask :3032 &rarr; :3124 Cancel check &rarr; completion</code>): <strong>(1)</strong> <code>canReask</code> (<code>:3032</code>) must <strong>also stop on <code>operatorInterrupt</code></strong>, else the interrupted partial would auto-re-ask; <strong>(2)</strong> the executor <strong>skips validation</strong> on an interrupted turn &mdash; no validation-miss events for a turn the operator cut; <strong>(3)</strong> the <code>operatorInterrupt</code> branch sits <strong>immediately after the <code>:3124</code> Cancel check</strong>, so a co-firing Cancel wins <em>by position</em> &mdash; no ordering rule to invent; <strong>(4)</strong> the flag is <strong>per-turn</strong>, reset when the loop starts turn N+1, so a stale flag can never abort or mis-route a later turn.</dd>
+    <dt>The discriminator</dt><dd>The real &ldquo;interrupted vs natural&rdquo; test is <strong>&ldquo;did the turn emit a <code>result</code>&rdquo;</strong>, not the flag alone: the executor already consumes a provider-normalized <code>msg.type === 'result'</code> (<code>dag-executor.ts:2533</code>), and a stream-abort yields none. If the interrupt lands just as the turn ends on its own, the turn produced its <code>result</code> &rarr; it completes or auto-drains (AD-4) <em>regardless of the flag</em>, and the interrupt is <strong>spent</strong> (a no-op). Only a turn that produced <strong>no <code>result</code></strong> with <code>operatorInterrupt</code> set is an interrupted end. Because steering aborts only the per-turn signal, the node-level <code>:3124</code> Cancel check is <strong>never tripped by steering</strong>.</dd>
+  </dl>
+</div>
+
+<h3>Send &amp; multi-turn</h3>
+
+<div class="ad">
+  <span class="id">AD-3</span>
+  <h4>Send is an ordinary prompt on the live session; delivery timing is the operator&rsquo;s choice, not a provider limit</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-1, CAP-3, CAP-5, <code>IAgentProvider.sendQuery</code>.</dd>
+    <dt>Prevents</dt><dd>a new named <code>steer()</code> primitive; disqualifying any provider; holding a message &ldquo;because the provider can&rsquo;t do better&rdquo;; interrupt-first modelling.</dd>
+    <dt>Rule</dt><dd>Three paths; interrupt (AD-2) is orthogonal to all of them, and <strong>only soft-inject is gated by provider transport</strong>:
+      <br><strong>&bull; Queue (default, any provider):</strong> the registry holds the message; delivered as <strong>turn N+1 when the current turn ends naturally</strong>. Non-interrupting &mdash; the baseline.
+      <br><strong>&bull; Send now (any provider):</strong> offered only once the agent is <strong>idle-after-interrupt</strong> (AD-9) &mdash; an ordinary prompt on an idle session &rarr; turn N+1 immediately. It does not itself interrupt.
+      <br><strong>&bull; Soft-inject (CAP-5, provider- <em>and</em> spike-gated):</strong> where the provider folds a message into the running turn (claude streaming input; codex deferred), it arrives <strong>mid-turn with no interrupt</strong>. claude&rsquo;s soft-inject rests on an <strong>unverified seam</strong> &mdash; whether <code>AsyncIterable</code> streaming input composes with the resume protocol (exercised only on a string prompt at the pin). The <strong>v1 floor is interrupt + Queue</strong>, which needs no spike; soft-inject ships when the spike clears &mdash; <strong>not v1-ready</strong>.</dd>
+    <dt>Interface</dt><dd>The only <code>IAgentProvider</code> change: <code>sendQuery</code>&rsquo;s input may be an async iterable (stream) for soft-inject, plus an interrupt affordance &mdash; both reuse provider-native operations. <strong>No new named primitive.</strong></dd>
+  </dl>
+</div>
+
+<div class="ad keystone">
+  <span class="id">AD-4</span><span class="tag new">new engine behavior</span>
+  <h4>A steered node runs multiple provider turns on one live session; turn-end has two causes</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-2, CAP-3, the executor&rsquo;s per-node turn loop.</dd>
+    <dt>Prevents</dt><dd>the node ending after its first turn while a steer is pending; an interrupt with an empty queue completing the node; validating a <strong>partial</strong> interrupted turn as real output; re-establishing a fresh session (losing the agent&rsquo;s context).</dd>
+    <dt>Rule</dt><dd>A steered node <strong>continues on the SAME provider session across turns</strong>, reusing the session-resume seam the structured-output re-ask already uses &mdash; <code>sendQuery</code> with <code>attemptResumeId</code> on the same session (<code>dag-executor.ts:2290</code>). Each delivered operator message becomes the next turn&rsquo;s input. This is the one genuinely new engine behavior.</dd>
+    <dt>Two causes</dt><dd><strong>Natural end</strong> (agent finished on its own): the queue <strong>auto-drains</strong> &mdash; a queued message &rarr; run turn N+1; queue empty &rarr; <strong>node completes</strong>. Auto-delivery at the natural boundary <em>is</em> <code>Queue</code>&rsquo;s contract (CAP-1). <strong>Interrupted end</strong> (<code>operatorInterrupt</code> set): the turn produced a <strong>partial</strong> result &mdash; no schema-valid <code>output_format</code> &mdash; which the executor must <strong>not</strong> validate, complete, or advance the DAG on. It <strong>always</strong> enters <strong>idle-await</strong>, <em>whatever the queue holds &mdash; it never auto-fires.</em> The <strong>only</strong> exits are the operator&rsquo;s <code>Send now</code> (flush every queued message plus the one just typed, in written order &rarr; turn N+1) and the idle bound. This preserves the ratified <code>Send now</code> moment: after Stop, the operator adds the final correction before anything is sent.</dd>
+    <dt>The delta</dt><dd>The re-ask precedent (<code>:2290</code>) re-enters the loop on a <strong>validation miss</strong> (recoverable); steering re-enters on an <strong>interrupt</strong> from a state <code>:3124</code> today treats as <strong>terminal</strong> &mdash; same seam, the <code>operatorInterrupt</code> branch is the new code.</dd>
+    <dt>Idle-await bound</dt><dd>On entering idle-await the executor arms a <strong>fresh 30-minute timer</strong> (owner-ratified) &mdash; reusing neither the streaming <code>withIdleTimeout</code> wrapper (<code>:2298</code>; no stream to wrap) nor its <code>nodeIdleTimedOut</code> outcome, which <em>completes</em> the node (<code>:3118</code>) and would ship the partial turn. On expiry the node takes an <strong>explicit <code>node_failed</code></strong> branch: <code>interrupted by operator, no redirect received</code>.</dd>
+    <dt>How Cancel reaches idle</dt><dd>Idle-await has no stream, so the chunk-driven cancel-poll (<code>:2312</code>) is <strong>dormant</strong> &mdash; a <code>/workflow cancel</code> cannot reach it through the signal. Idle-await runs its <strong>own timer-driven poll</strong> of <code>getWorkflowRunStatus</code> at <code>CANCEL_CHECK_INTERVAL_MS</code> (<code>:682</code>), reusing <code>shouldContinueStreamingForStatus</code> (<code>:700-702</code>) and taking the existing Cancel ending when the run is no longer streamable. <strong>Idle-await resolves exactly once:</strong> the first of <code>Send now</code>, the cancel-poll, or the 30-minute timer wins &mdash; the other two are torn down. Resuming a 30-minute fail re-runs the node <strong>from scratch with a fresh session</strong> &mdash; the interrupted agent&rsquo;s context is gone (no durable session for a steer, AD-5). <em>(Rejected bounds: wait-forever &mdash; ties up the node, fragile in-process; complete-with-partial &mdash; ships garbage downstream.)</em></dd>
+  </dl>
+</div>
+
+<h3>Scope &amp; the record</h3>
+
+<div class="ad">
+  <span class="id">AD-5</span>
+  <h4>In-process only: the registry holds the live handle; detached is deferred</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-1, CAP-2, CAP-5; the web-dispatch executor (<code>api.ts:3200-3228</code>); the CLI detach path (<code>cli/src/commands/workflow.ts:696-722</code>).</dd>
+    <dt>Prevents</dt><dd>pretending steering can reach a run whose live session is in another process; re-introducing durable state to bridge that gap.</dd>
+    <dt>Rule</dt><dd>The <strong>in-process registry</strong> &mdash; keyed <code>(runId, nodeId)</code>, holding the live session handle + an in-memory inbound queue, valid only while the node is <code>running</code> <strong>in this process</strong> &mdash; is the <strong>sole</strong> mechanism. A detached run (CLI <code>--detach</code>) has no reachable handle &rarr; steering is <strong>unavailable</strong> for it in v1: the UI states this, and <strong>Cancel still works</strong>; a detached node otherwise runs to completion on its own &mdash; there is <strong>nothing to &ldquo;resume&rdquo; while it is <code>running</code></strong> (<code>/workflow resume</code> applies only if it later fails). <strong>No durable steering state:</strong> a server restart drops the live session; any in-flight steer is lost and the run resumes normally &mdash; the accepted v1 boundary, matching aion.</dd>
+  </dl>
+</div>
+
+<div class="ad">
+  <span class="id">AD-6</span>
+  <h4>The executor is the single writer of the operator transcript row</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-4, CAP-6; HITL/AD-3.</dd>
+    <dt>Prevents</dt><dd>a second appender to the node-message table; <code>seq</code> contention; an operator row whose position is unguaranteed; an operator row that cannot be attributed to its sender or reconciled against what the browser marked <code>sent</code>.</dd>
+    <dt>Rule</dt><dd>An operator message is an ordinary <code>text</code> row carrying <strong>three additive <code>metadata</code> fields</strong> &mdash; <code>origin = 'operator'</code>, <code>operator_user_id</code> (the acting identity from <code>resolveAuthContext</code>, so CAP-4 attributes the message across a multi-user install), and <code>message_id</code> (the caller-stamped id from CAP-6, so the client can reconcile which <code>sent</code> messages became rows &mdash; AD-11). All three are additive on the <code>.strict()</code> metadata schema (<code>workflows/src/schemas/node-execution.ts:29-43</code>) + a regenerated <code>api.generated</code>; <strong>no migration</strong> (the column is already JSON). Written by the executor through the store at the point of delivery, placed by <code>seq</code> between the turn it redirected and the turn it caused. Delivered as a <strong>plain prompt</strong>, never <code>resumeInteractions</code> (an operator message has no <code>tool_use_id</code>). The <strong>row is a receipt for the record</strong> &mdash; the delivery vehicle is the live session. The server never writes it.</dd>
+  </dl>
+</div>
+
+<div class="ad">
+  <span class="id">AD-7</span>
+  <h4>Delivery emits no turn-start event from the steering layer</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-3, CAP-4, CAP-5; the executor; every adapter; the transcript record.</dd>
+    <dt>Prevents</dt><dd>a fabricated turn boundary corrupting the record the read half projects from.</dd>
+    <dt>Rule</dt><dd>Delivering an operator message &mdash; soft-inject mid-turn, or as the next turn after an interrupt &mdash; must emit <strong>no <code>turn-start</code> event from the steering layer</strong>; the turn boundary is where the agent&rsquo;s own loop puts it. An adapter that cannot inject without signalling a new turn <strong>holds the message for the next boundary</strong> rather than fabricating one.</dd>
+  </dl>
+</div>
+
+<h3>Confirmation &amp; projected state</h3>
+
+<div class="ad">
+  <span class="id">AD-8</span>
+  <h4>Delivery confirmation is best-effort, claude-only, gated on the SDK bump</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-6, the UI status chip.</dd>
+    <dt>Prevents</dt><dd>making confirmation a mandatory interface function (would disqualify every provider but claude).</dd>
+    <dt>Rule</dt><dd>Confirmation reports arrival; it is not a delivery mechanism. Only claude echoes a caller-set <code>uuid</code>, and that echo needs <code>@anthropic-ai/claude-agent-sdk</code> <strong>&ge; 0.3.246</strong> &mdash; so <code>delivered</code> is <strong>unreachable at the inherited pin 0.3.209</strong> and becomes claude-only after that bump (Deferred). Until then the UI shows <code>sent</code> for every provider and never advances past it. Correlation is by id, never text or timestamp.</dd>
+  </dl>
+</div>
+
+<div class="ad">
+  <span class="id">AD-9</span>
+  <h4>The agent&rsquo;s generating / interruptible state is projected in the core; both shells read it</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-1, CAP-2, CAP-3; the run-state projector; both dock shells; Track A/AD-1.</dd>
+    <dt>Prevents</dt><dd>each shell inferring mid-generation from raw state &mdash; forking the status channel across two surfaces; a persisted status enum re-introducing durable stop state.</dd>
+    <dt>Rule</dt><dd>The agent&rsquo;s state <strong>inside</strong> <code>node = running</code> is a projected sub-state with <strong>two values</strong>: <strong><code>generating</code></strong> (a turn is streaming: interruptible, and soft-injectable where the provider offers it) and <strong><code>idle-after-interrupt</code></strong> (a turn was interrupted, the session is alive and awaiting the operator &mdash; where <code>Send now</code> is offered). Derived in the core from the live turn lifecycle, emitted as data on the node state the shells already consume. <strong>No new persisted status enum</strong> &mdash; the ghost of the rejected <code>stopping</code>/<code>stopped</code> states, correctly relocated <em>inside</em> <code>running</code>. The <code>interrupting</code> state in <code>control-states.md</code> is a <strong>UI-local optimistic transient</strong> (the brief window while an interrupt request is in flight), <strong>never a projected value</strong> &mdash; the core emits only the two. Both shells (Legacy + Console) render the composer dock from this one sub-state &mdash; the cross-shell parity invariant.</dd>
+  </dl>
+</div>
+
+<h3>Cross-spec &amp; routes</h3>
+
+<div class="ad">
+  <span class="id">AD-10</span>
+  <h4>CAP-4 reaches into the transcript spec; that change is made there</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-4, <code>spec-readable-agent-transcript</code>.</dd>
+    <dt>Prevents</dt><dd>this spine silently adding an item kind to another spec&rsquo;s contract.</dd>
+    <dt>Rule</dt><dd><code>AgentHistoryItem</code> there has kinds <code>assistant | tool | lifecycle</code>; an operator row is none, and Track A/AD-1 puts every row&rsquo;s meaning in the shared core. The new item kind and its two-shell treatment belong to that spec&rsquo;s own update, opened there before CAP-4 ships. <strong>Sequencing:</strong> an operator <code>text</code> row must not reach a live transcript until that reader recognizes <code>origin='operator'</code> (else it renders as agent text) &mdash; the reader change lands first.</dd>
+  </dl>
+</div>
+
+<div class="ad">
+  <span class="id">AD-11</span>
+  <h4>Send and Interrupt are new authorized routes; races fold forward, only a finished node refuses</h4>
+  <dl>
+    <dt>Binds</dt><dd>CAP-1, CAP-2, CAP-5; the Send / Interrupt routes.</dd>
+    <dt>Prevents</dt><dd>an unauthenticated or cross-user steer mutating a run; a durable-marker / phase gate this model does not have; a 409 where the queue already absorbs the race.</dd>
+    <dt>Rule</dt><dd>Send and Interrupt are <strong>new</strong> routes &mdash; <code>POST /api/workflows/runs/:runId/nodes/:nodeId/send</code> and <code>&hellip;/interrupt</code> &mdash; resolving identity via <code>resolveAuthContext</code> under HITL/AD-7 (not a new grant). There is <strong>no phase / marker gate</strong> (no durable state exists): the route acts on the live registry handle.</dd>
+    <dt>Races</dt><dd><strong>The queue absorbs them &mdash; no 409, and nothing is lost.</strong> A Send that arrives while an interrupt is in flight <strong>lands in the registry queue and waits there</strong> &mdash; when the interrupt lands, the node goes <code>idle-after-interrupt</code>, and the queue <strong>drains only on the operator&rsquo;s <code>Send now</code></strong> (AD-4), never automatically. A <code>Queue</code> message whose <em>generating</em> turn ends naturally is delivered at that natural boundary (CAP-1). The two drain rules differ by <em>how the turn ended</em>, not by a route branch. Soft-inject correlates to its target turn by the registry&rsquo;s <strong>in-memory turn id</strong>, never a durable attempt-key.</dd>
+    <dt>Teardown</dt><dd>The last queue check: a <code>Queue</code> message landing after the loop&rsquo;s final natural-end check but before the registry entry is torn down returns <strong>409 finished</strong> (kept as a browser draft) &mdash; closing the one gap where a message could read <code>sent</code> yet never deliver.</dd>
+    <dt>Terminal reconciliation</dt><dd>On <strong>any</strong> terminal cause (finish, Cancel, or the 30-minute fail) the in-memory queue dies with the registry. The client reconciles its <code>sent</code> ids (CAP-6) against the <code>message_id</code> on the operator rows actually written (AD-6); any <code>sent</code> id with <strong>no matching row</strong> is restored to the draft box as <strong>&ldquo;Never sent&rdquo;</strong>. This runs <strong>only on the node&rsquo;s terminal event</strong> (<code>node_completed</code>/<code>node_failed</code> &mdash; HITL/AD-7&rsquo;s refetch, sequenced after the last row write), <strong>never on a live refetch</strong> &mdash; a Cancel landing mid-flight could otherwise read rows before the final insert commits and mis-mark a delivered message, offering a duplicate resend.</dd>
+    <dt>Global order</dt><dd>The single global order is the registry&rsquo;s <strong>receipt order</strong> (server-side FIFO); AD-3&rsquo;s &ldquo;written order&rdquo; is per-operator. Two docks may steer one node: there is <strong>no per-node steering lock</strong> &mdash; concurrent operators interleave in receipt order, attributed by <code>operator_user_id</code> (AD-6), <strong>not serialized</strong>.</dd>
+    <dt>Refusal</dt><dd>The <strong>only</strong> refusal is a Send / Interrupt to a node <strong>no longer running</strong>: <code>node finished</code> &rarr; <strong>409</strong> (the draft stays in the browser); and <strong>no live handle in this process</strong> (detached &mdash; AD-5) &rarr; a clear &ldquo;not steerable here.&rdquo;</dd>
+  </dl>
+</div>
+
+<h2>Capability &rarr; Architecture map</h2>
+<table>
+  <thead><tr><th>Capability</th><th>Lives in</th><th>Governed by</th></tr></thead>
+  <tbody>
+    <tr><td><span class="cap-id">CAP-1</span> Compose to a running agent</td><td>composer dock (<code>web</code>), registry inbound queue (<code>workflows</code>)</td><td>AD-3, AD-5, AD-9</td></tr>
+    <tr><td><span class="cap-id">CAP-2</span> Interrupt the agent&rsquo;s thinking (node keeps running)</td><td>provider interrupt / stream-abort + executor keeps the node (<code>workflows</code>/<code>providers</code>)</td><td>AD-1, AD-2, AD-9, AD-11</td></tr>
+    <tr><td><span class="cap-id">CAP-3</span> Redirect and continue on the same session</td><td>executor per-node turn loop on the live session (<code>workflows</code>)</td><td>AD-1, AD-4, AD-6</td></tr>
+    <tr><td><span class="cap-id">CAP-4</span> The exchange is part of the record</td><td>operator row (<code>workflows</code> write, <code>web/lib</code> meaning)</td><td>AD-6, AD-7, AD-10, Track A/AD-1, Track A/AD-10</td></tr>
+    <tr><td><span class="cap-id">CAP-5</span> Mid-turn delivery where the provider allows</td><td>soft-inject on the live session (<code>workflows</code>/<code>providers</code>)</td><td>AD-3, AD-5, AD-7</td></tr>
+    <tr><td><span class="cap-id">CAP-6</span> Claim only what it knows</td><td>id echo + status chip (<code>providers</code>/<code>web</code>)</td><td>AD-8</td></tr>
+  </tbody>
+</table>
+
+<h2>Control states &mdash; the two dock controls</h2>
+<p>Both follow the agent&rsquo;s projected sub-state (AD-9), never a remembered mode. The transition is symmetric and automatic: the moment the agent generates again, <code>Send now</code> reverts to <code>Queue</code> and <code>Stop</code> returns.</p>
+<table>
+  <thead><tr><th>Agent sub-state (node stays <code>running</code>)</th><th>Stop</th><th>Send</th><th>What sending does</th></tr></thead>
+  <tbody>
+    <tr><td><strong>generating</strong></td><td><code>Stop</code></td><td><code>Queue</code></td><td>Holds the message; delivered as the next turn when the current turn ends naturally. The agent is untouched.</td></tr>
+    <tr><td><strong>interrupting</strong> <span class="tag assume">transient&dagger;</span></td><td><code>Stopping&hellip;</code> (<code>aria-disabled</code>)</td><td><code>Queue</code></td><td>The interrupt is in flight &mdash; now sub-second. Whether to show this at all is the product owner&rsquo;s call.</td></tr>
+    <tr><td><strong>idle-after-interrupt</strong></td><td>&mdash;</td><td><code>Send now</code></td><td>Delivers every queued message plus the one just typed, in written order, as the next turn on the same live session. The node never left <code>running</code>.</td></tr>
+    <tr><td><strong>finished</strong></td><td>&mdash;</td><td>&mdash;</td><td>Nothing. Field and both controls absent. The dock reduces to a read-only undelivered-draft box (header <code>Never sent</code>); with nothing undelivered there is no dock at all.</td></tr>
+  </tbody>
+</table>
+<p class="note">&dagger; <code>interrupting</code> is a brief UI transient, not one of AD-9&rsquo;s two projected sub-state values (<code>generating</code> | <code>idle-after-interrupt</code>). <code>control-states.md</code> flags whether to render it at all as an open product-owner call.</p>
+
+<h2>Deferred &amp; settled</h2>
+<table>
+  <thead><tr><th>Item</th><th>Why it can wait</th></tr></thead>
+  <tbody>
+    <tr><td>Steering a detached (<code>--detach</code>) run</td><td>AD-5: no live handle reachable across the process boundary. Revisit only if a provider offers a channel into a session it did not spawn (grok&rsquo;s leader socket is the one lead).</td></tr>
+    <tr><td>Surviving a server restart mid-steer</td><td>No durable steering state by design; the run resumes normally. A durable design was built and rejected as over-engineering.</td></tr>
+    <tr><td>CAP-6 <code>delivered</code> on claude</td><td>Needs SDK &ge; 0.3.246; unreachable at the pin 0.3.209. <code>sent</code> ships for all until the pin moves (AD-8).</td></tr>
+    <tr><td>The read-only transcript item kind for the operator row</td><td>Owned by <code>spec-readable-agent-transcript</code>&rsquo;s own update (AD-10).</td></tr>
+    <tr><td>Per-provider soft-inject beyond claude + omp</td><td>The interrupt-then-continue floor ships for all; soft-inject lands per transport &mdash; codex has no <code>turn()</code>/<code>steer()</code> in the TS SDK through npm latest <strong>0.154.0</strong> (app-server protocol only), so it stays stream-abort + <code>resumeThread</code>; grok needs a spike. (And claude&rsquo;s own soft-inject is spike-gated &mdash; AD-3.)</td></tr>
+    <tr><td>Cancel node</td><td><span class="no">Already exists</span> &mdash; the teardown / abort path is untouched by this feature; not in scope.</td></tr>
+    <tr><td>Deploy / env / infra</td><td>Rides the existing single-tenant install, SSE, additive schema; no new topology.</td></tr>
+  </tbody>
+</table>
+
+</div>
+<script>
+  (function(){
+    var r=document.documentElement,b=document.getElementById('tg');
+    try{var s=localStorage.getItem('steer-wt-theme');if(s)r.setAttribute('data-theme',s);}catch(e){}
+    b.addEventListener('click',function(){
+      var cur=r.getAttribute('data-theme');
+      var m=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var next=cur?(cur==='dark'?'light':'dark'):(m?'light':'dark');
+      r.setAttribute('data-theme',next);
+      try{localStorage.setItem('steer-wt-theme',next);}catch(e){}
+    });
+  })();
+</script>
+</body>
+</html>

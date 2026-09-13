@@ -1,20 +1,26 @@
 # Provider steering matrix
 
-How each of the five providers in use accepts a message into a running session, and what it costs to reach it. Every row is evidence, and the **Verified** column says what kind — the citations live in the three `plans/reports/` companions.
+How each of the five providers in use takes an operator's message into a **running session**, and how it lets us interrupt that session — both **without stopping the node**. Two operations, read on three axes:
 
-Support is a **declared capability that defaults to unsupported** (SPEC constraint). A provider absent from this table is incapable until a row is added for it.
+- **Interrupt the agent's generation (CAP-2)** — universal. Every provider can be interrupted: claude has a native keep-alive `interrupt()`, and every other provider gets a **stream-abort on the executor's `AbortController`** that ends the turn while the session/thread survives for a follow-up run. No provider is disqualified from interrupt.
+- **Soft-inject mid-turn (CAP-5)** — provider-gated. Some providers' open stream folds a message into the running turn with no interrupt; most do not, and the message is instead delivered as the next turn (`Queue`, the default). This is an _acceleration_, not a gate on whether the message arrives.
+- **Confirm delivery (CAP-6)** — claude-only, and only after an SDK bump.
+
+Every row is evidence, and the **Verified** column says what kind — the citations live in the three `plans/reports/` companions.
 
 ## The five
 
-| Provider     | Mechanism                                                                   | Delivery point                             | Verified                                                  | Cost to reach                                                                                       |
-| ------------ | --------------------------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| **omp**      | Native `steer` command in RPC mode                                          | Between tool calls                         | **Source** — its own repo and shipped docs                | **Lowest.** Switch `--mode json` to `--mode rpc`, keep stdin open, extend the existing event parser |
-| **claude**   | Streaming input + `interrupt()`                                             | Next boundary, or immediate                | **Vendor docs**                                           | SDK upgrade from the pinned version, and the prompt changes from a string to an async iterable      |
-| **codex**    | `turn/steer`, exposed as `TurnHandle.steer()`                               | Queued into the active turn                | **Documented for the Python SDK; unshown for TypeScript** | Unknown until the pinned types are read                                                             |
-| **grok**     | Hooks extension: block at `pre_tool_use`, carry the text in the stop signal | Next tool call                             | **Advertised, never exercised**                           | **Highest.** One-shot mode goes; an ACP client comes in                                             |
-| **deepseek** | None. Cancel-and-continue on the warm connection is the fallback            | Immediate, and it costs the in-flight call | **Measured**                                              | Moderate — stop closing the session and reaping the child; loop the turn driver                     |
+| Provider     | Interrupt (CAP-2)                                                              | Soft-inject mid-turn (CAP-5)                     | Confirms (CAP-6) | Verified                       |
+| ------------ | ------------------------------------------------------------------------------ | ------------------------------------------------ | ---------------- | ------------------------------ |
+| **omp**      | stream-abort (native check-between-tool-calls not exercised _as an interrupt_) | **yes** — native `steer` command in RPC mode     | no               | **Source** — its repo and docs |
+| **claude**   | native `interrupt()` (in the pinned SDK)                                       | **yes** — streaming input                        | **yes\***        | **Vendor docs + web-verified** |
+| **codex**    | stream-abort → re-run resumed thread (`resumeThread`)                          | no — `turn/steer` is app-server, not the TS SDK  | no               | **Web-verified (settled NO)**  |
+| **deepseek** | native cancel-and-continue (31 ms, partial retained)                           | no — a concurrent prompt is rejected in 2 ms     | no               | **Measured**                   |
+| **grok**     | stream-abort (`interject` unreachable to us)                                   | advertised hooks `pre_tool_use`, never exercised | no               | **Advertised + measured**      |
 
-**Read the table honestly: two rows are yes, one is no, two are unknown.** omp and claude accept a message into a live turn. deepseek cannot — a concurrent prompt is rejected in 2 ms. codex and grok both have a mechanism that exists and a reachability question nobody has answered from our side.
+**\*claude "Confirms" is a capability, not a fact at the pin** — the `user_message_uuid` echo needs `@anthropic-ai/claude-agent-sdk ≥ 0.3.246`; at the inherited **0.3.209** no provider echoes, so `sent` is today's ceiling for all.
+
+**Read the table by axis, not by a yes/no gate.** Interrupt is universal — every provider can end the current generation and keep the session alive; the mechanism differs (native primitive vs stream-abort). Soft-inject is the accelerator only claude and omp offer today. Delivery timing is otherwise the operator's `Queue`/`Send now` choice, not a provider limit. Only claude confirms arrival. None is excluded.
 
 ## Per-provider notes that change what gets built
 
@@ -28,46 +34,40 @@ Support is a **declared capability that defaults to unsupported** (SPEC constrai
 
 Two smaller notes: send `negotiate_protocol` with `protocolVersion: 2` immediately or stdout frames above 1 MiB are lossy, and the event stream carries **no steer-specific event** — so omp cannot confirm delivery either.
 
-### claude — the only one that can confirm delivery
+### claude — the only one that can confirm delivery, and native interrupt is in the pin
 
-`interrupt()` is documented as available **only in streaming input mode**, so the transport change and the interrupt capability arrive together.
+`interrupt()` is documented as available **only in streaming input mode**, so the soft-inject transport and the interrupt capability arrive together — and both are **already in the pinned 0.3.209** (interrupt ≥ 0.3.205, `AsyncIterable` input ≤ 0.3.142). So neither CAP-2's interrupt nor CAP-5's soft-inject needs an SDK upgrade.
 
-This is also the one provider that can satisfy CAP-6: a caller-set `uuid` on the user message is echoed back, on the result, on the turn's first reply, and on thinking frames. The docs state plainly that a string prompt — which is what Archon passes now — carries none, which is exactly why no delivery signal exists today. The pre-result echo requires a newer SDK than the one pinned.
+This is also the one provider that can satisfy CAP-6 — in principle, and only after an SDK bump: a caller-set `uuid` on the user message is echoed back, on the result, on the turn's first reply, and on thinking frames. A string prompt — what Archon passes now — carries none, which is why no delivery signal exists today. The CAP-6 `user_message_uuid` pre-result echo needs **≥ 0.3.246**, so "Confirms? yes" is a capability, **not a fact at the current pin**; `delivered` becomes reachable (claude-only) only once that bump lands. One unverified seam remains: whether streaming (`AsyncIterable`) input composes with the resume protocol for soft-inject, which was exercised only on a string prompt — a spike, not an assumption.
 
 One caution on wording taken from aion, which owns the raw stdin we would not: even with full frame control they never got _guaranteed_ mid-turn folding — a pure-text turn opens a follow-up turn after its result. The copy must not promise "immediate".
 
-### codex — the mechanism is real, the route to it is not established
+### codex — no soft-inject on the TypeScript SDK; interrupt is stream-abort then resume
 
-`turn/steer` is documented as a **soft injection** queued into the active turn's input, explicitly contrasted with a hard cancel, with a synchronous acknowledgement so a rejection is learned immediately.
+`turn/steer` is documented as a **soft injection** into the active turn — but as an **app-server protocol** method, not a TypeScript SDK affordance. Codex's `thread.turn(...)` → `TurnHandle.steer()` appears in the **Python** SDK reference only.
 
-The published docs carry it further than the aion report could. Codex's own SDK reference documents `thread.turn(...)` returning a `TurnHandle` with `steer(input)` and `interrupt()` alongside `stream()` and `run()` — so steering is a first-class SDK affordance, not only a wire method. That reference is the **Python** SDK's; the TypeScript README shows `run()` and `runStreamed()` and nothing else.
-
-Archon is on the TypeScript side: `@openai/codex-sdk` 0.144.5, calling `thread.runStreamed(prompt, turnOptions)` (`packages/providers/src/codex/provider.ts:1093`) — the one-shot form, with no handle to steer through. So the question is no longer "does codex support this" but "does the pinned TypeScript SDK expose `turn()`". Reading the installed types answers it in a minute; `node_modules` is blocked by a hook in this session. Until then codex is unknown rather than moderate-cost, and the aion report's "assume not" is now too pessimistic.
+Archon is on the TypeScript side: `@openai/codex-sdk` (a caret `^0.144.5`; the lockfile pins **0.144.5** and the caret has not floated — npm latest is 0.154.0), calling `thread.runStreamed(prompt, turnOptions)` (`packages/providers/src/codex/provider.ts:1093`) — the one-shot form. **Web-verified this session:** the shipped `.d.ts` at 0.144.5, at 0.153.4, and at latest 0.154.0 all expose only `run()`/`runStreamed()`; there is no `turn()`/`steer()`, and issue #12329 closes the request with "use app-server, not the SDK." So codex has **no soft-inject**: an operator message is delivered as the next turn (`Queue`). Its **interrupt** path is the universal one — a stream-abort ends the turn, then the executor re-runs on the resumed thread: `codex.resumeThread(sessionId)` (`packages/providers/src/codex/provider.ts:1006`, verified), which the adapter already calls, with a `startThread` fallback on resume failure.
 
 ### grok — not the method its own client uses
 
-`x.ai/interject` is **not reachable** by a third-party client. Over `grok agent stdio` it answers `-32601 Method not found`, identical to the answer given to a method invented as a control. Settled by handshake; no model call. This closes the `scoutcli` report's first unresolved question, which named exactly this risk.
+`x.ai/interject` is **not reachable** by a third-party client. Over `grok agent stdio` it answers `-32601 Method not found`, identical to the answer given to a method invented as a control. Settled by handshake; no model call. So grok's interrupt is the universal **stream-abort**, not a native primitive.
 
-The channel that remains is the hooks extension the handshake **does** advertise: blocking events include `pre_tool_use`, decisions include deny and block, and the stop signals include a field carrying additional context to the agent. Same delivery point as omp, different door — but advertised is not exercised, and the exact payload shape wants one spike.
+The channel that remains for soft-inject is the hooks extension the handshake **does** advertise: blocking events include `pre_tool_use`, decisions include deny and block, and the stop signals include a field carrying additional context to the agent. Same delivery point as omp, different door — but advertised is not exercised, and the exact payload shape wants one spike; until then grok is interrupt-then-continue only.
 
-A second door exists and is unexplored: the **leader socket** (`~/.grok/leader.sock`, `grok agent leader`, `--leader` — "multiple clients share one backend"). It is the only channel found anywhere in this research that reaches a session the caller did not spawn, which makes it the one lead worth keeping if steering must reach runs the server did not start.
+A second door exists and is unexplored: the **leader socket** (`~/.grok/leader.sock`, `grok agent leader`, `--leader` — "multiple clients share one backend"). It is the only channel found anywhere in this research that reaches a session the caller did not spawn, which makes it the one lead worth keeping if steering must reach runs the server did not start (the deferred detached case).
 
-### deepseek — no, and the fallback is a cancel
+### deepseek — interrupt is cheap; soft-inject is what it refuses
 
-A second prompt while one is in flight is **rejected in 2 ms** with `-32602 invalid params: a prompt is already in flight for this session` — measured, not inferred. No method in the protocol it speaks could carry a steer, and it advertises no extension for one.
+A second prompt while one is in flight is **rejected in 2 ms** with `-32602 invalid params: a prompt is already in flight for this session` — measured, not inferred. That rejection is a **transport fact, not a contract incapacity**: deepseek will not accept a _concurrent_ prompt (no soft-inject), but the operator's message still reaches the agent as the next turn (`Queue`). And interrupting is cheap: deepseek **cancel-and-continues on the warm connection — measured 31 ms, partial output retained** — which is exactly CAP-2's interrupt (end the turn, session alive). So on deepseek the operator interrupts to cut wrong work immediately (CAP-2), then sends the redirect; `Queue` is the non-interrupting alternative when they are content to let the turn finish.
 
-What it can do is cancel-and-continue on the **same open connection**: measured at **31 ms** end to end, with the cancelled turn's partial output **retained** rather than discarded — the agent does not lose what it was doing. The comparison that decides the design: the first turn spends roughly **3.6 seconds** assembling context before any model call, so a cold stop-and-resume pays that again every single time the operator speaks. Keeping the connection warm requires not closing the session and not reaping the child, both of which the code does unconditionally today.
-
-Call it what it is. The report's own closing line is the one to quote in any UI copy: if the promise is "your message reaches the agent without losing its work", deepseek honours it; if the promise is "without interrupting it", it cannot.
-
-Its own agent runtime does have a real steering inbox with two queues, message ids, and three lifecycle notifications; it simply is not exposed on the protocol we speak. The ceiling is a bridge gap, not an architectural absence — and the protocol sanctions `_`-prefixed extensions, so raising it upstream is a small, legitimate ask rather than a violation. File it; do not schedule around it.
+(deepseek's own runtime has a real steering inbox not exposed on the protocol we speak; that ceiling is a bridge gap, a legitimate upstream ask, not something to schedule around.)
 
 ## The convergence worth designing around
 
-Three mechanisms deliver at the **same point** — the next tool-call boundary. omp checks for steering between tool calls, grok blocks at `pre_tool_use`, and claude's hook contract has the same shape. That is not coincidence; it is the natural rest point of an agent loop.
+Three soft-inject mechanisms deliver at the **same point** — the next tool-call boundary. omp checks for steering between tool calls, grok blocks at `pre_tool_use`, and claude's hook contract has the same shape. That is not coincidence; it is the natural rest point of an agent loop.
 
-So the seam should take **"deliver at the next boundary"** as its default meaning, with immediate interrupt as the special case. Modelling it the other way round — interrupt first, boundary delivery as a degraded mode — inverts the common case into the exception.
+So the seam takes **"deliver at the next boundary"** as its default meaning (`Queue`), with mid-turn soft-inject as the acceleration and interrupt-then-deliver as the operator's immediate option. Modelling it the other way round — interrupt first, boundary delivery as a degraded mode — inverts the common case into the exception.
 
-## What a steer must carry
+## Correlating a soft-inject to its turn
 
-Borrowed from aion's `expectedTurnId`, which exists to make a stale steer fail loudly instead of landing in the wrong place: a steer carries the **node id and the retry epoch** it was written against. An attempt that has since been superseded rejects it rather than delivering it to a different run of the same node.
+There is **no durable attempt-key** in this model. A soft-inject targets the live turn through the registry's **in-memory turn id** (aion's `active_turn_id` / `expectedTurnId`), held on the live handle only while the node runs in-process. If the target turn has already ended when the message lands, it **folds into the node's next turn** (aion's `TurnEnded` pattern) — it is not rejected. The only refusal is a message to a node that is **no longer running** (`node finished` → 409, the draft stays in the browser), or to a node with no live handle in this process (detached → "not steerable here"). Correlation for the `delivered` chip (CAP-6) is by the caller-stamped id, never text or timestamp.
