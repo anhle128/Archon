@@ -13,6 +13,8 @@ companions:
   - ../../project-context.md
 ---
 
+> **⛔ SUPERSEDED — do not build from this spec.** Merged into `../spec-agent-node-room/` (the **write** half; its `CAP-1…CAP-6` here become **CAP-8…CAP-13** there, add 7). That unified spec is the live contract; this folder is retained only as a merge `source:` for audit. Read `../spec-agent-node-room/SPEC.md`.
+
 > **Canonical contract.** This SPEC and the files in `companions:` are the complete contract for what to build. The three `plans/reports/` companions are required reading, not background: they carry the `file:line` citations and the measured numbers every constraint below was derived from. `provider-steering-matrix.md` holds the per-provider mechanisms; `engine-integration.md` holds everything between the browser and the provider seam; `control-states.md` holds the control state machine; `ARCHITECTURE-SPINE.md` is the invariant contract (AD-1..AD-11) this SPEC is built against; the two UX spines are the finished visual and behavioural contract for the one surface this feature touches — `DESIGN.md` for how the dock looks, `EXPERIENCE.md` for how it behaves, both `status: final` and both shared with `spec-readable-agent-transcript`.
 
 # Live Agent Steering

@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap">
+<style>
+/* Surface tokens, ported verbatim from packages/web/src/experiments/console/theme.css.
+   Declared here (not inline) because DESIGN.md's binding constraint is that the transcript
+   never states a colour that is not already a variable on the surface it sits in. */
+:root{
+  --surface:oklch(0.175 0.007 265); --surface-inset:oklch(0.13 0.006 265); --surface-elevated:oklch(0.205 0.009 265);
+  --surface-hover:oklch(0.225 0.01 265); --surface-bright:oklch(0.275 0.012 265);
+  --border:oklch(0.275 0.012 265); --border-bright:oklch(0.355 0.016 265);
+  --text-primary:oklch(0.975 0.004 265); --text-secondary:oklch(0.745 0.014 265); --text-tertiary:oklch(0.56 0.017 265);
+  --brand-magenta:oklch(0.64 0.295 330); --brand-teal:oklch(0.755 0.165 168);
+  --accent:oklch(0.64 0.295 330); --accent-bright:oklch(0.64 0.295 330); --accent-soft:oklch(0.64 0.295 330 / 0.14);
+  --running:oklch(0.72 0.155 245); --success:oklch(0.755 0.165 168); --warning:oklch(0.8 0.14 85); --error:oklch(0.68 0.215 18);
+  --node-command:oklch(0.62 0.18 250); --node-prompt:oklch(0.58 0.19 290); --node-bash:oklch(0.75 0.15 75); --node-approval:oklch(0.72 0.17 40);
+  --font-sans:'Geist','Inter',ui-sans-serif,system-ui,sans-serif;
+  --font-mono:'Geist Mono','JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+body{margin:0;background:oklch(0.11 0.005 265);color:var(--text-primary);font-family:var(--font-sans)}
+*{box-sizing:border-box}
+summary{list-style:none}
+summary::-webkit-details-marker{display:none}
+details[open]>summary .chev{transform:rotate(90deg)}
+a{color:var(--accent-bright)}
+a:hover{color:oklch(0.72 0.26 335)}
+</style>
+</helmet>
+
+<div style="padding:24px;font-size:13px">
+
+  <div style="width:1280px;margin:0 auto 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin-right:4px">agent sub-state</span>
+    <sc-for list="{{ stateTabs }}" as="tab" hint-placeholder-count="8">
+      <button type="button" onClick="{{ tab.pick }}" style="{{ tab.style }}" style-hover="border-color:var(--border-bright)">{{ tab.label }}</button>
+    </sc-for>
+    <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin:0 4px 0 14px">node</span>
+    <sc-for list="{{ kindTabs }}" as="tab" hint-placeholder-count="2">
+      <button type="button" onClick="{{ tab.pick }}" style="{{ tab.style }}" style-hover="border-color:var(--border-bright)">{{ tab.label }}</button>
+    </sc-for>
+    <span style="font-family:var(--font-mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin:0 4px 0 14px">transport</span>
+    <button type="button" onClick="{{ onToggleSoftInject }}" style="{{ softInjectStyle }}" style-hover="border-color:var(--border-bright)">{{ softInjectLabel }}</button>
+  </div>
+
+  <div style="width:1280px;height:820px;margin:0 auto;border:1px solid var(--border-bright);border-radius:12px;overflow:hidden;background:var(--surface);box-shadow:0 30px 80px oklch(0 0 0 / .5)">
+    <div style="height:34px;display:flex;align-items:center;gap:8px;padding:0 14px;background:var(--surface-elevated);border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text-tertiary)">
+      <i style="width:10px;height:10px;border-radius:50%;background:var(--border-bright);display:inline-block"></i>
+      <i style="width:10px;height:10px;border-radius:50%;background:var(--border-bright);display:inline-block"></i>
+      <i style="width:10px;height:10px;border-radius:50%;background:var(--border-bright);display:inline-block"></i>
+      <span style="margin-left:12px;font-family:var(--font-mono);background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;padding:3px 10px;color:var(--text-secondary)">minis-mac-mini.taildae6a9.ts.net:3090/console/p/archon/r/run_d9556522f45a?node=implement</span>
+    </div>
+
+    <div style="display:flex;flex-direction:column;height:786px">
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 14px;font-size:11px;color:var(--text-tertiary);border-bottom:1px solid var(--border);background:var(--surface-inset)">
+        <span style="font-weight:800;letter-spacing:.12em;background:linear-gradient(135deg,var(--brand-magenta),oklch(0.56 0.215 305),var(--brand-teal));-webkit-background-clip:text;background-clip:text;color:transparent">CONSOLE</span>
+        <span>›</span><span>PROJECTS</span><span>›</span>
+        <span style="color:var(--text-secondary);font-family:var(--font-mono)">x10.gigo.harness-service</span>
+      </div>
+
+      <header style="display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--border)">
+        <span style="font-weight:700;font-size:14px;font-family:var(--font-mono)">speckit-ralph-native-feature</span>
+        <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;border-radius:999px;padding:3px 10px;border:1px solid oklch(0.72 0.155 245 / .4);color:var(--running)">
+          <span style="width:7px;height:7px;border-radius:50%;background:var(--running)"></span>Running
+        </span>
+        <div style="display:flex;gap:6px">
+          <span style="font-size:10.5px;color:var(--text-secondary);background:var(--surface-elevated);border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-family:var(--font-mono)">oceanlabs-holding/x10.gigo.harness-service</span>
+          <span style="font-size:10.5px;color:var(--text-secondary);background:var(--surface-elevated);border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-family:var(--font-mono)">attach-first-writer</span>
+          <span style="font-size:10.5px;color:var(--text-secondary);background:var(--surface-elevated);border:1px solid var(--border);border-radius:999px;padding:2px 8px;font-family:var(--font-mono)">codex · gpt-5.5 · xhigh</span>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:10px;align-items:center;font-size:11.5px;color:var(--text-tertiary)">
+          <span style="font-family:var(--font-mono)"><b style="color:var(--text-primary)">14:07</b></span>
+          <span style="font-family:var(--font-mono)"><b style="color:var(--text-primary)">6</b> runs</span>
+          <button type="button" style="background:var(--surface-elevated);border:1px solid var(--border);color:var(--text-primary);font-size:12px;border-radius:0.625rem;padding:6px 12px;font-family:var(--font-sans)" style-hover="border-color:var(--border-bright)">Cancel</button>
+        </div>
+      </header>
+
+      <div style="display:flex;align-items:center;gap:18px;padding:6px 14px;border-bottom:1px solid var(--border);font-size:12px">
+        <div style="display:flex;gap:2px;background:var(--surface-inset);border:1px solid var(--border);border-radius:8px;padding:2px">
+          <button type="button" style="border:none;background:var(--surface-elevated);color:var(--text-primary);font-size:12px;padding:4px 12px;border-radius:6px;font-family:var(--font-sans)">Log</button>
+          <button type="button" style="border:none;background:transparent;color:var(--text-tertiary);font-size:12px;padding:4px 12px;border-radius:6px;font-family:var(--font-sans)">Graph</button>
+          <button type="button" style="border:none;background:transparent;color:var(--text-tertiary);font-size:12px;padding:4px 12px;border-radius:6px;font-family:var(--font-sans)">Artifacts 2</button>
+        </div>
+        <div style="display:flex;gap:12px;color:var(--text-secondary);font-size:11.5px">
+          <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" checked="checked" /> Tool calls</label>
+          <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" checked="checked" /> System</label>
+        </div>
+      </div>
+
+      <main style="flex:1;display:flex;min-height:0">
+        <div style="flex:1;min-width:0;overflow:hidden;padding:12px 14px;opacity:.55">
+          <div style="border:1px solid var(--border);border-radius:0.625rem;padding:8px 10px;margin-bottom:8px;font-size:12px;background:var(--surface)">
+            <div style="display:flex;gap:8px;align-items:center;font-family:var(--font-mono);font-size:12px">
+              <span style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:1px 6px;border-radius:4px;border:1px solid var(--border);color:var(--node-command)">command</span>speckit-specify
+              <span style="margin-left:auto;font-size:10.5px;color:var(--success)">completed · 1m 12s</span>
+            </div>
+            <div style="color:var(--text-tertiary);font-size:11.5px;margin-top:4px">Wrote specs/014-attach-first-writer/spec.md</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:0.625rem;padding:8px 10px;margin-bottom:8px;font-size:12px;background:var(--surface)">
+            <div style="display:flex;gap:8px;align-items:center;font-family:var(--font-mono);font-size:12px">
+              <span style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:1px 6px;border-radius:4px;border:1px solid var(--border);color:var(--node-command)">command</span>speckit-plan
+              <span style="margin-left:auto;font-size:10.5px;color:var(--success)">completed · 3m 40s</span>
+            </div>
+            <div style="color:var(--text-tertiary);font-size:11.5px;margin-top:4px">plan.md · research.md · data-model.md</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:0.625rem;padding:8px 10px;margin-bottom:8px;font-size:12px;background:var(--surface)">
+            <div style="display:flex;gap:8px;align-items:center;font-family:var(--font-mono);font-size:12px">
+              <span style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:1px 6px;border-radius:4px;border:1px solid var(--border);color:var(--node-bash)">bash</span>ralph-prepare
+              <span style="margin-left:auto;font-size:10.5px;color:var(--success)">completed · 4s</span>
+            </div>
+            <div style="color:var(--text-tertiary);font-size:11.5px;margin-top:4px">$ .specify/extensions/ralph/prepare.sh 014</div>
+          </div>
+          <sc-for list="{{ logRows }}" as="lrow" hint-placeholder-count="1">
+            <div style="border-radius:0.625rem;padding:8px 10px;margin-bottom:8px;font-size:12px;background:var(--surface);{{ lrow.boxStyle }}">
+              <div style="display:flex;gap:8px;align-items:center;font-family:var(--font-mono);font-size:12px">
+                <span style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:1px 6px;border-radius:4px;border:1px solid var(--border);{{ lrow.pillStyle }}">{{ lrow.kind }}</span>
+                <button type="button" onClick="{{ lrow.pick }}" style="background:transparent;border:none;padding:0;color:inherit;font:inherit;cursor:pointer" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">{{ lrow.name }}</button>
+                <span style="margin-left:auto;font-size:10.5px;{{ lrow.statusStyle }}">{{ lrow.status }}</span>
+              </div>
+              <sc-if value="{{ lrow.line }}" hint-placeholder-val="{{ true }}">
+                <div style="color:var(--text-tertiary);font-size:11.5px;margin-top:4px">{{ lrow.line }}</div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+
+        <aside style="width:520px;flex-shrink:0;display:flex;flex-direction:column;min-height:0;background:var(--surface);border-left:1px solid var(--border)">
+          <div style="padding:12px 14px 10px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:1px 6px;border-radius:4px;border:1px solid var(--border);color:var(--node-prompt)">prompt</span>
+              <span style="font-family:var(--font-mono);font-size:13px;font-weight:700">implement</span>
+              <span style="font-size:10px;font-weight:700;border-radius:999px;padding:2px 8px;border:1px solid;{{ pillStyle }}">{{ pillLabel }}</span>
+              <button type="button" style="margin-left:auto;border:none;background:transparent;color:var(--text-tertiary);font-size:13px;padding:4px 7px">✕</button>
+            </div>
+            <div style="font-size:11px;color:var(--text-tertiary)">{{ headerMeta }}</div>
+            <sc-if value="{{ isLoop }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span style="font-size:12px;color:var(--text-secondary);flex-shrink:0">{{ executionLabel }}</span>
+                <select aria-label="Execution" value="{{ execValue }}" onChange="{{ onPickExec }}" style="min-width:0;max-width:10rem;flex:0 1 10rem;border-radius:4px;border:1px solid var(--border);background:var(--surface-elevated);padding:2px 8px;font-size:12px;font-family:var(--font-sans);color:var(--text-primary)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">
+                  <sc-for list="{{ execOptions }}" as="opt" hint-placeholder-count="3">
+                    <option value="{{ opt.value }}">{{ opt.label }}</option>
+                  </sc-for>
+                </select>
+                <span style="font-size:11px;color:var(--text-secondary)">{{ execCountLabel }}</span>
+              </div>
+            </sc-if>
+          </div>
+
+          <div style="flex:1;overflow-y:auto;padding:10px 12px;min-height:0;font-family:var(--font-mono);font-size:12px">
+
+            <div style="display:flex;align-items:center;gap:8px;margin:10px 0 5px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary)" style-after="content:'';flex:1;height:1px;background:var(--border)">Run 1</div>
+            <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-secondary);margin:6px 2px 8px">
+              <span style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:2px">assistant</span>Reading the spec and the retry worker before touching anything.
+            </div>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span title="file · read_file" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-command);border:1px solid color-mix(in oklch, var(--node-command) 40%, transparent)">read_file</span><span style="flex:1 1 auto;min-width:0;display:flex;overflow:hidden"><span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)">specs/014-attach-first-writer/</span><span style="flex:0 0 auto">spec.md</span></span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">212 lines · 38ms</span></summary></details>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span title="file · read_file" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-command);border:1px solid color-mix(in oklch, var(--node-command) 40%, transparent)">read_file</span><span style="flex:1 1 auto;min-width:0;display:flex;overflow:hidden"><span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)">crates/gigo-harness-worker/src/</span><span style="flex:0 0 auto">auto_retry.rs</span></span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">418 lines · 41ms</span></summary></details>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-prompt);border:1px solid color-mix(in oklch, var(--node-prompt) 45%, transparent)">grep</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">"fn retry_backoff" in crates/</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">4 matches</span></summary></details>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span title="glob" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-prompt);border:1px solid color-mix(in oklch, var(--node-prompt) 45%, transparent)">glob</span><span style="flex:1 1 auto;min-width:0;display:flex;overflow:hidden"><span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)">crates/gigo-harness-worker/tests/</span><span style="flex:0 0 auto">**/*.rs</span></span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">5 files</span></summary></details>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span title="todo" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-approval);border:1px solid color-mix(in oklch, var(--node-approval) 40%, transparent)">todo</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)">todo updated</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">op: init</span></summary></details>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span title="task" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-approval);border:1px solid color-mix(in oklch, var(--node-approval) 40%, transparent)">task</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Scout retry call sites and CI config</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">2 subagents · 2m 04s</span></summary></details>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-command);border:1px solid color-mix(in oklch, var(--node-command) 40%, transparent)">search_replace</span><span style="flex:1 1 auto;min-width:0;display:flex;overflow:hidden"><span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)">crates/gigo-harness-worker/src/</span><span style="flex:0 0 auto">auto_retry.rs</span></span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap"><span style="color:var(--success)">+14</span> <span style="color:var(--error)">−3</span></span></summary></details>
+
+            <details open="open"><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--error)">✕</span><span title="shell · run_terminal_command" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-bash);border:1px solid color-mix(in oklch, var(--node-bash) 40%, transparent)">run_terminal_command</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">cargo test -p gigo-harness-worker --test auto_retry rm02_4_2_tdd_us1_001 -- --exact</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap"><span style="color:var(--error)">exit 101</span> · 41.2s</span></summary>
+              <div style="margin:2px 0 8px 29px;border-left:2px solid var(--border);padding-left:10px">
+                <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--text-secondary);margin-bottom:6px">shell · exit 101 · 41.2s<button type="button" style="margin-left:auto;min-height:24px;display:inline-flex;align-items:center;background:transparent;border:1px solid var(--border);color:var(--text-secondary);border-radius:4px;padding:1px 7px;font-family:var(--font-mono);font-size:10.5px" style-hover="color:var(--text-primary);border-color:var(--border-bright)">Raw</button></div>
+                <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;font-size:11.5px;line-height:1.5"><span style="color:var(--node-bash)">$</span> cargo test -p gigo-harness-worker --test auto_retry rm02_4_2_tdd_us1_001 -- --exact --test-threads=1
+test rm02_4_2_tdd_us1_001 ... <span style="color:var(--error);font-weight:700">FAILED</span>
+thread 'rm02_4_2_tdd_us1_001' panicked at tests/auto_retry.rs:88:5:
+assertion `left == right` failed
+  left: 31
+ right: 30</div>
+              </div>
+            </details>
+
+            <div style="display:flex;align-items:center;gap:8px;margin:10px 0 5px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary)" style-after="content:'';flex:1;height:1px;background:var(--border)">Run 2 · retry</div>
+            <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-secondary);margin:6px 2px 8px">
+              <span style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:2px">assistant</span>The backoff cap is off by one — <code style="font-family:var(--font-mono);font-size:11px">min(31)</code> then <code style="font-family:var(--font-mono);font-size:11px">+1</code>. Fixing and re-running only the failing case.
+            </div>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span title="file · edit" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-command);border:1px solid color-mix(in oklch, var(--node-command) 40%, transparent)">edit</span><span style="flex:1 1 auto;min-width:0;display:flex;overflow:hidden"><span style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)">crates/gigo-harness-worker/src/</span><span style="flex:0 0 auto">auto_retry.rs</span></span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap"><span style="color:var(--success)">+2</span> <span style="color:var(--error)">−2</span></span></summary></details>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span title="shell · run_terminal_command" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-bash);border:1px solid color-mix(in oklch, var(--node-bash) 40%, transparent)">run_terminal_command</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">cargo test -p gigo-harness-worker --test auto_retry rm02_4_2_tdd_us1_001 -- --exact</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">exit 0 · 38.9s</span></summary></details>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span title="code · eval" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-bash);border:1px solid color-mix(in oklch, var(--node-bash) 40%, transparent)">eval</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">for n in 0..=8 { assert!(backoff(n) &lt;= Duration::from_secs(30)) }</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">rust · 12ms</span></summary></details>
+
+            <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--success)">✓</span><span title="todo" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-approval);border:1px solid color-mix(in oklch, var(--node-approval) 40%, transparent)">todo</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary)">todo updated</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">op: check</span></summary></details>
+
+            <sc-if value="{{ agentRunning }}" hint-placeholder-val="{{ true }}">
+              <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--running)">◐</span><span title="shell · run_terminal_command" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-bash);border:1px solid color-mix(in oklch, var(--node-bash) 40%, transparent)">run_terminal_command</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">CARGO_BUILD_JOBS=1 cargo test -p gigo-harness-worker --test auto_retry</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap"><span style="color:var(--running)">running</span> · 1m 48s</span></summary></details>
+            </sc-if>
+
+            <sc-if value="{{ showInterruptedRow }}" hint-placeholder-val="{{ false }}">
+              <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;color:var(--warning)">⚠</span><span title="shell · run_terminal_command" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-bash);border:1px solid color-mix(in oklch, var(--node-bash) 40%, transparent)">run_terminal_command</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">CARGO_BUILD_JOBS=1 cargo test -p gigo-harness-worker --test auto_retry</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">interrupted</span></summary></details>
+            </sc-if>
+
+            <sc-if value="{{ showOperatorExchange }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);display:flex;align-items:center;gap:8px;margin:10px 2px 3px">operator · kevin<span style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;color:var(--text-secondary)">sent</span></div>
+              <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-primary);margin:0 2px 6px">wrong suite — use -p archon-workflows</div>
+              <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);display:flex;align-items:center;gap:8px;margin:10px 2px 3px">operator · kevin<span style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;color:var(--text-secondary)">sent</span></div>
+              <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-primary);margin:0 2px 6px">and skip the doctests</div>
+            </sc-if>
+
+            <sc-if value="{{ showRedirectTail }}" hint-placeholder-val="{{ false }}">
+              <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-secondary);margin:6px 2px 8px">
+                <span style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:2px">assistant</span>Understood — switching to the workspace-scoped crate and dropping doctests from the run.
+              </div>
+              <details><summary style="display:flex;align-items:baseline;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px"><span class="chev" style="color:var(--text-tertiary);flex:0 0 9px;font-size:10px;display:inline-block;transition:transform .12s">▶</span><span style="flex:0 0 12px;text-align:center;font-weight:700;{{ tailGlyphStyle }}">{{ tailGlyph }}</span><span title="shell · run_terminal_command" style="flex:0 0 auto;font-size:11px;padding:1px 7px;border-radius:4px;background:var(--surface-elevated);max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--node-bash);border:1px solid color-mix(in oklch, var(--node-bash) 40%, transparent)">run_terminal_command</span><span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">cargo test -p archon-workflows --lib</span><span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);white-space:nowrap">{{ tailBadge }}</span></summary></details>
+            </sc-if>
+
+          </div>
+
+          <sc-if value="{{ showTodoStrip }}" hint-placeholder-val="{{ true }}">
+            <div style="flex-shrink:0;border-top:1px solid var(--border);background:var(--surface-elevated)">
+              <button type="button" onClick="{{ onToggleTodo }}" aria-expanded="{{ todoOpen }}" style="display:flex;align-items:center;gap:8px;width:100%;padding:6px 10px;background:transparent;border:none;font:inherit;color:inherit;cursor:pointer;text-align:left" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:-2px">
+                <span style="flex:0 0 auto;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary)">todo</span>
+                <span style="flex:1 1 auto;min-width:0;display:flex;align-items:baseline;gap:7px;font-family:var(--font-mono);font-size:11.5px">
+                  <span style="flex:0 0 auto;font-weight:700;{{ todoNowGlyphStyle }}">{{ todoNowGlyph }}</span>
+                  <span style="flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary)">{{ todoNow }}</span>
+                </span>
+                <span style="flex:0 0 66px;display:flex;gap:2px;align-items:center">
+                  <sc-for list="{{ todoMeter }}" as="m" hint-placeholder-count="6">
+                    <span style="flex:1 1 auto;height:3px;{{ m.style }}"></span>
+                  </sc-for>
+                </span>
+                <span style="flex:0 0 auto;font-family:var(--font-mono);font-size:10px;color:var(--text-secondary);white-space:nowrap">{{ todoCount }}</span>
+                <span style="flex:0 0 9px;font-size:9px;color:var(--text-tertiary);{{ todoChevStyle }}">▾</span>
+              </button>
+              <sc-if value="{{ todoOpen }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:4px 10px 8px;max-height:168px;overflow-y:auto;border-top:1px solid var(--border)">
+                  <sc-for list="{{ todoItems }}" as="t" hint-placeholder-count="8">
+                    <div style="{{ t.rowStyle }}"><span style="{{ t.glyphStyle }}">{{ t.glyph }}</span><span style="{{ t.textStyle }}">{{ t.text }}</span><span style="color:var(--text-secondary)">{{ t.suffix }}</span></div>
+                  </sc-for>
+                  <div style="display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--text-secondary);margin-top:8px">{{ todoBar }}<button type="button" style="margin-left:auto;min-height:24px;display:inline-flex;align-items:center;background:transparent;border:1px solid var(--border);color:var(--text-secondary);border-radius:4px;padding:1px 7px;font-family:var(--font-mono);font-size:10.5px" style-hover="color:var(--text-primary);border-color:var(--border-bright)">Raw</button></div>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ showDraft }}" hint-placeholder-val="{{ true }}">
+            <div style="flex-shrink:0;border-top:1px solid var(--border);background:var(--surface-elevated)">
+                  <button type="button" onClick="{{ onToggleDraft }}" aria-expanded="{{ draftOpen }}" style="display:flex;align-items:center;gap:8px;width:100%;padding:6px 10px;background:transparent;border:none;font:inherit;color:inherit;cursor:pointer;text-align:left" style-hover="background:var(--surface-hover)" style-focus="outline:2px solid var(--accent-bright);outline-offset:-2px">
+                    <span style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary)">{{ draftHeaderWord }}</span>
+                    <span style="font-family:var(--font-mono);font-size:10px;color:var(--text-secondary)">{{ draftCount }}</span>
+                    <sc-if value="{{ showTabOnly }}" hint-placeholder-val="{{ true }}">
+                      <span style="margin-left:auto;font-size:10px;color:var(--text-secondary)">this tab only</span>
+                    </sc-if>
+                    <span style="flex:0 0 9px;font-size:9px;color:var(--text-tertiary);{{ draftMarginStyle }}{{ draftChevStyle }}">▾</span>
+                  </button>
+                  <sc-if value="{{ draftOpen }}" hint-placeholder-val="{{ true }}">
+                  <div style="padding:4px 10px 8px;max-height:168px;overflow-y:auto;border-top:1px solid var(--border)">
+                  <sc-for list="{{ draftItems }}" as="item" hint-placeholder-count="2">
+                    <div style="display:flex;gap:8px;align-items:baseline;line-height:1.75;padding:1px 4px 1px 2px;border-radius:4px;{{ item.rowStyle }}" style-hover="background:var(--surface-hover)">
+                      <span style="flex:0 0 12px;text-align:center;font-family:var(--font-mono);font-size:10px;color:var(--text-secondary)">{{ item.ord }}</span>
+                      <span style="{{ item.textStyle }}">{{ item.text }}</span>
+                      <sc-if value="{{ item.canSendNow }}" hint-placeholder-val="{{ false }}">
+                        <button type="button" aria-label="{{ item.sendLabel }}" onClick="{{ item.sendNow }}" style="flex:0 0 auto;min-height:24px;display:inline-flex;align-items:center;padding:1px 7px;border-radius:4px;background:transparent;border:1px solid var(--border);font-family:var(--font-sans);font-size:10.5px;color:var(--text-secondary);cursor:pointer;white-space:nowrap" style-hover="color:var(--text-primary);border-color:var(--border-bright)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">Send now</button>
+                      </sc-if>
+                      <sc-if value="{{ item.canDelete }}" hint-placeholder-val="{{ true }}">
+                        <button type="button" aria-label="{{ item.deleteLabel }}" onClick="{{ item.remove }}" style="flex:0 0 24px;min-height:24px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;background:transparent;border:none;font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);cursor:pointer" style-hover="color:var(--text-primary)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">✕</button>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                  </div>
+                  </sc-if>
+                </div>
+          </sc-if>
+
+          <sc-if value="{{ viewingStale }}" hint-placeholder-val="{{ false }}">
+            <div style="border-top:1px solid var(--border);background:var(--surface-elevated);padding:8px 10px;display:flex;align-items:center;gap:8px">
+              <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary);line-height:1.45">reading a finished iteration · the agent is working in {{ liveLabel }}</span>
+              <button type="button" onClick="{{ onGoLive }}" style="margin-left:auto;flex-shrink:0;font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;border:1px solid var(--border-bright);color:var(--text-primary);font-family:var(--font-sans)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">Go to {{ liveLabel }}</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{ showDock }}" hint-placeholder-val="{{ true }}">
+            <div style="border-top:1px solid var(--border);background:var(--surface-elevated);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+              <sc-if value="{{ disclosure }}" hint-placeholder-val="{{ false }}">
+                <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary);line-height:1.45">{{ disclosure }}</div>
+              </sc-if>
+              <sc-if value="{{ showField }}" hint-placeholder-val="{{ true }}">
+                <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;min-height:56px;padding:7px 9px;font-family:var(--font-sans);font-size:12.5px;line-height:1.5;color:var(--text-secondary)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px" contentEditable="{{ true }}" suppressContentEditableWarning="{{ true }}">Message the agent…</div>
+              </sc-if>
+              <sc-if value="{{ showControls }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;align-items:center">
+                  <sc-if value="{{ showStop }}" hint-placeholder-val="{{ true }}">
+                    <button type="button" onClick="{{ onStop }}" aria-disabled="{{ stopBusy }}" style="font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;font-family:var(--font-sans);{{ stopStyle }}" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">{{ stopLabel }}</button>
+                  </sc-if>
+                  <button type="button" onClick="{{ onSend }}" style="margin-left:auto;min-width:84px;font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;border:1px solid var(--border-bright);color:var(--text-primary);font-family:var(--font-sans)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">{{ sendLabel }}</button>
+                </div>
+              </sc-if>
+            </div>
+          </sc-if>
+        </aside>
+      </main>
+    </div>
+  </div>
+
+  <p style="width:1280px;margin:14px auto 0;font-size:11.5px;line-height:1.55;color:var(--text-secondary);max-width:1280px;text-wrap:pretty">{{ stateNote }}</p>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1340,&quot;height&quot;:980}}">
+const STATES = {
+  generating: {
+    label: '1 · generating',
+    selected: 'running · 14m 07s · run 2', selectedColor: 'var(--running)',
+    selectedLine: '19 tool calls · 1 failed · retry after exit 101',
+    pill: 'Running', pillColor: 'var(--running)', pillBorder: 'oklch(0.72 0.155 245 / .4)',
+    headerMeta: 'started 04:52 · running… · run 2 of 2 · omp · claude-opus-5',
+    agentRunning: true,
+    draft: ['wrong suite — use -p archon-workflows', 'and skip the doctests'],
+    draftHeader: 'Queued · 2', tabOnly: true,
+    field: true, controls: true, stop: true, stopLabel: 'Stop', send: 'Queue',
+    note: 'Composer is mounted and enabled while the agent works. Queue holds the message — no row changes, no tool call is interrupted, nothing is lost. Stop interrupts the agent\u2019s current turn; it does not stop the node. Stopping the whole node stays the separate Cancel button in the run header.'
+  },
+  interrupting: {
+    label: '2 · interrupting',
+    selected: 'running · 14m 21s · run 2', selectedColor: 'var(--running)',
+    selectedLine: '20 tool calls · 1 failed · interrupt in flight',
+    pill: 'Running', pillColor: 'var(--running)', pillBorder: 'oklch(0.72 0.155 245 / .4)',
+    headerMeta: 'started 04:52 · running… · run 2 of 2 · omp · claude-opus-5',
+    agentRunning: true,
+    draft: ['wrong suite — use -p archon-workflows', 'and skip the doctests'],
+    draftHeader: 'Queued · 2', tabOnly: true,
+    field: true, controls: true, stop: true, stopLabel: 'Stopping…', stopBusy: true, send: 'Queue',
+    note: 'A brief UI-local transient, not a node state. The interrupt is a provider primitive or stream-abort in-process — sub-second, not a status poll. Send still reads Queue because the node is still running. Stopping… is aria-disabled, never the disabled attribute, and dims no further than text-secondary.'
+  },
+  idle: {
+    label: '3 · idle after interrupt',
+    selected: 'running · waiting on operator', selectedColor: 'var(--running)',
+    selectedLine: '20 tool calls · 1 interrupted · awaiting redirect',
+    pill: 'Running', pillColor: 'var(--running)', pillBorder: 'oklch(0.72 0.155 245 / .4)',
+    headerMeta: 'started 04:52 · running… · waiting on operator · omp · claude-opus-5',
+    interruptedRow: true,
+    draft: ['wrong suite — use -p archon-workflows', 'and skip the doctests'],
+    draftHeader: 'Will send · 2', tabOnly: true,
+    disclosure: 'stopped after the last completed tool call · files already written stay written',
+    field: true, controls: true, stop: false, send: 'Send now',
+    note: 'The node never left running — only the agent\u2019s current generation was interrupted, and the rest of the run is unaffected. The stop control is gone. The draft header flips to Will send: that one word is the whole signal the control below has changed meaning. The 30-minute idle-await timer is an inactivity timer — typing in the composer re-arms it.'
+  },
+  again: {
+    label: '4 · generating again',
+    selected: 'running · 16m 40s · run 2', selectedColor: 'var(--running)',
+    selectedLine: '22 tool calls · 1 interrupted · steered by kevin',
+    pill: 'Running', pillColor: 'var(--running)', pillBorder: 'oklch(0.72 0.155 245 / .4)',
+    headerMeta: 'started 04:52 · running… · run 2 of 2 · omp · claude-opus-5',
+    interruptedRow: true, operator: true, tail: true, tailGlyph: '◐', tailGlyphColor: 'var(--running)', tailBadge: '3s',
+    field: true, controls: true, stop: true, stopLabel: 'Stop', send: 'Queue',
+    note: 'Both controls revert the instant the agent\u2019s projected sub-state says generating again — read from the sub-state, never from a remembered mode. The draft box is gone because it is empty; it is never drawn as an empty shell. The operator\u2019s two messages are now ordinary transcript rows, between the call they interrupted and the one they caused.'
+  },
+  finishedUndelivered: {
+    label: '5 · finished · undelivered', todoEnd: 'done',
+    selected: 'completed · 18m 21s', selectedColor: 'var(--success)',
+    selectedLine: '24 tool calls · 1 interrupted · steered by kevin',
+    verify: 'completed · 4m 02s', verifyColor: 'var(--success)',
+    pill: 'Completed', pillColor: 'var(--success)', pillBorder: 'oklch(0.755 0.165 168 / .4)',
+    headerMeta: 'started 04:52 · 18m 21s · omp · claude-opus-5',
+    interruptedRow: true, operator: true, tail: true, tailGlyph: '✓', tailGlyphColor: 'var(--success)', tailBadge: '41 passed',
+    draft: ['and skip the doctests', 'check the fixture path too'],
+    draftHeader: 'Never sent · 2',
+    disclosure: 'node finished · these never left this tab',
+    field: false, controls: false,
+    note: 'No field, no Stop, no send — there is nothing left to steer, and a control that cannot act is not drawn. What survives is read-only: the operator\u2019s own words are never discarded without saying so, and the half-typed line folds in as the last item. Reconciliation runs on the node\u2019s terminal event; any sent id with no matching row is restored here.'
+  },
+  finishedClean: {
+    label: '6 · finished · clean', todoEnd: 'done',
+    selected: 'completed · 18m 21s', selectedColor: 'var(--success)',
+    selectedLine: '24 tool calls · all passed',
+    verify: 'completed · 4m 02s', verifyColor: 'var(--success)',
+    pill: 'Completed', pillColor: 'var(--success)', pillBorder: 'oklch(0.755 0.165 168 / .4)',
+    headerMeta: 'started 04:52 · 18m 21s · omp · claude-opus-5',
+    tail: true, tailGlyph: '✓', tailGlyphColor: 'var(--success)', tailBadge: '41 passed',
+    dock: false,
+    note: 'No dock at all — the transcript runs to the bottom of the panel. Sending here would mean workflow retry-node, a cascading re-run behind a composer-shaped affordance; that is its own capability with its own confirmation.'
+  },
+  failed: {
+    label: '7 · failed · 30-min', todoEnd: 'todo',
+    selected: 'failed · idle timeout', selectedColor: 'var(--error)',
+    selectedLine: 'interrupted by operator · no redirect received',
+    verify: 'skipped',
+    pill: 'Failed', pillColor: 'var(--error)', pillBorder: 'oklch(0.68 0.215 18 / .4)',
+    headerMeta: 'started 04:52 · failed after 30m idle · omp · claude-opus-5',
+    interruptedRow: true,
+    draft: ['wrong suite — use -p archon-workflows', 'and skip the doctests'],
+    draftHeader: 'Never sent · 2',
+    disclosure: 'interrupted by operator, no redirect received · failed after 30-minute idle timeout',
+    field: false, controls: false,
+    note: 'The owner-ratified bound. While idle-after-interrupt the dock waits on Send now; if nothing is sent, the engine fails the node after 30 minutes of genuine operator inactivity — never a wait-forever, never a quiet finish on partial output. The in-memory queue dies with the registry, so anything still sent but unmatched returns read-only as Never sent. Resuming re-runs the node with a fresh session.'
+  },
+  detached: {
+    label: '8 · detached run',
+    selected: 'running · 14m 07s · detached', selectedColor: 'var(--running)',
+    selectedLine: '19 tool calls · not steerable from this process',
+    pill: 'Running', pillColor: 'var(--running)', pillBorder: 'oklch(0.72 0.155 245 / .4)',
+    headerMeta: 'started 04:52 · running… · detached · omp · claude-opus-5',
+    agentRunning: true,
+    disclosure: 'not steerable here · this run was started detached, so its live session is not in this process',
+    field: false, controls: false,
+    note: 'Added in this port — the state the spec requires but no earlier mockup drew. All of steering binds to the in-process live handle, so a CLI --detach run has nothing to bind to. Cancel and normal resume still work; only the dock\u2019s controls are absent, and the dock says why rather than offering a field that would 409.'
+  }
+};
+
+const ORDER = ['generating','interrupting','idle','again','finishedUndelivered','finishedClean','failed','detached'];
+
+// A loop node runs the same node id many times. Each iteration is its own execution,
+// listed as `implement ×N` in the log stream and selectable from the header's
+// Execution select (ConsoleRoomHeader.tsx:60, build-log-rows.ts:224).
+const ITERATIONS = [
+  {
+    n: 1, status: 'completed · 6m 04s', color: 'var(--success)',
+    line: '11 tool calls · all passed',
+    meta: 'iteration 1 · started 04:52 · 6m 04s · omp · claude-opus-5',
+    todoHeadline: 'Research · Implement', todoCount: '6/6 done',
+    todoBar: 'todo · folded from 4 todo calls · iteration 1',
+    todo: [
+      ['done', 'Read spec and auto_retry.rs'], ['done', 'Locate the backoff cap'],
+      ['done', 'Fix off-by-one in backoff()'], ['done', 'Re-run rm02_4_2_tdd_us1_001'],
+      ['done', 'Run full auto_retry suite'], ['done', 'Auto-commit after implement']
+    ]
+  },
+  {
+    n: 2, status: 'completed · 5m 11s', color: 'var(--success)',
+    line: '9 tool calls · 1 failed · recovered',
+    meta: 'iteration 2 · started 04:58 · 5m 11s · omp · claude-opus-5',
+    todoHeadline: 'Harden', todoCount: '4/4 done',
+    todoBar: 'todo · folded from 3 todo calls · iteration 2',
+    todo: [
+      ['done', 'Add the jitter case'], ['done', 'Cover attempt 0'],
+      ['done', 'Re-run the suite'], ['done', 'Auto-commit after implement']
+    ]
+  },
+  {
+    n: 3, status: null, color: null,
+    line: '19 tool calls · 1 failed · retry after exit 101',
+    meta: null,
+    todoHeadline: 'Research · Implement', todoCount: '4/6 done',
+    todoBar: 'todo · folded from 4 todo calls · iteration 3',
+    todo: [
+      ['phase', 'Research'], ['done', 'Read spec and auto_retry.rs'], ['done', 'Locate the backoff cap'],
+      ['phase', 'Implement'], ['done', 'Fix off-by-one in backoff()'], ['done', 'Re-run rm02_4_2_tdd_us1_001'],
+      ['current', 'Run full auto_retry suite'], ['todo', 'Auto-commit after implement']
+    ]
+  }
+];
+
+const GLYPH = {
+  done: { g: '☑', c: 'var(--success)' },
+  current: { g: '◐', c: 'var(--running)' },
+  blocked: { g: '⊘', c: 'var(--warning)' },
+  todo: { g: '☐', c: 'var(--text-secondary)' }
+};
+
+class Component extends DCLogic {
+  state = { key: 'generating', kind: 'prompt', exec: 3, todoOpen: false, draftOpen: true, softInject: true };
+
+  renderVals() {
+    const s = STATES[this.state.key];
+    const isLoop = this.state.kind === 'loop';
+    const live = 3;
+    const exec = isLoop ? this.state.exec : live;
+    const viewingStale = isLoop && exec !== live;
+    const iter = ITERATIONS[exec - 1];
+    const kindBase = 'font-family:var(--font-mono);font-size:10.5px;padding:4px 9px;border-radius:6px;background:transparent;border:1px solid var(--border);cursor:pointer;';
+    const todoEnd = s.todoEnd ?? null;
+    const iterTodo = todoEnd === null || exec !== live
+      ? iter.todo
+      : iter.todo.map(t => {
+          if (t[0] === 'phase') return t;
+          // a completed node finished its plan; an abandoned one did not claim to
+          if (todoEnd === 'done') return t[0] === 'done' ? t : ['done', t[1]];
+          return t[0] === 'current' ? ['todo', t[1]] : t;
+        });
+    const todoAll = iterTodo.filter(t => t[0] !== 'phase');
+    const todoDone = todoAll.filter(t => t[0] === 'done').length;
+    const todoNow = (() => {
+      const running = todoAll.find(t => t[0] === 'current');
+      if (running !== undefined) return { kind: 'current', text: running[1] };
+      const blocked = todoAll.find(t => t[0] === 'blocked');
+      if (blocked !== undefined) return { kind: 'blocked', text: blocked[1] };
+      const last = [...todoAll].reverse().find(t => t[0] === 'done');
+      return last === undefined ? { kind: 'todo', text: todoAll[0][1] } : { kind: 'done', text: last[1] };
+    })();
+    // CAP-5: where a provider's open stream accepts a message mid-turn (claude streaming
+    // input), the same prompt arrives before turn-end with no interrupt. That is the only
+    // state in which a second send control is honest while the agent generates.
+    const softInject = this.state.softInject;
+    const canSendNow = softInject && s.send === 'Queue' && s.stopBusy !== true && !viewingStale;
+    const queueLive = s.controls === true && !viewingStale;
+    const toggleBase = 'font-family:var(--font-mono);font-size:10.5px;padding:4px 9px;border-radius:6px;background:transparent;border:1px solid var(--border);cursor:pointer;';
+    const loopVals = {
+      softInjectLabel: softInject ? 'claude · soft-inject' : 'codex · queue only',
+      softInjectStyle: toggleBase + (softInject
+        ? 'color:var(--text-primary);border-color:var(--accent-bright);background:var(--accent-soft)'
+        : 'color:var(--text-secondary)'),
+      onToggleSoftInject: () => this.setState(st => ({ softInject: !st.softInject })),
+      isLoop,
+      viewingStale,
+      liveLabel: 'iteration ' + live,
+      executionLabel: 'Iteration ' + exec,
+      execValue: 'iter-' + exec,
+      execCountLabel: 'of 3 · max 8',
+      execOptions: ITERATIONS.map(it => ({
+        value: 'iter-' + it.n,
+        label: 'Iteration ' + it.n + (it.n === live ? ' · running' : '')
+      })),
+      onPickExec: (e) => this.setState({ exec: Number(e.currentTarget.value.replace('iter-', '')) }),
+      onGoLive: () => this.setState({ exec: live }),
+      kindTabs: [
+        { key: 'prompt', label: 'prompt' },
+        { key: 'loop', label: 'loop ×3' }
+      ].map(k => ({
+        label: k.label,
+        pick: () => this.setState({ kind: k.key, exec: live }),
+        style: kindBase + (k.key === this.state.kind
+          ? 'color:var(--text-primary);border-color:var(--accent-bright);background:var(--accent-soft)'
+          : 'color:var(--text-secondary)')
+      })),
+      logRows: (isLoop
+        ? [
+            { kind: 'command', pillColor: 'var(--node-command)', name: 'speckit-plan', status: 'completed · 3m 40s', statusColor: 'var(--success)', line: 'plan.md · research.md · data-model.md' },
+            ...ITERATIONS.map(it => ({
+              kind: 'loop', pillColor: 'var(--node-approval)', name: 'implement ×' + it.n,
+              status: it.n === live ? (s.selected ?? 'running') : it.status,
+              statusColor: it.n === live ? (s.selectedColor ?? 'var(--running)') : it.color,
+              line: it.n === exec ? it.line : null,
+              selected: it.n === exec, n: it.n
+            })),
+            { kind: 'command', pillColor: 'var(--node-command)', name: 'speckit-verify', status: s.verify ?? 'pending', statusColor: s.verifyColor ?? 'var(--text-tertiary)', line: null, dim: true }
+          ]
+        : [
+            { kind: 'prompt', pillColor: 'var(--node-prompt)', name: 'implement',
+              status: s.selected ?? 'running · 14m 07s · run 2', statusColor: s.selectedColor ?? 'var(--running)',
+              line: s.selectedLine ?? '19 tool calls · 1 failed · retry after exit 101', selected: true },
+            { kind: 'command', pillColor: 'var(--node-command)', name: 'speckit-verify', status: s.verify ?? 'pending', statusColor: s.verifyColor ?? 'var(--text-tertiary)', line: null, dim: true }
+          ]
+      ).map(r => ({
+        kind: r.kind, name: r.name, status: r.status, line: r.line,
+        pillStyle: 'color:' + r.pillColor,
+        statusStyle: 'color:' + r.statusColor,
+        boxStyle: r.selected === true
+          ? 'border:1px solid var(--accent-bright);box-shadow:0 0 0 1px var(--accent-soft);opacity:1'
+          : 'border:1px solid var(--border);' + (r.dim === true ? 'opacity:.6' : ''),
+        pick: r.n === undefined ? () => {} : () => this.setState({ exec: r.n })
+      })),
+      showTodoStrip: true,
+      todoOpen: this.state.todoOpen,
+      onToggleTodo: () => this.setState(st => ({ todoOpen: !st.todoOpen })),
+      todoChevStyle: 'transition:transform .12s;transform:rotate(' + (this.state.todoOpen ? '180' : '0') + 'deg)',
+      todoBar: iter.todoBar,
+      // The collapsed strip shows WHERE the agent is, not the phase names — the running
+      // item if there is one, else the last thing it finished.
+      todoNow: todoNow.text,
+      todoNowGlyph: GLYPH[todoNow.kind].g,
+      todoNowGlyphStyle: 'color:' + GLYPH[todoNow.kind].c,
+      todoCount: todoDone + '/' + todoAll.length,
+      todoMeter: todoAll.map(it => ({
+        style: 'background:' + (it[0] === 'done' ? 'var(--success)' : it[0] === 'current' ? GLYPH.current.c : it[0] === 'blocked' ? 'var(--warning)' : 'var(--border-bright)')
+      })),
+      todoItems: iterTodo.map(([k, text]) => k === 'phase'
+        ? { rowStyle: 'font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);margin:8px 0 2px;padding-left:2px', glyphStyle: 'display:none', glyph: '', textStyle: '', text, suffix: '' }
+        : {
+            rowStyle: 'display:flex;gap:8px;align-items:baseline;font-family:var(--font-mono);font-size:11.5px;line-height:1.75;padding:1px 4px 1px 2px;border-radius:4px'
+              + (k === 'current' ? ';background:var(--surface);box-shadow:inset 2px 0 0 ' + GLYPH.current.c : ''),
+            glyphStyle: 'flex:0 0 12px;text-align:center;color:' + GLYPH[k].c,
+            glyph: GLYPH[k].g,
+            textStyle: 'flex:1 1 auto;min-width:0;color:' + (k === 'current' ? 'var(--text-primary)' : 'var(--text-secondary)') + (k === 'dropped' ? ';text-decoration:line-through' : ''),
+            text,
+            suffix: k === 'blocked' ? ' · blocked' : ''
+          })
+    };
+    const tabBase = 'font-family:var(--font-mono);font-size:10.5px;padding:4px 9px;border-radius:6px;background:transparent;border:1px solid var(--border);cursor:pointer;';
+    return {
+      ...loopVals,
+      headerMeta: viewingStale ? iter.meta : s.headerMeta,
+      pillLabel: viewingStale ? 'Completed' : s.pill,
+      pillStyle: viewingStale
+        ? 'color:var(--success);border-color:oklch(0.755 0.165 168 / .4)'
+        : 'color:' + s.pillColor + ';border-color:' + s.pillBorder,
+      showDock: viewingStale ? false : s.dock !== false,
+      stateNote: canSendNow
+        ? s.note + ' \u2014 and because this provider\u2019s open stream takes a message mid-turn (CAP-5 soft-inject, claude streaming input), each queued item carries its own Send now: the same ordinary prompt, handed to the running turn, with no interrupt, no interrupted tool call and no turn-start event. Per-item send is offered ONLY here. On a queue-only provider the control is absent rather than disabled \u2014 there an individual message could do nothing but wait, and the only per-item action is delete. This path is spike-gated: the v1 floor is interrupt + Queue.'
+        : viewingStale
+        ? 'A loop node runs the same node id many times, and each iteration is its own execution — listed as implement ×N in the log stream and selectable from the header. The select defaults to the running iteration; picking a finished one reads its transcript back. Steering is not offered there: a steer carries the node id and retry epoch it was written against, so a message composed against a finished iteration would be rejected on arrival. The dock reduces to one line and a way back to the live iteration.'
+        : s.note,
+      stateTabs: ORDER.map(k => ({
+        label: STATES[k].label,
+        pick: () => this.setState({ key: k }),
+        style: tabBase + (k === this.state.key
+          ? 'color:var(--text-primary);border-color:var(--accent-bright);background:var(--accent-soft)'
+          : 'color:var(--text-secondary)')
+      })),
+      agentRunning: s.agentRunning === true,
+      showInterruptedRow: s.interruptedRow === true,
+      showOperatorExchange: s.operator === true,
+      showRedirectTail: s.tail === true,
+      tailGlyph: s.tailGlyph ?? '',
+      tailGlyphStyle: 'color:' + (s.tailGlyphColor ?? 'var(--text-secondary)'),
+      tailBadge: s.tailBadge ?? '',
+      showDraft: Array.isArray(s.draft),
+      draftHeader: s.draftHeader ?? '',
+      // Per-item Send now exists ONLY on a soft-inject transport: there, one message can
+      // genuinely be handed to the running turn. On a queue-only provider the control is
+      // absent, because an individual message could do nothing there but wait.
+      draftOpen: this.state.draftOpen,
+      onToggleDraft: () => this.setState(st => ({ draftOpen: !st.draftOpen })),
+      draftChevStyle: 'transition:transform .12s;transform:rotate(' + (this.state.draftOpen ? '180' : '0') + 'deg)',
+      draftMarginStyle: s.tabOnly === true ? '' : 'margin-left:auto;',
+      draftHeaderWord: (s.draftHeader ?? ' · ').split(' · ')[0],
+      draftCount: (s.draftHeader ?? ' · ').split(' · ')[1] ?? '',
+      draftItems: (s.draft ?? []).map((t, i) => ({
+        ord: String(i + 1),
+        // the next item out carries the same inset mark the running todo item does
+        rowStyle: i === 0 && queueLive
+          ? 'background:var(--surface);box-shadow:inset 2px 0 0 ' + GLYPH.current.c
+          : '',
+        textStyle: 'flex:1 1 auto;min-width:0;font-family:var(--font-sans);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:'
+          + (i === 0 && queueLive ? 'var(--text-primary)' : 'var(--text-secondary)'),
+        text: t,
+        canSendNow: canSendNow,
+        sendLabel: 'Send now: ' + t,
+        deleteLabel: 'Delete: ' + t,
+        canDelete: queueLive,
+        sendNow: () => {},
+        remove: () => {}
+      })),
+      showTabOnly: s.tabOnly === true,
+      disclosure: s.disclosure ?? false,
+      showField: s.field === true,
+      showControls: s.controls === true,
+      showStop: s.stop === true,
+      stopLabel: s.stopLabel ?? 'Stop',
+      stopBusy: s.stopBusy === true,
+      stopStyle: s.stopBusy === true
+        ? 'border:1px solid var(--border);color:var(--text-secondary)'
+        : 'border:1px solid var(--border-bright);color:var(--text-primary)',
+      sendLabel: s.send ?? '',
+      onStop: () => this.setState({ key: 'idle' }),
+      onSend: () => this.setState({ key: this.state.key === 'idle' ? 'again' : this.state.key })
+    };
+  }
+}
+</script>
+</body>
+</html>

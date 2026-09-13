@@ -13,6 +13,8 @@ sources:
   - ../../../plans/260909-2130-live-interactive-agent-view/design.md
 ---
 
+> **⛔ SUPERSEDED — do not build from this spec.** Merged into `../spec-agent-node-room/` (the **read** half, CAP-1…CAP-7, unchanged in number). That unified spec is the live contract; this folder is retained only as a merge `source:` for audit. Read `../spec-agent-node-room/SPEC.md`.
+
 > **Canonical contract.** This SPEC and the files in `companions:` are the complete, preservation-validated contract for what to build, test, and validate. Source documents listed in frontmatter are for traceability — consult them only if you need narrative rationale this contract intentionally omits. `findings.md` is a required companion, not background: it carries the `file:line` evidence and the real provider payloads every capability below was derived from. `DESIGN.md` and `EXPERIENCE.md` are the UX run's two spines, adopted here rather than summarised: they own how the transcript looks and how it behaves, and they win over any mockup. `ARCHITECTURE-SPINE.md` is the architecture run's spine, adopted the same way: its fifteen `AD`s own where logic lives and which divergences are forbidden. This kernel does not restate any of the three — a reader who needs a colour, a state rule, a keyboard contract, or a boundary goes there.
 
 # Readable Agent Transcript
