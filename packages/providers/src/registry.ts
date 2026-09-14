@@ -25,6 +25,7 @@ import { registerPiProvider } from './community/pi/registration';
 import { registerQoderCliProvider } from './community/qodercli/registration';
 import { registerOmpProvider } from './community/omp/registration';
 import { registerDeepseekProvider } from './community/deepseek/registration';
+import { registerDevinProvider } from './community/devin/registration';
 import { registerE2eFakeProvider } from './e2e-fake/registration';
 import { UnknownProviderError } from './errors';
 import { instrumentProvider } from './observability';
@@ -200,6 +201,7 @@ export function registerCommunityProviders(): void {
   registerQoderCliProvider();
   registerOmpProvider();
   registerDeepseekProvider();
+  registerDevinProvider();
   // Env-gated (ARCHON_E2E_FAKE_PROVIDER) — no-op in production.
   registerE2eFakeProvider();
 }

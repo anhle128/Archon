@@ -167,3 +167,14 @@ export {
   registerDeepseekProvider,
   type DeepseekProviderDefaults,
 } from './community/deepseek';
+
+export {
+  checkDevinReadiness,
+  DEVIN_CAPABILITIES,
+  devinCredentialsPath,
+  DevinProvider,
+  parseDevinConfig,
+  registerDevinProvider,
+  type DevinProviderDefaults,
+  type DevinReadiness,
+} from './community/devin';
