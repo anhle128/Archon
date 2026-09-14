@@ -44,6 +44,8 @@ import { devinPromptUsageToBreakdown } from './usage';
 const STDERR_CAP = 4096;
 const DEFAULT_TERMINATE_GRACE_MS = 2000;
 const DEFAULT_SETUP_TIMEOUT_MS = 60_000;
+/** Post-cancel window for a compliant agent to flush trailing updates and settle the prompt before a hung one is released. */
+const CANCEL_DRAIN_GRACE_MS = 500;
 /** Devin's ACP session mode that auto-approves its own tool calls — the ACP-side meaning of `yolo`. */
 const DEVIN_SESSION_MODE = 'bypass';
 
@@ -256,10 +258,15 @@ export async function* driveDevinAcpTurn(
   let controlError: AskHumanControlError | undefined;
   let terminalError: DevinProviderError | undefined;
   let cancelSent: Promise<void> | undefined;
+  let resolveLocalCancellation!: () => void;
+  const localCancellation = new Promise<void>((resolve: () => void) => {
+    resolveLocalCancellation = resolve;
+  });
 
   const requestCancel = (): void => {
     if (clientCtx === undefined || activeSessionId === undefined || cancelSent !== undefined)
       return;
+    resolveLocalCancellation();
     cancelSent = clientCtx.notify(methods.agent.session.cancel, { sessionId: activeSessionId });
   };
 
@@ -398,7 +405,9 @@ export async function* driveDevinAcpTurn(
           aborted = true;
           requestCancel();
         };
-        if (!aborted) input.abortSignal?.addEventListener('abort', onAbort);
+        if (input.abortSignal?.aborted === true) aborted = true;
+        if (aborted) requestCancel();
+        else input.abortSignal?.addEventListener('abort', onAbort);
 
         let promptResponse: PromptResponse | undefined;
         try {
@@ -410,10 +419,16 @@ export async function* driveDevinAcpTurn(
                   ? augmentPromptForJsonSchema(input.prompt, input.outputSchema)
                   : input.prompt;
             try {
-              promptResponse = await ctx.request(methods.agent.session.prompt, {
-                sessionId,
-                prompt: [{ type: 'text', text: outbound }],
-              });
+              promptResponse = await Promise.race([
+                ctx.request(methods.agent.session.prompt, {
+                  sessionId,
+                  prompt: [{ type: 'text', text: outbound }],
+                }),
+                localCancellation.then(async () => {
+                  await waitMs(CANCEL_DRAIN_GRACE_MS);
+                  return undefined;
+                }),
+              ]);
             } catch (error) {
               if (!aborted && controlError === undefined && terminalError === undefined)
                 throw error;

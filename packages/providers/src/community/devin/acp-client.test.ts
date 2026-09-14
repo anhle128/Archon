@@ -111,6 +111,8 @@ function createFakeDevin(options?: {
   requestPermission?: boolean;
   elicitAfterToolCall?: boolean;
   onPromptSettled?: () => void;
+  ignoreCancel?: boolean;
+  onNewStarted?: () => void;
 }): FakeDevin {
   const calls: RecordedCall[] = [];
   const permissionResponses: unknown[] = [];
@@ -132,6 +134,7 @@ function createFakeDevin(options?: {
     )
     .onRequest(methods.agent.session.new, async c => {
       calls.push({ method: methods.agent.session.new, params: c.params });
+      options?.onNewStarted?.();
       if (options?.newHold !== undefined) await options.newHold.promise;
       return { sessionId, modes: options?.modes ?? DEFAULT_MODES, configOptions: [MODEL_OPTION] };
     })
@@ -215,7 +218,8 @@ function createFakeDevin(options?: {
         });
       }
       if (options?.promptHold !== undefined) {
-        await Promise.race([options.promptHold.promise, cancelled.promise]);
+        if (options.ignoreCancel) await options.promptHold.promise;
+        else await Promise.race([options.promptHold.promise, cancelled.promise]);
       }
       options?.onPromptSettled?.();
       return {
@@ -611,6 +615,61 @@ describe('driveDevinAcpTurn — permission and abort', () => {
     ]);
     expect(fake.methodsCalled()).not.toContain('session/prompt');
   });
+
+  test('abort during setup still cancels the session and skips the prompt', async () => {
+    const hold = createDeferred<void>();
+    const started = createDeferred<void>();
+    const abort = new AbortController();
+    const fake = createFakeDevin({ newHold: hold, onNewStarted: () => started.resolve() });
+    const collecting = collect(
+      driveDevinAcpTurn(fake.app, baseInput({ abortSignal: abort.signal }))
+    );
+    await started.promise;
+    abort.abort();
+    hold.resolve();
+    const chunks = await collecting;
+    expect(fake.methodsCalled()).not.toContain('session/prompt');
+    expect(fake.calls.filter(c => c.method === 'session/cancel')).toHaveLength(1);
+    expect(chunks).toEqual([
+      {
+        type: 'result',
+        sessionId: 'sess-new-1',
+        stopReason: 'aborted',
+        isError: true,
+        errorSubtype: 'devin_aborted',
+      },
+    ]);
+  });
+
+  test('abort completes the turn even when the agent ignores session/cancel', async () => {
+    const hold = createDeferred<void>();
+    const abort = new AbortController();
+    const fake = createFakeDevin({
+      promptText: 'partial',
+      promptHold: hold,
+      ignoreCancel: true,
+    });
+    try {
+      const gen = driveDevinAcpTurn(fake.app, baseInput({ abortSignal: abort.signal }));
+      const first = await gen.next();
+      expect(first.value).toEqual({ type: 'assistant', content: 'partial' });
+      abort.abort();
+      const rest: MessageChunk[] = [];
+      for await (const chunk of gen) rest.push(chunk);
+      expect(rest).toEqual([
+        {
+          type: 'result',
+          sessionId: 'sess-new-1',
+          stopReason: 'aborted',
+          isError: true,
+          errorSubtype: 'devin_aborted',
+        },
+      ]);
+      expect(fake.methodsCalled()).toContain('session/cancel');
+    } finally {
+      hold.resolve();
+    }
+  });
 });
 
 class FakeChild extends EventEmitter {
@@ -763,5 +822,24 @@ describe('runDevinAcpTurn — process wrapper', () => {
     }) as unknown as typeof import('node:child_process').spawn;
     await collect(runDevinAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 5 }));
     expect(child.signals).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  test('a truncated stderr tail cannot leak a split secret', async () => {
+    const fake = createFakeDevin({ promptHold: createDeferred<void>() });
+    const child = new FakeChild();
+    const spawnImpl = (() => {
+      attachAgent(child, fake);
+      queueMicrotask(() => child.crash(1, `${'x'.repeat(4097)}tok-secret-1234`));
+      return child as unknown as ChildProcess;
+    }) as unknown as typeof import('node:child_process').spawn;
+    let thrown: unknown;
+    try {
+      await collect(runDevinAcpTurn(processInput(), { spawn: spawnImpl, terminateGraceMs: 0 }));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(DevinProviderError);
+    expect((thrown as DevinProviderError).subtype).toBe('devin_child_exited');
+    expect((thrown as Error).message).not.toContain('tok-secret-123');
   });
 });
