@@ -139,4 +139,27 @@ describe('mapDevinSessionUpdate', () => {
       },
     ]);
   });
+
+  test('removes a terminal ask id that no elicitation claimed', () => {
+    const state = createDevinEventState();
+    const ask = (id: string): SessionUpdate =>
+      ({
+        sessionUpdate: 'tool_call',
+        toolCallId: id,
+        title: 'Asked user Which color?',
+        rawInput: { questions: [] },
+        _meta: { 'cognition.ai/inferenceToolName': 'ask_user_question' },
+      }) as SessionUpdate;
+    mapDevinSessionUpdate(ask('call_a'), state);
+    mapDevinSessionUpdate(ask('call_b'), state);
+    mapDevinSessionUpdate(
+      {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'call_a',
+        status: 'failed',
+      } as SessionUpdate,
+      state
+    );
+    expect(state.pendingAskToolCallIds).toEqual(['call_b']);
+  });
 });

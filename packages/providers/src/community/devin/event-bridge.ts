@@ -120,6 +120,8 @@ export function mapDevinSessionUpdate(
         return [];
       }
       state.tools.delete(update.toolCallId);
+      const pendingAskIndex = state.pendingAskToolCallIds.indexOf(update.toolCallId);
+      if (pendingAskIndex !== -1) state.pendingAskToolCallIds.splice(pendingAskIndex, 1);
       return [
         {
           type: 'tool_result',
