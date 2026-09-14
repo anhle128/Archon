@@ -17,7 +17,8 @@ Codex is an explicit exception: its SDK adds declared servers to ambient configu
 rather than replacing it.
 
 MCP works with Claude, Codex, Copilot, and DeepSeek workflow nodes. Pi and OpenCode nodes
-currently warn and ignore the `mcp` field.
+currently warn and ignore the `mcp` field. Devin nodes do not accept Archon's `mcp:` field;
+Devin uses the servers in its own `~/.config/devin/mcp_config.json`.
 
 DeepSeek expands MCP environment and header values from ambient process env plus acting-user and codebase env (request values beat ambient). Bare stdio `command` values are resolved through `PATH`. Pinned DSH ACP supports stdio and Streamable HTTP; SSE declarations fail fast before the turn starts instead of being ignored. DeepSeek does not support Archon `allowed_tools` / `denied_tools` (`toolRestrictions` is false), so `allowed_tools: []` cannot create an MCP-only boundary for DeepSeek nodes.
 
@@ -403,6 +404,9 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
 - **DeepSeek transports and tools** — DeepSeek supports stdio and Streamable HTTP MCP,
   resolves bare stdio commands through `PATH`, and rejects SSE before the turn starts.
   `allowed_tools` cannot create an MCP-only boundary because DeepSeek `toolRestrictions` is false.
+- **Devin** — no per-node MCP. ACP-declared per-session servers are spawned but not exposed
+  to the model on CLI 3000.10.21, so `mcp:` warns and is ignored; configure servers in
+  Devin's own config instead.
 - **Haiku model** — Tool search (lazy loading for many tools) is not supported on
   Haiku. You'll see a warning. Consider using Sonnet or Opus for MCP nodes.
 - **No load-time validation** — The MCP config file is read at execution time, not

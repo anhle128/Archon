@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, Grok, Qoder CLI, OMP CLI, OpenCode, GitHub Copilot, Pi, and DeepSeek Harness as AI assistants for Archon.
+description: Configure Claude Code, Codex, Grok, Qoder CLI, OMP CLI, OpenCode, GitHub Copilot, Pi, DeepSeek Harness, and Devin CLI as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -21,7 +21,7 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 | Provider | Tier | How it works | On a validation miss |
 |----------|------|--------------|----------------------|
 | Claude, Codex, Grok, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `--json-schema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
-| Pi, Copilot, Qoder CLI, OMP CLI, DeepSeek | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
+| Pi, Copilot, Qoder CLI, OMP CLI, DeepSeek, Devin | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
 In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
 
@@ -913,9 +913,52 @@ assistants:
 - [Provider Capability Matrix](/reference/provider-capabilities/) — generated from the DeepSeek capability declaration.
 - [Configuration Reference](/reference/configuration/) — `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_NODE_BIN`.
 
+## Devin CLI (Community Provider)
+
+**Drive the locally installed Devin CLI over ACP.** The provider id is `devin`, registered as `builtIn: false`.
+
+Archon runs `devin --permission-mode yolo acp` as a child process in the conversation's cwd or the managed worktree and speaks the Agent Client Protocol to it. Every turn spawns a fresh child and reaps it when the turn ends, aborts, pauses, or fails.
+
+### Shared login
+
+All users of one Archon install share the machine's Devin login. Run `devin auth login` once on the Archon host; Archon never asks for, stores, or injects a per-user Devin key. The Settings → Agents card shows whether the server can resolve the CLI from `PATH` or `DEVIN_BIN_PATH` and whether the login file exists, without showing the account. The run path also honors `assistants.devin.binaryPath`. A run started after the login expires fails with `devin_not_logged_in` and the same `devin auth login` instruction.
+
+### yolo mode
+
+`yolo` is Devin's own tool-permission mode (an alias of `dangerous` / `bypass` in Devin's docs). Archon passes `--permission-mode yolo` to the child and, because ACP sessions start in Devin's `accept-edits` mode regardless of that flag, switches every session to `bypass` over ACP before the first prompt. It does not approve, skip, or answer any Archon approval gate or AskHuman question. Devin organization rules (Team Settings deny/ask rules) still apply in bypass mode; when Devin asks for permission anyway, Archon cancels the request and ends the turn with `devin_permission_blocked` naming the blocked action. If `bypass` is not offered for the session, the turn fails instead of running in a stricter mode silently. Devin's `--sandbox` mode is not used, and `assistants.devin.permissionMode` / `sandbox` are rejected.
+
+### Models
+
+Set `model` to an exact id from `devin models list` (for example `claude-opus-5-low`). Effort is part of the id, so the node `effort:` field warns and is ignored. Aliases such as `opus` are not accepted: the ACP model option rejects them, and the CLI flag that does accept them silently keeps the default on a typo, which Archon cannot detect. An unknown id fails the turn with Devin's own message listing the available models. Without a `model`, Devin's enterprise default applies and the result reports the resolved id.
+
+### AskHuman and questions
+
+When a workflow node runs on Devin, Archon advertises the ACP elicitation capability and Devin exposes its native `ask_user_question` tool. A question becomes an Archon AskHuman: the run pauses, the turn is cancelled, and after the answer or decline Archon reloads the same Devin session in a new child and sends one message carrying only the validated answer. Single- and multi-select questions are supported; free-text elicitations are not and fail the turn.
+
+### Devin's own configuration
+
+Devin loads its own rules (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules`, `.windsurf/rules`), skills (`~/.config/devin/skills`, `.claude/skills`, `.agents/skills`), hooks (`~/.claude/settings.json`), plugins, subagents, and MCP servers (`~/.config/devin/mcp_config.json`, project `.devin/mcp_config.json`, local `.devin/mcp_config.local.json`) on every session. Archon does not rewrite those files and does not translate its per-node `hooks`, `skills`, `agents`, or `mcp` fields; those warn as unsupported. Per-session MCP servers declared over ACP are spawned by Devin but not exposed to its model on CLI `3000.10.21`, so Archon does not attach any.
+
+### Config keys
+
+Supported `assistants.devin` keys: `model`, `binaryPath`, `agentType` (`summarizer` or `review`), and `refusalFallback` (ordered list of model ids tried when the upstream provider refuses a request). The Web config API exposes no Devin fields; set them in `~/.archon/config.yaml` or `.archon/config.yaml`:
+
+```yaml
+assistants:
+  devin:
+    model: claude-opus-5-low
+    refusalFallback:
+      - claude-sonnet-5-medium
+```
+
+### See also
+
+- [Provider Capability Matrix](/reference/provider-capabilities/) — generated from the Devin capability declaration.
+- [Configuration Reference](/reference/configuration/) — `DEVIN_BIN_PATH` and the `assistants.devin` keys.
+
 ## Per-user credentials and AI Settings
 
-Everything above configures the **install-wide** assistant credentials (env vars, `claude /login`, etc.) — every run uses the same shared keys. On a **shared Archon box** where several people use the same server, each user can instead connect **their own** provider — by API key or subscription — so their runs and chats bill to them, not to the install's shared key.
+Everything above configures the **install-wide** assistant credentials (env vars, `claude /login`, etc.) — every run uses the same shared keys. On a **shared Archon box** where several people use the same server, each user can instead connect **their own** provider — by API key or subscription — so their runs and chats bill to them, not to the install's shared key. Devin is the exception: its login remains machine-shared and its Agents card is status-only.
 
 ### When you need this
 
@@ -948,7 +991,7 @@ The console **AI Settings** page (Settings in the web UI) has four sections:
 
 - **Model Tiers** — map the `small` / `medium` / `large` tiers to a provider + model (and optional effort). This writes the install's `tiers:` config and works on **any** install, even without `TOKEN_ENCRYPTION_KEY` (it's non-secret config). Pi tier models show a cost/reasoning/context hint from Pi's model catalog.
 - **Model Aliases** — define `@custom` refs (e.g. `@fast`) usable in workflow `model:` fields, with the same scope toggle.
-- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user.
+- **Agents** — one card per agent (Claude Code, Codex, Pi, OpenCode, Copilot, Devin) with the credentials it can spend nested inside, each card showing a readiness state (ready / needs credential). Connect a credential for *your* user inside the agent that uses it. Credentials are keyed by **vendor** (`anthropic`, `openai`, `github-copilot`, `openrouter`, …), and one credential serves every agent that consumes it (an `anthropic` key powers Claude Code and Pi's anthropic backend — both cards reflect it). Every vendor accepts an **API key**; **`anthropic`**, **`openai`**, and **`github-copilot`** additionally offer **subscription login** (an OAuth flow — for `openai`/ChatGPT it is an Archon-owned PKCE flow where you paste the redirect URL or code back, [#1924](https://github.com/coleam00/Archon/issues/1924)). Legacy ids (`claude`/`codex`/`copilot`) are accepted and normalized. The **Pi** card keeps its 30+ backends behind a searchable "Add backend…" picker (with model counts from Pi's catalog) and shows ambient chains (Amazon Bedrock, Google Vertex) as status-only rows; the **OpenCode** card loads its backend catalog on demand from the embedded runtime — its connections are install-wide, not per-user. The **Devin** card is status-only and reports the machine-shared `devin auth login`; it never offers a per-user connect control.
 - **Defaults** — leads with a "Chat runs on [provider][model]" combo line in both scopes (the install line edits the default assistant + `assistants.<provider>.model`; the just-me line edits your personal default assistant + chat-model pin), with the per-provider model grid below as the advanced view.
 
 ### Per-user model preferences ("Just me")
@@ -1010,6 +1053,7 @@ value. Known zeros survive; absent fields stay absent (never rendered as zero).
 | OMP | Primary stream usage plus fail-soft advisor/subagent transcript enrichment (see [OMP](#omp-cli-community-provider)). |
 | Qoder CLI | No fabricated breakdown — omit when the CLI exposes nothing. |
 | DeepSeek | Not reported in v1; pinned DSH ACP exposes context occupancy but not per-request billing tokens. |
+| Devin | Input/output/reasoning/cached-read/cached-write tokens from the ACP prompt response for that turn; no cost — Devin bills in ACUs on its own account. |
 
 ### Scope, missingness, and coverage
 

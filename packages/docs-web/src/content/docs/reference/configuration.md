@@ -56,7 +56,7 @@ Create `~/.archon/config.yaml` for user-wide preferences:
 
 ```yaml
 # Default AI assistant
-defaultAssistant: claude # must match a registered provider (e.g. claude, codex, opencode, pi, copilot, qodercli, omp, deepseek)
+defaultAssistant: claude # must match a registered provider (e.g. claude, codex, opencode, pi, copilot, qodercli, omp, deepseek, devin)
 
 # Assistant defaults
 assistants:
@@ -446,7 +446,7 @@ Environment variables override all other configuration. They are organized by ca
 | `ARCHON_PUBLIC_URL` | Public HTTP or HTTPS Archon web origin for non-Plannotator approval callback review links; Plannotator approval callbacks use the live `reviewUrl` from the review session. | -- |
 | `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
-| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `opencode`, `pi`, `copilot`, `qodercli`, `omp`, or `deepseek`. | `claude` |
+| `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `opencode`, `pi`, `copilot`, `qodercli`, `omp`, `deepseek`, or `devin`. | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
@@ -504,6 +504,19 @@ Config `baseUrl` beats request and ambient `DEEPSEEK_BASE_URL`. Request `DEEPSEE
 Do not set `DSH_PROVIDER_ROUTE`; the provider never writes it. `maxTokens` is not a supported key and is rejected at parse time.
 The Web config API exposes no DeepSeek fields — set these values in `~/.archon/config.yaml` or `.archon/config.yaml`.
 See the [AI Assistants guide](/getting-started/ai-assistants/#deepseek-harness-community-provider) for setup.
+
+### AI Providers -- Devin CLI (community)
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `DEVIN_BIN_PATH` | Absolute path to the `devin` executable. Highest precedence, then `assistants.devin.binaryPath`, then `PATH`. | -- |
+| `DEVIN_ACP_SETUP_TIMEOUT_MS` | Upper bound for each ACP setup request (`initialize`, `session/new`, `session/load`, `session/set_mode`, `session/set_config_option`). Devin can stall on its remote-config fetch; a stalled request fails the turn with a retry hint. | `60000` |
+
+Login is shared machine-wide through `devin auth login`; Archon reads only whether `$XDG_DATA_HOME/devin/credentials.toml` (default `~/.local/share/devin/credentials.toml`) exists.
+Supported `assistants.devin` keys: `model` (exact id from `devin models list`), `binaryPath`, `agentType`, and `refusalFallback`.
+`permissionMode` and `sandbox` are rejected at parse time: Archon always runs Devin in `yolo` mode without the sandbox.
+The Web config API exposes no Devin fields — set these values in `~/.archon/config.yaml` or `.archon/config.yaml`.
+See the [AI Assistants guide](/getting-started/ai-assistants/#devin-cli-community-provider) for setup.
 
 ### Platform Adapters -- Slack
 
