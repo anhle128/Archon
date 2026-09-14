@@ -367,7 +367,7 @@ describe('Langfuse provider observability', () => {
   });
 });
 
-test('only Claude and Pi advertise AskHuman', () => {
+test('only Claude, Devin, and Pi advertise AskHuman', () => {
   clearRegistry();
   registerBuiltinProviders();
   registerCommunityProviders();
@@ -375,5 +375,5 @@ test('only Claude and Pi advertise AskHuman', () => {
     .filter(info => info.capabilities.askHuman)
     .map(info => info.id)
     .sort();
-  expect(capable).toEqual(['claude', 'pi']);
+  expect(capable).toEqual(['claude', 'devin', 'pi']);
 });
