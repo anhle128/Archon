@@ -21,7 +21,7 @@ below are additional manual exploration, not extra guarantees from this recipe.
 - Run `archon workflow runs --json` after a `workflow run`.
 - Run `archon workflow get <run-id> --verbose --json`.
 - Run `archon workflow status --json` for active runs.
-- Open `/console` or `/console/p/<projectId>/r/<runId>` (the console reads the same HTTP APIs).
+- Open `/console` or `/console/p/<projectId>/r/<runId>`. Console detail uses `GET /api/workflows/runs/:id`; the console list uses `GET /api/dashboard/runs` (same dashboard query as CLI `workflow runs`, not `GET /api/workflows/runs`).
 
 ## Driving it with verify-archon
 
@@ -31,7 +31,7 @@ Preconditions:
 - At least one real run exists in the isolated home. The automated recipe creates its own; a dry-run does not create one. Never invent a run row.
 - You have the full run id from `workflow runs` / `workflowRunRef.runId`, not a detached ack.
 
-- **List runs.** Ask for recent runs. Run `verify-archon cli -- workflow runs --json`. Exit code `0`. The array (or `runs` field) contains the expected id.
+- **List runs.** Ask for recent runs. Run `verify-archon cli -- workflow runs --json`. Exit code `0`. The payload is `{ runs, total, … }` and `runs` contains the expected id.
 - **HTTP list.** Read the same list from the server. Run `verify-archon http /api/workflows/runs`. Status `200`. The payload includes the same run id.
 - **Get one run.** Inspect lifecycle. Run `verify-archon cli -- workflow get <run-id> --verbose --json`. `result.state` is a known status (`completed`, `failed`, `running`, `paused`, `cancelled`, …). `result.terminal` is a boolean. `workflowRunRef.runId` equals `<run-id>`.
 - **Status of actives.** List live work. Run `verify-archon cli -- workflow status --json`. A completed deterministic run does not appear as running.
