@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
+  checkDevinReadiness,
   getRegisteredProviders,
   PI_PROVIDER_ENV_VARS,
   type CredentialKind,
@@ -167,6 +168,11 @@ function isAmbientConfigured(vendor: string): boolean {
     const hasProject = !!(process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT);
     const hasLocation = !!process.env.GOOGLE_CLOUD_LOCATION;
     return hasAdc && hasProject && hasLocation;
+  }
+  if (vendor === 'devin') {
+    // Shared machine login: the CLI must be resolvable and `devin auth login`
+    // must have written its credentials file. Only existence is checked.
+    return checkDevinReadiness().ready;
   }
   return false;
 }
