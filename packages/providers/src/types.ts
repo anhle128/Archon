@@ -233,6 +233,20 @@ export interface DeepseekProviderDefaults {
   nodeBin?: string;
 }
 
+/**
+ * Community provider defaults for the Devin CLI over ACP.
+ * Permission mode is always `yolo`, so there is no key for it. `model` must be
+ * an exact id from `devin models list`; aliases are not accepted because the
+ * ACP config option rejects them while the CLI flag ignores unknown names.
+ */
+export interface DevinProviderDefaults {
+  [key: string]: unknown;
+  model?: string;
+  binaryPath?: string;
+  agentType?: 'summarizer' | 'review';
+  refusalFallback?: string[];
+}
+
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
