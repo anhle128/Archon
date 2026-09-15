@@ -3,9 +3,11 @@
 ## Overview
 
 The node room panel on both Archon web surfaces: the **readable agent transcript** (the read half,
-`SPEC-readable-agent-transcript`) and the **composer dock** it is written from (the write half,
-`SPEC-live-agent-steering`), plus a **pinned todo strip** and a **loop iteration selector** that this
-design session added.
+CAP-1..7) and the **composer dock** it is written from (the write half, CAP-8..13), plus a **pinned
+todo strip** and a **loop iteration selector** that this design session added and the owner has since
+confirmed **in scope** (folded into CAP-3 and CAP-6). All thirteen capabilities now live in one
+unified spec, `SPEC-agent-node-room`, which merged the earlier `SPEC-readable-agent-transcript` and
+`SPEC-live-agent-steering` (their write ids CAP-1..6 shifted to CAP-8..13).
 
 Today an operator opening an agent node sees every tool call as two always-open blocks of
 pretty-printed JSON, and has no way to act on a running agent. These designs replace the JSON with
@@ -36,14 +38,16 @@ This feature was specified before it was designed. The contracts win over anythi
 
 | File | Owns |
 | --- | --- |
-| `_bmad-output/specs/spec-readable-agent-transcript/SPEC.md` | CAP-1..CAP-7, constraints, non-goals |
+| `_bmad-output/specs/spec-agent-node-room/SPEC.md` | all 13 capabilities (read CAP-1..7 + write CAP-8..13), constraints, non-goals |
 | `…/tool-presentation-contract.md` | the nine tool families and each one's body arm |
 | `…/todo-fold-contract.md` | how both providers' todo shapes normalize to `TodoPhase[]` |
-| `_bmad-output/specs/spec-live-agent-steering/SPEC.md` | CAP-1..CAP-6, the engine boundary |
 | `…/control-states.md` | the control state machine and what each control reads |
 | `…/engine-integration.md` | everything between the browser and the provider seam |
+| `…/provider-steering-matrix.md` | how each provider takes a message and can be interrupted |
 | `_bmad-output/planning-artifacts/ux-designs/ux-Archon-2026-09-09/DESIGN.md` | every colour, size, spacing, radius — `status: final` |
 | `…/EXPERIENCE.md` | component patterns, state patterns, keyboard, accessibility floor |
+
+> The earlier `spec-readable-agent-transcript` and `spec-live-agent-steering` are **superseded** — merged into `spec-agent-node-room`. Their `SPEC.md` carries a banner pointing here; do not build from them. All six companions above now live under `spec-agent-node-room/`.
 
 `DESIGN.md` states: *"Where this file disagrees with any mock, wireframe, or import, this file wins."*
 That includes these mockups, **except** for the deltas listed next, which are deliberate and need the
@@ -52,6 +56,8 @@ contract updated.
 ## Deltas this design introduces — decide on each before building
 
 Six places where these mockups deviate from the contracts. Each is a product decision, not drift.
+
+> **Update (2026-09-13):** deltas **1** (pinned todo strip) and **6** (loop iteration selector) are **owner-confirmed in scope** and folded into CAP-3 and CAP-6 success in `spec-agent-node-room`. Their design detail below still stands as the build reference; deltas **2–5** remain open decisions.
 
 ### 1. The todo checklist is pinned, not anchored
 
@@ -110,8 +116,8 @@ composer field remains the only well in the dock, which is correct.
 
 ### 4. `detached run` is a dock state that was never drawn
 
-**Contract today:** `spec-live-agent-steering/SPEC.md` requires it — *"no live handle in this process
-(detached) → a clear 'not steerable here'"* — but no earlier mockup rendered it.
+**Contract today:** `spec-agent-node-room` requires it (`engine-integration.md` §3) — *"no live handle
+in this process (detached) → a clear 'not steerable here'"* — but no earlier mockup rendered it.
 
 **Design:** state 8. Node pill stays `running`; no field, no controls; one disclosure line:
 `not steerable here · this run was started detached, so its live session is not in this process`.
@@ -467,10 +473,10 @@ Hard constraints from the specs:
 - The steering half is **not** retroactive: it needs the engine seam, three additive `metadata`
   fields (`origin`, `operator_user_id`, `message_id`) on a `.strict()` schema, a regenerated
   `api.generated`, and two new routes.
-- **Build order:** steering CAP-4 writes an operator row, and `AgentHistoryItem` has kinds
-  `assistant | tool | lifecycle` — an operator row is none of them. Open that change in
-  `spec-readable-agent-transcript` **first**. An operator `text` row must not reach a live transcript
-  until the reader recognizes `origin='operator'`, or it renders as agent text.
+- **Build order:** steering CAP-11 writes an operator row, and `AgentHistoryItem` has kinds
+  `assistant | tool | lifecycle` — an operator row is none of them. Because both halves are now one
+  spec (`spec-agent-node-room`), this is an **internal** ordering dependency: the read-half transcript
+  reader must recognize `origin='operator'` **first**, or an operator `text` row renders as agent text.
 - Strict TypeScript, no unjustified `any`, ESLint at zero warnings. `bun run validate` is the
   pre-PR gate. Comments and test names carry **no** plan or section references.
 
