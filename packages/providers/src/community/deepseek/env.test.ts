@@ -1,19 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
 import { buildDeepseekChildEnv } from './env';
-import { DeepseekProviderError } from './errors';
-
-function expectSubtype(fn: () => unknown, subtype: string): DeepseekProviderError {
-  try {
-    fn();
-  } catch (error) {
-    expect(error).toBeInstanceOf(DeepseekProviderError);
-    const typed = error as DeepseekProviderError;
-    expect(typed.subtype).toBe(subtype);
-    return typed;
-  }
-  throw new Error(`expected DeepseekProviderError(${subtype})`);
-}
 
 describe('buildDeepseekChildEnv', () => {
   test('request DEEPSEEK_API_KEY beats ambient DEEPSEEK_API_KEY', () => {
@@ -51,32 +38,14 @@ describe('buildDeepseekChildEnv', () => {
     expect(env.DEEPSEEK_BASE_URL).toBe('https://request.example/v1');
   });
 
-  test('throws deepseek_missing_api_key when the key is missing or empty', () => {
-    expectSubtype(
-      () =>
-        buildDeepseekChildEnv({
-          ambient: { PATH: '/usr/bin' },
-          permissionMode: 'workspace-write',
-        }),
-      'deepseek_missing_api_key'
-    );
-    expectSubtype(
-      () =>
-        buildDeepseekChildEnv({
-          ambient: { DEEPSEEK_API_KEY: '' },
-          permissionMode: 'workspace-write',
-        }),
-      'deepseek_missing_api_key'
-    );
-    expectSubtype(
-      () =>
-        buildDeepseekChildEnv({
-          ambient: { DEEPSEEK_API_KEY: 'ambient-key' },
-          request: { DEEPSEEK_API_KEY: '' },
-          permissionMode: 'workspace-write',
-        }),
-      'deepseek_missing_api_key'
-    );
+  test('allows DSH-managed credentials when DEEPSEEK_API_KEY is absent', () => {
+    const env = buildDeepseekChildEnv({
+      ambient: { PATH: '/usr/bin' },
+      permissionMode: 'workspace-write',
+    });
+    expect(env.PATH).toBe('/usr/bin');
+    expect(env.DSH_PERMISSION_MODE).toBe('workspace-write');
+    expect(Object.hasOwn(env, 'DEEPSEEK_API_KEY')).toBe(false);
   });
 
   test('default permission writes DSH_PERMISSION_MODE=workspace-write', () => {

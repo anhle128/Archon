@@ -111,7 +111,7 @@ describe('DeepseekProvider', () => {
     expect(dshCalled).toBe(false);
   });
 
-  test('missing API key yields one deepseek_missing_api_key result without resolving or spawning', async () => {
+  test('allows DSH-managed credentials without DEEPSEEK_API_KEY', async () => {
     const previous = process.env.DEEPSEEK_API_KEY;
     delete process.env.DEEPSEEK_API_KEY;
     try {
@@ -131,18 +131,11 @@ describe('DeepseekProvider', () => {
       });
 
       const chunks = await collect(provider.sendQuery('hi', '/repo'));
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toMatchObject({
-        type: 'result',
-        isError: true,
-        errorSubtype: 'deepseek_missing_api_key',
-      });
-      expect(chunks[0]?.type === 'result' ? chunks[0].errors?.[0] : undefined).toContain(
-        'DEEPSEEK_API_KEY'
-      );
-      expect(calls).toEqual([]);
-      expect(nodeCalled).toBe(false);
-      expect(dshCalled).toBe(false);
+      expect(chunks).toEqual(successChunks());
+      expect(calls).toHaveLength(1);
+      expect(Object.hasOwn(calls[0]?.env ?? {}, 'DEEPSEEK_API_KEY')).toBe(false);
+      expect(nodeCalled).toBe(true);
+      expect(dshCalled).toBe(true);
     } finally {
       if (previous === undefined) {
         delete process.env.DEEPSEEK_API_KEY;
@@ -172,6 +165,26 @@ describe('DeepseekProvider', () => {
     expect(calls[0]?.model).toBe('option-model');
     expect(calls[0]?.providerRoute).toBe('deepseek-official');
     expect(calls[0]?.profile).toBe('acp');
+  });
+
+  test('splits a provider-qualified model reference into the DSH route and model', async () => {
+    const calls: DeepseekProcessInput[] = [];
+    const provider = new DeepseekProvider({
+      runTurn: recordingRunner(calls),
+      resolveNodeBinary: () => '/stub/node',
+      resolveDshEntrypoint: () => '/stub/dsh.js',
+    });
+
+    await collect(
+      provider.sendQuery('hi', '/repo', undefined, {
+        model: 'qwen-token-plan/deepseek-v4-flash',
+        env: queryEnv(),
+      })
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.providerRoute).toBe('qwen-token-plan');
+    expect(calls[0]?.model).toBe('deepseek-v4-flash');
   });
 
   test('assistant providerRoute pairs with a request-level model', async () => {
