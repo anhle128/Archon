@@ -51,6 +51,8 @@ packages/docs-web/
 
 # Project documentation (don't auto-format)
 docs/
+claude-design/
+plans/260912-1405-agent-steering/mockup-live-interaction.html
 AGENTS.md
 CLAUDE.md
 README.md

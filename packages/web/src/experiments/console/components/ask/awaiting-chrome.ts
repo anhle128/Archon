@@ -29,10 +29,10 @@ export function firstAwaitingNodeId(nodes: readonly WorkflowNodeState[]): string
   return null;
 }
 
-export function firstPendingAskAwaitingNodeId(input: {
+export function firstPendingAskAwaitingInteraction(input: {
   pending: readonly PendingInteraction[];
   nodes: readonly WorkflowNodeState[];
-}): string | null {
+}): PendingInteraction | null {
   const awaitingNodeIds = new Set<string>();
   for (const node of input.nodes) {
     if (node.status === 'awaiting') {
@@ -46,10 +46,17 @@ export function firstPendingAskAwaitingNodeId(input: {
       interaction.status === 'pending' &&
       awaitingNodeIds.has(interaction.node_id)
     ) {
-      return interaction.node_id;
+      return interaction;
     }
   }
   return null;
+}
+
+export function firstPendingAskAwaitingNodeId(input: {
+  pending: readonly PendingInteraction[];
+  nodes: readonly WorkflowNodeState[];
+}): string | null {
+  return firstPendingAskAwaitingInteraction(input)?.node_id ?? null;
 }
 
 export function isAskHumanUnsupportedError(error: string | null | undefined): boolean {

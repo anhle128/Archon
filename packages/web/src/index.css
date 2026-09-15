@@ -293,6 +293,12 @@ body {
 
 .legacy-run-view,
 .console-run-view {
+  /* Graph node + tab typography */
+  --rv-node-kind-size: 0.625rem;
+  --rv-node-label-size: 0.8125rem;
+  --rv-node-meta-size: 0.6875rem;
+  --rv-tab-size: 0.6875rem;
+
   /* Agent message typography — matches mockup .pmsg-text */
   --rv-agent-font-size: 12.5px;
   --rv-agent-line-height: 1.5;

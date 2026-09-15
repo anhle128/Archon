@@ -43,8 +43,8 @@ nodes:
     depends_on:
       - setup
     effort: xhigh
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    provider: claude
+    model: "fable"
     context: fresh
 
   - id: clarify
@@ -118,7 +118,7 @@ nodes:
       3. Read <feature_directory>/clarification-questions.md. Confirm it
          exists and has `Status: PENDING`. If missing or already ARCHIVED,
          STOP and report BLOCKED — do NOT fabricate questions.
-      4. trigger clarification-answer-review skill
+      4. trigger speckit-clarification-answer-review skill
     depends_on:
       - clarify-file-check
     when: "$clarify-file-check.output == 'HAS_QUESTIONS'"
@@ -301,12 +301,12 @@ nodes:
       3. Read `<feature_directory>/spec.md` for context.
       4. If there is a grill-me reference, read it and follow all decisions.
 
-      5. trigger red-team-answer-review skill
+      5. trigger speckit-red-team-answer-review skill
     depends_on:
       - red-team
     effort: xhigh
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    provider: codex
+    model: "gpt-5.6-sol"
     context: fresh
 
   - id: red-team-gate
@@ -409,8 +409,8 @@ nodes:
     effort: xhigh
     model: sonnet
     context: fresh
-
     skills: [speckit-red-team-apply]
+
   - id: plan
     prompt: |
       Read .specify/feature.json to resolve <feature_directory>, then run:
@@ -418,8 +418,8 @@ nodes:
     depends_on:
       - red-team-apply
     effort: xhigh
-    provider: omp
-    model: "xai-oauth/grok-4.6"
+    provider: codex
+    model: "gpt-6-astra"
     context: fresh
 
   - id: tasks
@@ -429,8 +429,8 @@ nodes:
     depends_on:
       - plan
     effort: xhigh
-    provider: codex
-    model: "gpt-5.6-sol"
+    provider: omp
+    model: "xai-oauth/grok-4.6"
     context: fresh
 
   - id: analyze
@@ -633,12 +633,12 @@ nodes:
         jq -e '[.userStories[].tasks[]? | select(.passes==false)] | length == 0' "$RLN_PRD" >/dev/null 2>&1
     depends_on:
       - ralph-native-preflight
+    effort: high
+    provider: grok
+    model: grok-4.5
     # effort: xhigh
-    # provider: omp
-    # model: xai-oauth/grok-4.5
-    effort: xhigh
-    provider: codex
-    model: gpt-5.6-terra
+    # provider: codex
+    # model: gpt-5.6-terra
 
   - id: ralph-sync-back
     prompt: |
@@ -646,9 +646,9 @@ nodes:
       /speckit.ralph-loop.sync-back <feature_directory>
     depends_on:
       - ralph-loop-run
-    provider: codex
+    provider: omp
     effort: medium
-    model: gpt-5.6-terra
+    model: xai-oauth/grok-4.5
     context: fresh
 
   - id: speckit-converge
@@ -849,7 +849,7 @@ nodes:
     depends_on: [update-bmad-sprint-status]
     context: fresh
     provider: omp
-    model: cursor/gemini-3.8-flash  
+    model: cursor/composer-2.5  
     effort: hight
     idle_timeout: 900000
     output_type: pull-request

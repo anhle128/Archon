@@ -2,14 +2,25 @@
  * Console-owned inspect room: one persistent surface for every Story 5.5
  * node body, with Ask cards inline at agent tool invocations.
  */
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
-import rehypeHighlight from 'rehype-highlight';
-import remarkBreaks from 'remark-breaks';
-import remarkGfm from 'remark-gfm';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+  type UIEvent,
+} from 'react';
+import { buildAgentHistory, type AgentHistoryItem } from '@/lib/agent-history';
+import { buildExecutionHeader, type ExecutionHeaderModel } from '@/lib/execution-room-model';
+import {
+  beginNodeMessageRefresh,
+  createNodeMessageState,
+  drainNodeMessages,
+  nodeMessageScopeKey,
+  type NodeMessageState,
+} from '@/lib/node-message-pages';
+import { createScrollFollow, jumpToLatest, onRoomScroll } from '@/lib/room-scroll-follow';
 
-import { formatToolIo, projectToolTranscript } from '@/lib/pair-tool-transcript';
-import { projectTextTranscript } from '@/lib/project-text-transcript';
 import type { Run } from '../primitives/run';
 import type {
   AskAnswerBody,
@@ -19,17 +30,18 @@ import type {
   WorkflowNodeMessagesResponse,
   WorkflowNodeState,
 } from '../skills/runs';
-import { submitRunReviewFeedback } from '../skills/runs';
+import { getNodeMessage, submitRunReviewFeedback } from '../skills/runs';
 import type { DagNode } from '../skills/workflows';
-import { useEntity } from '../store/cache';
-import { K } from '../store/keys';
 import { ApprovalPanel } from './ApprovalPanel';
 import { ConsoleAskCard, ConsoleInvalidAskCard } from './ask/ConsoleAskCard';
 import type { AskActionStateByRequest } from './ask/ask-answer-controller';
 import { resolveAskCardPresentation } from './ask/ask-card-presentation';
-import { parseAskEnvelope } from './ask/parse-ask-envelope';
+import { parseAskEnvelope, type AskDraft, type AskDraftByRequest } from './ask/parse-ask-envelope';
 import { selectVisibleNodeAskInteractions } from './ask/select-visible-node-ask-interactions';
+import { UNSCOPED_INTERACTION_LIMITATION } from './inspect/execution-interactions';
 import type { LogRow } from './inspect/build-log-rows';
+import { ConsoleAgentHistoryList } from './inspect/ConsoleAgentHistoryList';
+import { ConsoleRoomHeader, type ConsoleExecutionHeaderOption } from './inspect/ConsoleRoomHeader';
 import { inspectStatusLabel } from './inspect/inspect-status';
 import { resolveRoomKind, type RoomKind, type RoomResolution } from './inspect/resolve-room-kind';
 import { selectNodeRoomMessages } from './inspect/select-node-room-messages';
@@ -59,59 +71,34 @@ export interface ConsoleNodeRoomProps {
   loadMessages: (
     runId: string,
     nodeId: string,
-    options?: { occurrenceId?: string; attemptId?: string }
+    options?: {
+      afterSeq?: number;
+      limit?: number;
+      occurrenceId?: string;
+      attemptId?: string;
+      signal?: AbortSignal;
+    }
   ) => Promise<WorkflowNodeMessagesResponse>;
+  loadMessage?: typeof getNodeMessage;
   onClose: () => void;
   pendingInteractions: readonly PendingInteraction[];
+  ownsUnscopedInteractions: boolean;
   viewerIsStarter: boolean;
   starterDisplayName: string | null;
   actionStates: AskActionStateByRequest;
   onSubmitAsk: (requestId: string, body: AskAnswerBody) => Promise<void>;
+  headerModel?: ExecutionHeaderModel | null;
+  headerOptions?: readonly ConsoleExecutionHeaderOption[];
+  onSelectRow?: (rowId: string) => void;
+  showToolCalls?: boolean;
+  showSystem?: boolean;
+  closeLabel?: 'Close' | 'Back';
+  scopeKey?: string;
+  initialScrollTop?: number;
+  onScrollTopChange?: (scrollTop: number) => void;
+  askDrafts?: AskDraftByRequest;
+  onAskDraftChange?: (requestId: string, draft: AskDraft) => void;
 }
-
-const IDLE_NODE_MESSAGES_KEY = 'console-node-room:idle';
-
-const REMARK_PLUGINS = [remarkGfm, remarkBreaks];
-const REHYPE_PLUGINS = [rehypeHighlight];
-
-const MARKDOWN_COMPONENTS: Components = {
-  pre: ({ children, ...props }) => (
-    <pre
-      className="overflow-x-auto rounded-lg border border-border bg-surface-inset p-3 font-mono text-[12px]"
-      {...props}
-    >
-      {children}
-    </pre>
-  ),
-  code: ({ children, className, ...props }) => {
-    const isBlock = className?.startsWith('language-') || className?.startsWith('hljs');
-    if (isBlock) {
-      return (
-        <code className={className} {...props}>
-          {children}
-        </code>
-      );
-    }
-    return (
-      <code
-        className="rounded bg-surface-inset px-1 py-[1px] font-mono text-[12px] text-text-primary"
-        {...props}
-      >
-        {children}
-      </code>
-    );
-  },
-  a: ({ children, ...props }) => (
-    <a
-      className="text-primary underline decoration-primary/40 hover:decoration-primary"
-      target="_blank"
-      rel="noopener noreferrer"
-      {...props}
-    >
-      {children}
-    </a>
-  ),
-};
 
 const ROUTE_FIELDS = [
   ['Outcome', 'outcome'],
@@ -144,13 +131,8 @@ function inspectRow(
     order: 0,
     sourceIndex: 0,
     selection: { kind: 'node' },
+    unknownScope: true,
   };
-}
-
-function selectionExtra(row: LogRow): string | null {
-  if (row.selection.kind === 'loop_iteration') return `×${String(row.selection.iteration)}`;
-  if (row.selection.kind === 'route_iteration') return `#${String(row.selection.executionSeq)}`;
-  return null;
 }
 
 function RoomPlaceholder({ children }: { children: string }): ReactElement {
@@ -166,124 +148,10 @@ function RoomRegion({ nodeId, children }: { nodeId: string; children: ReactNode 
     <section
       role="region"
       aria-label={nodeId + ' room'}
-      className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       {children}
     </section>
-  );
-}
-
-function RoomHeader({
-  nodeId,
-  label,
-  status,
-  extra,
-  onClose,
-}: {
-  nodeId: string | null;
-  label: string;
-  status: string;
-  extra: string | null;
-  onClose: () => void;
-}): ReactElement {
-  return (
-    <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
-      <div className="min-w-0">
-        <p className="truncate text-[13px] font-medium text-text-primary">{label}</p>
-        {nodeId !== null ? (
-          <p className="truncate font-mono text-[11px] text-text-tertiary">{nodeId}</p>
-        ) : null}
-        {status !== '' ? <p className="text-[11px] text-text-secondary">{status}</p> : null}
-        {extra !== null ? <p className="text-[11px] text-text-secondary">{extra}</p> : null}
-      </div>
-      <button
-        type="button"
-        onClick={onClose}
-        className="shrink-0 rounded px-2 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-      >
-        Close
-      </button>
-    </header>
-  );
-}
-
-function AgentTranscript({
-  messages,
-  renderAfterMessage,
-  renderAtEnd,
-}: {
-  messages: readonly WorkflowNodeMessage[];
-  renderAfterMessage?: (message: WorkflowNodeMessage) => ReactNode;
-  renderAtEnd?: ReactNode;
-}): ReactElement {
-  if (messages.length === 0) {
-    return renderAtEnd === undefined ? (
-      <RoomPlaceholder>Node hasn't produced output</RoomPlaceholder>
-    ) : (
-      <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">{renderAtEnd}</div>
-    );
-  }
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
-      {projectToolTranscript(projectTextTranscript(messages)).map(item => {
-        if (item.kind === 'tool-card') {
-          const outcomeParts: string[] = [];
-          if (item.pending) outcomeParts.push('pending');
-          else {
-            if (item.outcome !== undefined) outcomeParts.push(item.outcome);
-            if (item.exitCode !== undefined) outcomeParts.push(`exit ${String(item.exitCode)}`);
-            if (item.truncated === true || item.outputState === 'truncated') {
-              outcomeParts.push('truncated');
-            }
-            if (item.outputState === 'missing') outcomeParts.push('missing output');
-          }
-          return (
-            <div key={item.id}>
-              <div className="ptool rounded-[var(--radius)] border border-border bg-surface-inset px-2.5 py-2">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-[11.5px] font-bold text-accent-bright">{item.name}</span>
-                  {outcomeParts.length > 0 ? (
-                    <span className="text-[11px] text-text-secondary">
-                      {outcomeParts.join(' · ')}
-                    </span>
-                  ) : null}
-                </div>
-                {item.input !== undefined ? (
-                  <div className="mt-1.5">
-                    <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
-                      Input
-                    </div>
-                    <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
-                      {formatToolIo(item.input)}
-                    </pre>
-                  </div>
-                ) : null}
-                {item.output !== undefined ? (
-                  <div className="mt-1.5">
-                    <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
-                      Output
-                    </div>
-                    <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
-                      {formatToolIo(item.output)}
-                    </pre>
-                  </div>
-                ) : item.pending ? (
-                  <div className="mt-1.5 text-[11px] text-text-secondary">Output unavailable</div>
-                ) : null}
-              </div>
-              {item.messages.map(message => renderAfterMessage?.(message))}
-            </div>
-          );
-        }
-        return (
-          <div key={item.message.id}>
-            {renderTranscriptItem(item.message)}
-            {renderAfterMessage?.(item.message)}
-          </div>
-        );
-      })}
-      {renderAtEnd}
-    </div>
   );
 }
 
@@ -295,64 +163,6 @@ function collectToolIds(messages: readonly WorkflowNodeMessage[]): Set<string> {
     }
   }
   return ids;
-}
-
-function renderTranscriptItem(message: WorkflowNodeMessage): ReactElement {
-  switch (message.kind) {
-    case 'text':
-      return (
-        <div className="max-w-none text-[13px] text-text-primary">
-          <ReactMarkdown
-            remarkPlugins={REMARK_PLUGINS}
-            rehypePlugins={REHYPE_PLUGINS}
-            components={MARKDOWN_COMPONENTS}
-          >
-            {message.payload.text}
-          </ReactMarkdown>
-        </div>
-      );
-    case 'tool': {
-      const { name, input, output } = message.payload;
-      return (
-        <div className="ptool rounded-[var(--radius)] border border-border bg-surface-inset px-2.5 py-2">
-          <div className="flex items-baseline gap-2">
-            <span className="text-[11.5px] font-bold text-accent-bright">{name}</span>
-          </div>
-          {input !== undefined ? (
-            <div className="mt-1.5">
-              <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
-                Input
-              </div>
-              <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
-                {formatToolIo(input)}
-              </pre>
-            </div>
-          ) : null}
-          {output !== undefined ? (
-            <div className="mt-1.5">
-              <div className="mb-0.5 text-[9.5px] uppercase tracking-[0.06em] text-text-tertiary">
-                Output
-              </div>
-              <pre className="m-0 whitespace-pre-wrap break-words font-mono text-[11px] text-text-secondary">
-                {formatToolIo(output)}
-              </pre>
-            </div>
-          ) : null}
-        </div>
-      );
-    }
-    case 'status': {
-      const { state, detail } = message.payload;
-      return (
-        <p className="text-[11px] text-text-secondary">
-          {inspectStatusLabel(state)}
-          {detail ? ` ${detail}` : ''}
-        </p>
-      );
-    }
-    default:
-      return assertNever(message);
-  }
 }
 
 function StdoutBody({ stdout }: { stdout: StdoutView }): ReactElement {
@@ -605,6 +415,24 @@ function isAgentKind(kind: RoomKind | undefined): boolean {
   return kind === 'agent';
 }
 
+function selectionFromRow(
+  row: LogRow
+):
+  | { kind: 'occurrence'; occurrenceId: string; attemptId?: string }
+  | { kind: 'node'; rowId: string } {
+  if (row.selection.kind === 'occurrence') {
+    const selection: { kind: 'occurrence'; occurrenceId: string; attemptId?: string } = {
+      kind: 'occurrence',
+      occurrenceId: row.selection.occurrenceId,
+    };
+    if (row.selection.attemptId !== undefined) {
+      selection.attemptId = row.selection.attemptId;
+    }
+    return selection;
+  }
+  return { kind: 'node', rowId: row.id };
+}
+
 export function ConsoleNodeRoom({
   run,
   projectId,
@@ -617,57 +445,179 @@ export function ConsoleNodeRoom({
   approval,
   isLive,
   loadMessages,
+  loadMessage = getNodeMessage,
   onClose,
   pendingInteractions,
+  ownsUnscopedInteractions,
   viewerIsStarter,
   starterDisplayName,
   actionStates,
   onSubmitAsk,
+  headerModel,
+  headerOptions,
+  onSelectRow,
+  showToolCalls = true,
+  showSystem = true,
+  closeLabel = 'Close',
+  scopeKey,
+  initialScrollTop,
+  onScrollTopChange,
+  askDrafts = {},
+  onAskDraftChange,
 }: ConsoleNodeRoomProps): ReactElement {
   const resolution =
     nodeId === null ? null : resolveRoomKind(nodeId, definitionNodes, events, approval);
   const waitingOnDefinition = definitionPending && isUnknownAgentFallback(resolution);
   const agentActive = nodeId !== null && isAgentKind(resolution?.kind) && !waitingOnDefinition;
   const row = nodeId === null ? null : inspectRow(nodeId, selectedRow, nodeStates);
-  const occurrenceId =
-    row?.selection.kind === 'occurrence' ? row.selection.occurrenceId : undefined;
-  const attemptId = row?.selection.kind === 'occurrence' ? row.selection.attemptId : undefined;
-  const messagesKey =
-    agentActive && nodeId !== null
-      ? `${K.nodeMessages(run.id, nodeId)}:${occurrenceId ?? ''}:${attemptId ?? ''}`
-      : IDLE_NODE_MESSAGES_KEY;
-  const messagesQuery = useEntity<WorkflowNodeMessagesResponse>(messagesKey, () => {
-    if (agentActive && nodeId !== null) {
-      return loadMessages(run.id, nodeId, { occurrenceId, attemptId });
-    }
-    return Promise.resolve({ messages: [] });
-  });
-  const refetchRef = useRef(messagesQuery.refetch);
-  refetchRef.current = messagesQuery.refetch;
+  const resolvedScopeKey =
+    scopeKey ??
+    (row === null
+      ? 'run:none|node:none|sel:node:none'
+      : nodeMessageScopeKey(run.id, row.nodeId, selectionFromRow(row)));
+  const [pageState, setPageState] = useState<NodeMessageState>(() =>
+    createNodeMessageState(resolvedScopeKey)
+  );
+  const [follow, setFollow] = useState(() =>
+    createScrollFollow(row?.status ?? 'completed', initialScrollTop)
+  );
+  const [retryNonce, setRetryNonce] = useState(0);
+  const pageStateRef = useRef(pageState);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const loadMessagesRef = useRef(loadMessages);
+  const prevScopeRef = useRef(resolvedScopeKey);
+  pageStateRef.current = pageState;
+  loadMessagesRef.current = loadMessages;
+
+  const nodeKey = row?.nodeId ?? null;
+  const rowId = row?.id ?? null;
+  const rowStatus = row?.status ?? 'completed';
 
   useEffect(() => {
-    if (!isLive || !agentActive) return undefined;
-    const handle = globalThis.setInterval(() => {
-      refetchRef.current();
-    }, 1000);
-    return (): void => {
-      globalThis.clearInterval(handle);
+    if (prevScopeRef.current !== resolvedScopeKey) {
+      prevScopeRef.current = resolvedScopeKey;
+      setPageState(createNodeMessageState(resolvedScopeKey));
+      setFollow(createScrollFollow(rowStatus, initialScrollTop));
+    }
+  }, [initialScrollTop, rowStatus, resolvedScopeKey]);
+
+  useEffect(() => {
+    if (!agentActive || rowId === null || nodeKey === null || row === null) {
+      return;
+    }
+    const controller = new AbortController();
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const selection = selectionFromRow(row);
+
+    const runDrain = async (state: NodeMessageState): Promise<void> => {
+      if (cancelled) return;
+      const seeded =
+        state.scopeKey === resolvedScopeKey
+          ? { ...state, loading: true }
+          : createNodeMessageState(resolvedScopeKey);
+      if (!cancelled) setPageState(seeded);
+      const next = await drainNodeMessages({
+        runId: run.id,
+        nodeId: nodeKey,
+        selection,
+        loader: loadMessagesRef.current,
+        signal: controller.signal,
+        state: seeded,
+        onState: (updated): void => {
+          if (!cancelled) setPageState(updated);
+        },
+      });
+      if (cancelled || controller.signal.aborted) return;
+      if (isLive && next.error === null) {
+        timer = setTimeout(() => {
+          void runDrain(beginNodeMessageRefresh(next));
+        }, 1000);
+      }
     };
-  }, [isLive, agentActive, messagesKey]);
 
-  const headerLabel = row?.label ?? (nodeId === null ? 'Select a node' : nodeId);
-  const headerStatus = row === null ? '' : inspectStatusLabel(row.status);
-  const headerExtra = row === null ? null : selectionExtra(row);
+    const startState =
+      pageStateRef.current.scopeKey === resolvedScopeKey
+        ? beginNodeMessageRefresh(pageStateRef.current)
+        : createNodeMessageState(resolvedScopeKey);
+    void runDrain(startState);
 
-  const allMessages = messagesQuery.error === undefined ? (messagesQuery.data?.messages ?? []) : [];
+    return (): void => {
+      cancelled = true;
+      controller.abort();
+      if (timer !== undefined) clearTimeout(timer);
+      const el = scrollRef.current;
+      if (el !== null) onScrollTopChange?.(el.scrollTop);
+    };
+  }, [
+    agentActive,
+    isLive,
+    nodeKey,
+    onScrollTopChange,
+    resolvedScopeKey,
+    retryNonce,
+    row,
+    rowId,
+    run.id,
+  ]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    if (follow.pinToBottom) {
+      el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      return;
+    }
+    if (follow.scrollTop !== null) {
+      el.scrollTop = follow.scrollTop;
+    }
+  }, [follow, pageState.rows.length]);
+
+  const computedHeader: ExecutionHeaderModel | null =
+    headerModel ??
+    (row === null
+      ? null
+      : buildExecutionHeader({
+          row: {
+            id: row.id,
+            nodeId: row.nodeId,
+            label: row.label,
+            status: row.status,
+            order: row.order,
+            selection: row.selection,
+            startedAt: row.startedAt,
+            durationMs: row.durationMs,
+            startedOffsetMs: row.startedOffsetMs,
+            unknownScope: row.unknownScope,
+          },
+          events,
+          runStartedAt: run.startedAt,
+        }));
+  const computedOptions: readonly ConsoleExecutionHeaderOption[] =
+    headerOptions ??
+    (computedHeader === null || row === null
+      ? []
+      : [{ rowId: row.id, label: computedHeader.executionLabel }]);
+
+  const allMessages = pageState.rows;
   const visibleMessages = row === null ? [] : selectNodeRoomMessages(allMessages, row.selection);
+  const items: AgentHistoryItem[] =
+    row === null
+      ? []
+      : buildAgentHistory({
+          rows: visibleMessages,
+          events,
+          nodeId: row.nodeId,
+        });
   const visibleAsks =
     row !== null && resolution?.kind === 'agent'
       ? selectVisibleNodeAskInteractions({
           pending: pendingInteractions,
           nodeId: row.nodeId,
+          selection: row.selection,
           allMessages,
           visibleMessages,
+          ownsUnscopedInteractions,
         })
       : [];
   const visibleToolIds = collectToolIds(visibleMessages);
@@ -705,44 +655,82 @@ export function ConsoleNodeRoom({
 
   const renderAskCard = (interaction: PendingInteraction): ReactElement => {
     const questions = parseAskEnvelope(interaction.envelope);
+    const limitation =
+      interaction.execution_scope == null ? (
+        <p className="text-xs text-warning">{UNSCOPED_INTERACTION_LIMITATION}</p>
+      ) : null;
     if (questions === null) {
       return (
-        <ConsoleInvalidAskCard
-          key={interaction.id}
-          interaction={interaction}
-          agentDisplayName={agentDisplayName}
-          nodeId={roomNodeId}
-        />
+        <div key={interaction.id}>
+          {limitation}
+          <ConsoleInvalidAskCard
+            interaction={interaction}
+            agentDisplayName={agentDisplayName}
+            nodeId={roomNodeId}
+          />
+        </div>
       );
     }
     const requestId = interaction.tool_use_id;
     return (
-      <ConsoleAskCard
-        key={interaction.id}
-        interaction={interaction}
-        questions={questions}
-        presentation={resolveAskCardPresentation({
-          interaction,
-          action: actionStates[requestId],
-          nodeStatus: selectedNodeState?.status,
-          nodeError: selectedNodeState?.error,
-        })}
-        viewerIsStarter={viewerIsStarter}
-        starterDisplayName={starterDisplayName}
-        agentDisplayName={agentDisplayName}
-        nodeId={roomNodeId}
-        autoFocus={interaction.id === firstActionableId}
-        nowMs={nowMs}
-        mountContext="room"
-        onSubmit={(body): void => {
-          void onSubmitAsk(requestId, body);
-        }}
-        onDecline={(): void => {
-          void onSubmitAsk(requestId, { decline: true });
-        }}
-      />
+      <div key={interaction.id}>
+        {limitation}
+        <ConsoleAskCard
+          interaction={interaction}
+          questions={questions}
+          presentation={resolveAskCardPresentation({
+            interaction,
+            action: actionStates[requestId],
+            nodeStatus: selectedNodeState?.status,
+            nodeError: selectedNodeState?.error,
+          })}
+          viewerIsStarter={viewerIsStarter}
+          starterDisplayName={starterDisplayName}
+          agentDisplayName={agentDisplayName}
+          nodeId={roomNodeId}
+          autoFocus={interaction.id === firstActionableId}
+          nowMs={nowMs}
+          mountContext="room"
+          draft={askDrafts[requestId] ?? {}}
+          onDraftChange={(next): void => {
+            onAskDraftChange?.(requestId, next);
+          }}
+          onSubmit={(body): void => {
+            void onSubmitAsk(requestId, body);
+          }}
+          onDecline={(): void => {
+            void onSubmitAsk(requestId, { decline: true });
+          }}
+        />
+      </div>
     );
   };
+
+  const handleScroll = (event: UIEvent<HTMLDivElement>): void => {
+    const target = event.currentTarget;
+    const next = onRoomScroll(follow, {
+      scrollTop: target.scrollTop,
+      scrollHeight: target.scrollHeight,
+      clientHeight: target.clientHeight,
+    });
+    setFollow(next);
+    onScrollTopChange?.(target.scrollTop);
+  };
+
+  const handleJump = (): void => {
+    const el = scrollRef.current;
+    setFollow(jumpToLatest(follow));
+    if (el !== null) {
+      el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+      onScrollTopChange?.(el.scrollTop);
+    }
+  };
+
+  const waitingForFirstPage =
+    agentActive &&
+    pageState.rows.length === 0 &&
+    pageState.error === null &&
+    (pageState.loading || !pageState.complete);
 
   let body: ReactNode;
   if (nodeId === null || resolution === null || row === null) {
@@ -750,16 +738,38 @@ export function ConsoleNodeRoom({
   } else if (waitingOnDefinition) {
     body = <RoomPlaceholder>Loading workflow definition</RoomPlaceholder>;
   } else if (resolution.kind === 'agent') {
-    if (messagesQuery.error !== undefined) {
+    const history = (
+      <ConsoleAgentHistoryList
+        items={items}
+        showToolCalls={showToolCalls}
+        showSystem={showSystem}
+        unknownScope={row.unknownScope === true}
+        onLoadFullOutput={async (item): Promise<unknown> => {
+          const message = await loadMessage(run.id, row.nodeId, item.messageId);
+          return message.kind === 'tool' ? message.payload.output : undefined;
+        }}
+        renderAfterItem={(item): ReactNode => {
+          if (item.kind !== 'tool') return null;
+          const matching = anchoredAsks.filter(
+            interaction => interaction.tool_use_id === item.toolUseId
+          );
+          if (matching.length === 0) return null;
+          return matching.map(renderAskCard);
+        }}
+        renderAtEnd={unanchoredAsks.length === 0 ? undefined : unanchoredAsks.map(renderAskCard)}
+      />
+    );
+    if (pageState.error !== null && items.length === 0) {
       body = (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-[13px] text-text-secondary">
             <p>Failed to load node transcript</p>
+            {pageState.error.length > 0 ? <p>{pageState.error}</p> : null}
             <button
               type="button"
               className="text-[12px] text-primary transition-colors hover:text-accent-bright"
               onClick={(): void => {
-                messagesQuery.refetch();
+                setRetryNonce(value => value + 1);
               }}
             >
               Retry
@@ -770,22 +780,28 @@ export function ConsoleNodeRoom({
           )}
         </div>
       );
-    } else if (messagesQuery.loading || messagesQuery.data === undefined) {
+    } else if (waitingForFirstPage) {
       body = <RoomPlaceholder>Loading node transcript</RoomPlaceholder>;
-    } else {
+    } else if (pageState.error !== null) {
       body = (
-        <AgentTranscript
-          messages={visibleMessages}
-          renderAfterMessage={(message: WorkflowNodeMessage): ReactNode =>
-            message.kind === 'tool'
-              ? anchoredAsks
-                  .filter(interaction => interaction.tool_use_id === message.payload.id)
-                  .map(renderAskCard)
-              : undefined
-          }
-          renderAtEnd={unanchoredAsks.length === 0 ? undefined : unanchoredAsks.map(renderAskCard)}
-        />
+        <div className="flex min-h-0 flex-1 flex-col">
+          {history}
+          <div className="flex items-center justify-center gap-2 px-4 py-3 text-center text-[13px] text-text-secondary">
+            <p>Failed to load node transcript</p>
+            <button
+              type="button"
+              className="text-[12px] text-primary transition-colors hover:text-accent-bright"
+              onClick={(): void => {
+                setRetryNonce(value => value + 1);
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
       );
+    } else {
+      body = history;
     }
   } else if (resolution.kind === 'stdout') {
     body = <StdoutBody stdout={selectNodeStdout(events, row)} />;
@@ -832,16 +848,43 @@ export function ConsoleNodeRoom({
     body = assertNever(resolution.kind);
   }
 
+  const header =
+    computedHeader === null ? null : (
+      <ConsoleRoomHeader
+        model={computedHeader}
+        options={computedOptions}
+        selectedRowId={row?.id ?? computedOptions[0]?.rowId ?? ''}
+        onSelectRow={(rowIdValue: string): void => {
+          onSelectRow?.(rowIdValue);
+        }}
+        onClose={onClose}
+        closeLabel={closeLabel}
+      />
+    );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-surface">
-      <RoomHeader
-        nodeId={nodeId}
-        label={headerLabel}
-        status={headerStatus}
-        extra={headerExtra}
-        onClose={onClose}
-      />
-      {nodeId === null ? body : <RoomRegion nodeId={nodeId}>{body}</RoomRegion>}
+      {header}
+      {nodeId === null ? (
+        body
+      ) : (
+        <RoomRegion nodeId={nodeId}>
+          <div
+            ref={scrollRef}
+            data-testid="console-node-room-scroll"
+            className="min-h-0 flex-1 overflow-y-auto"
+            style={{ overflowWrap: 'anywhere' }}
+            onScroll={handleScroll}
+          >
+            {body}
+          </div>
+          {!follow.follow && (rowStatus === 'running' || rowStatus === 'awaiting') ? (
+            <button type="button" className="px-3 py-2 text-xs text-primary" onClick={handleJump}>
+              Jump to latest
+            </button>
+          ) : null}
+        </RoomRegion>
+      )}
     </div>
   );
 }

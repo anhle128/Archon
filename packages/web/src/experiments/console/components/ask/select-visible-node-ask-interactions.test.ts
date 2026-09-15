@@ -51,10 +51,36 @@ describe('selectVisibleNodeAskInteractions', () => {
         interaction({ id: 'other-node', node_id: 'ship', tool_use_id: 'tool-1' }),
       ],
       nodeId: 'review',
+      selection: { kind: 'node' },
       allMessages: all,
       visibleMessages: all,
+      ownsUnscopedInteractions: true,
     });
     expect(selected.map(item => item.id)).toEqual(['ask-1', 'answered']);
+  });
+
+  test('keeps a scoped Ask out of a different occurrence room', () => {
+    const scoped = interaction({
+      tool_use_id: 'tool-missing',
+      execution_scope: {
+        occurrence_id: '11111111-1111-4111-8111-111111111111',
+        attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    });
+    expect(
+      selectVisibleNodeAskInteractions({
+        pending: [scoped],
+        nodeId: 'review',
+        selection: {
+          kind: 'occurrence',
+          occurrenceId: '22222222-2222-4222-8222-222222222222',
+          attemptId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        },
+        allMessages: [],
+        visibleMessages: [],
+        ownsUnscopedInteractions: true,
+      })
+    ).toEqual([]);
   });
 
   test('does not leak an anchored Ask into a different loop slice', () => {
@@ -64,8 +90,10 @@ describe('selectVisibleNodeAskInteractions', () => {
       selectVisibleNodeAskInteractions({
         pending: [interaction({ tool_use_id: 'tool-1' })],
         nodeId: 'review',
+        selection: { kind: 'node' },
         allMessages: [first, second],
         visibleMessages: [second],
+        ownsUnscopedInteractions: true,
       })
     ).toEqual([]);
   });
@@ -78,24 +106,57 @@ describe('selectVisibleNodeAskInteractions', () => {
       selectVisibleNodeAskInteractions({
         pending: [current],
         nodeId: 'review',
+        selection: { kind: 'node' },
         allMessages: [first, last],
         visibleMessages: [first],
+        ownsUnscopedInteractions: true,
       })
     ).toEqual([]);
     expect(
       selectVisibleNodeAskInteractions({
         pending: [current],
         nodeId: 'review',
+        selection: { kind: 'node' },
         allMessages: [first, last],
         visibleMessages: [last],
+        ownsUnscopedInteractions: true,
       }).map(item => item.id)
     ).toEqual(['ask-1']);
     expect(
       selectVisibleNodeAskInteractions({
         pending: [current],
         nodeId: 'review',
+        selection: { kind: 'node' },
         allMessages: [],
         visibleMessages: [],
+        ownsUnscopedInteractions: true,
+      }).map(item => item.id)
+    ).toEqual(['ask-1']);
+  });
+
+  test('assigns an unscoped Ask only to the latest execution when pages are scope-filtered', () => {
+    const scopedPage = [message('m1', 1, 'tool', 'tool-1')];
+    const common = {
+      pending: [interaction()],
+      nodeId: 'review',
+      selection: {
+        kind: 'occurrence' as const,
+        occurrenceId: '11111111-1111-4111-8111-111111111111',
+        attemptId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+      allMessages: scopedPage,
+      visibleMessages: scopedPage,
+    };
+    expect(
+      selectVisibleNodeAskInteractions({
+        ...common,
+        ownsUnscopedInteractions: false,
+      })
+    ).toEqual([]);
+    expect(
+      selectVisibleNodeAskInteractions({
+        ...common,
+        ownsUnscopedInteractions: true,
       }).map(item => item.id)
     ).toEqual(['ask-1']);
   });

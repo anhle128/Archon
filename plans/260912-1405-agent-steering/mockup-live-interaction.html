@@ -1,0 +1,342 @@
+<title>Live Agent Steering</title>
+<style>
+/*
+ * MOCKUP — interacting with a RUNNING agent from its node room.
+ * Tokens mirror packages/web/src/index.css. Research basis: aion (agentic-os-aionui +
+ * agentic-os-aioncore) and the Claude Agent SDK docs; see
+ * plans/reports/aionscout-260912-aion-live-interaction.md
+ */
+:root {
+  --background: oklch(0.14 0.005 260); --surface: oklch(0.18 0.008 260);
+  --surface-elevated: oklch(0.22 0.01 260); --surface-inset: oklch(0.12 0.005 260);
+  --surface-hover: oklch(0.24 0.01 260); --border: oklch(0.28 0.01 260); --border-bright: oklch(0.35 0.015 260);
+  --text-primary: oklch(0.93 0.005 260); --text-secondary: oklch(0.65 0.01 260); --text-tertiary: oklch(0.45 0.01 260);
+  --accent-bright: oklch(0.72 0.18 250); --success: oklch(0.65 0.17 155);
+  --warning: oklch(0.75 0.15 75); --error: oklch(0.6 0.2 25);
+  --node-command: oklch(0.62 0.18 250); --node-prompt: oklch(0.58 0.19 290); --node-bash: oklch(0.75 0.15 75);
+  --node-approval: oklch(0.72 0.17 40);
+  --radius: 0.625rem;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--background); color: var(--text-primary); font-family: var(--font-sans); font-size: 13px; padding: 26px 30px 90px; }
+h1 { font-size: 19px; margin: 0 0 6px; letter-spacing: -0.01em; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--text-tertiary); margin: 40px 0 10px; display: flex; align-items: center; gap: 10px; }
+h2::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.sub { color: var(--text-secondary); font-size: 12.5px; margin: 0 0 10px; max-width: 84ch; line-height: 1.55; }
+.note { color: var(--text-tertiary); font-size: 11.5px; font-style: italic; margin: 6px 0 0; max-width: 84ch; line-height: 1.5; }
+.cap { font-size: 11px; color: var(--text-tertiary); margin: 0 0 6px; }
+code { font-family: var(--font-mono); font-size: 0.92em; color: var(--text-secondary); }
+
+/* room */
+.room { max-width: 880px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.room-hd { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; border-bottom: 1px solid var(--border); background: var(--surface-elevated); }
+.type-pill { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; padding: 2px 7px; border-radius: 999px; color: var(--node-prompt); border: 1px solid color-mix(in oklch, var(--node-prompt) 45%, transparent); }
+.ph-name { font-family: var(--font-mono); font-size: 12.5px; }
+.node-badge { font-size: 10.5px; padding: 2px 8px; border-radius: 999px; color: var(--accent-bright); border: 1px solid color-mix(in oklch, var(--accent-bright) 45%, transparent); display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-bright); display: inline-block; }
+.stopbtn { margin-left: auto; min-height: 24px; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 11px; font-family: var(--font-mono); background: transparent; border: 1px solid color-mix(in oklch, var(--error) 50%, transparent); color: var(--error); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+.stopbtn:hover { background: color-mix(in oklch, var(--error) 12%, transparent); }
+.stopbtn:focus-visible { outline: 2px solid var(--error); outline-offset: 2px; }
+.scroller { padding: 10px 12px 4px; }
+
+/* transcript rows */
+.tx { font-family: var(--font-mono); font-size: 12px; }
+.tcall > summary { list-style: none; display: flex; align-items: baseline; gap: 8px; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.tcall > summary::-webkit-details-marker { display: none; }
+.tcall > summary:hover { background: var(--surface-hover); }
+.tcall > summary:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: -2px; }
+.chev { color: var(--text-tertiary); flex: 0 0 9px; font-size: 10px; display: inline-block; transition: transform .12s; }
+.tcall[open] > summary .chev { transform: rotate(90deg); }
+.gl { flex: 0 0 12px; text-align: center; font-weight: 700; }
+.gl-ok { color: var(--success); } .gl-err { color: var(--error); } .gl-run { color: var(--accent-bright); }
+.gl-na { color: var(--text-secondary); } .gl-warn { color: var(--warning); }
+.fam { flex: 0 0 auto; font-size: 11px; padding: 1px 7px; border-radius: 4px; background: var(--surface-elevated); border: 1px solid var(--border); color: var(--text-secondary); white-space: nowrap; }
+.fam-shell { color: var(--node-bash); border-color: color-mix(in oklch, var(--node-bash) 40%, transparent); }
+.fam-file { color: var(--node-command); border-color: color-mix(in oklch, var(--node-command) 40%, transparent); }
+.hl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hl-path { display: flex; min-width: 0; } .hl-path .h { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); } .hl-path .t { flex: 0 0 auto; }
+.bd { flex: 0 0 auto; font-size: 11px; color: var(--text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bd .err { color: var(--error); } .bd .run { color: var(--accent-bright); } .bd .warnb { color: var(--warning); }
+.tbody { margin: 2px 0 8px 29px; border-left: 2px solid var(--border); padding-left: 10px; }
+.tbar { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--text-secondary); margin-bottom: 6px; }
+.box { background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-size: 11.5px; line-height: 1.5; }
+.box .cmd { color: var(--node-bash); } .box .await { color: var(--accent-bright); font-style: italic; } .box .stopped { color: var(--warning); font-style: italic; }
+.asst { font-family: var(--font-sans); font-size: 12.5px; line-height: 1.6; color: var(--text-secondary); margin: 8px 2px 12px; max-width: 74ch; }
+
+/* the operator's own message, inside the transcript */
+.opmsg { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 12px; padding: 7px 10px; border-radius: 6px; background: color-mix(in oklch, var(--node-approval) 9%, transparent); border: 1px solid color-mix(in oklch, var(--node-approval) 32%, transparent); max-width: 74ch; }
+.opmsg .who { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--node-approval); flex: 0 0 auto; padding-top: 2px; }
+.opmsg .txt { font-family: var(--font-sans); font-size: 12.5px; line-height: 1.55; color: var(--text-primary); flex: 1 1 auto; min-width: 0; }
+.opmsg .st { font-family: var(--font-mono); font-size: 10px; flex: 0 0 auto; padding-top: 3px; white-space: nowrap; }
+.st-pending { color: var(--text-tertiary); } .st-done { color: var(--success); }
+.openq { color: var(--warning) !important; font-style: italic; }
+
+/* composer + draft box */
+.composer-wrap { border-top: 1px solid var(--border); background: var(--surface-elevated); padding: 8px 12px 10px; }
+.draftbox { border: 1px solid color-mix(in oklch, var(--node-approval) 34%, transparent); background: color-mix(in oklch, var(--node-approval) 7%, transparent); border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; }
+.draft-hd { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--node-approval); margin-bottom: 5px; }
+.modepill { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 10.5px; border: 1px solid var(--border-bright); color: var(--text-secondary); border-radius: 999px; padding: 1px 8px; min-height: 20px; display: inline-flex; align-items: center; gap: 5px; background: transparent; cursor: pointer; font-family: var(--font-mono); }
+.modepill:hover { color: var(--text-primary); border-color: var(--accent-bright); }
+.draft-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 2px; color: var(--text-primary); }
+.draft-item + .draft-item { border-top: 1px solid var(--border); }
+.draft-item .grip { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; flex: 0 0 auto; }
+.draft-item .t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini { min-height: 24px; display: inline-flex; align-items: center; background: transparent; border: 1px solid var(--border); color: var(--text-secondary); border-radius: 4px; padding: 1px 8px; font: inherit; font-size: 10.5px; font-family: var(--font-mono); cursor: pointer; flex: 0 0 auto; }
+.mini:hover { color: var(--text-primary); border-color: var(--border-bright); }
+.mini-go { color: var(--accent-bright); border-color: color-mix(in oklch, var(--accent-bright) 45%, transparent); }
+.mini-go:hover { background: color-mix(in oklch, var(--accent-bright) 12%, transparent); }
+.composer { display: flex; gap: 8px; align-items: flex-end; }
+.field { flex: 1 1 auto; min-width: 0; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font-family: var(--font-sans); font-size: 12.5px; color: var(--text-primary); line-height: 1.5; min-height: 36px; }
+.field .ph { color: var(--text-tertiary); }
+.sendbtn { min-height: 32px; display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid color-mix(in oklch, var(--accent-bright) 50%, transparent); color: var(--accent-bright); border-radius: 6px; padding: 4px 12px; font: inherit; font-size: 12px; font-family: var(--font-mono); cursor: pointer; flex: 0 0 auto; }
+.sendbtn:hover { background: color-mix(in oklch, var(--accent-bright) 12%, transparent); }
+.hint { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); margin-top: 6px; }
+
+/* reference */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; max-width: 1180px; align-items: start; }
+.grid2 > div { min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; max-width: 880px; }
+table.t { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+table.t th, table.t td { text-align: left; padding: 7px 12px 7px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.t th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-tertiary); font-weight: 500; }
+table.t td { color: var(--text-secondary); }
+table.t td:first-child { font-family: var(--font-mono); color: var(--text-primary); white-space: nowrap; }
+.tag { font-family: var(--font-mono); font-size: 10px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--text-secondary); white-space: nowrap; }
+.tag-now { color: var(--success); border-color: color-mix(in oklch, var(--success) 40%, transparent); }
+.tag-later { color: var(--text-tertiary); border-style: dashed; }
+.tag-no { color: var(--error); border-color: color-mix(in oklch, var(--error) 40%, transparent); }
+.phase2 { opacity: .62; border-style: dashed; }
+.steps { display: flex; flex-wrap: wrap; gap: 0; max-width: 880px; font-family: var(--font-mono); font-size: 11.5px; }
+.step { flex: 1 1 190px; border: 1px solid var(--border); border-right: 0; padding: 9px 11px; background: var(--surface); }
+.step:last-child { border-right: 1px solid var(--border); }
+.step b { display: block; color: var(--text-primary); font-weight: 500; margin-bottom: 3px; }
+.step span { color: var(--text-secondary); font-size: 11px; line-height: 1.45; display: block; }
+.step .n { color: var(--node-approval); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<h1>Steering a running agent, from its node room</h1>
+<p class="sub">
+  Today, opening a node of a running agent gives you a read-only transcript. This adds the other half: you can type
+  while it works, hold the message in a queue, send it now, or stop the node. Researched against <b>aion</b>
+  (client queue in <code>useConversationCommandQueue.ts</code>, mid-turn delivery in the Rust core) and the published
+  Claude Agent SDK docs. Phase 1 is what ships first and works on every provider; phase 2 is drawn dimmer.
+</p>
+
+<h2>1 · The flow, in the three states it actually has</h2>
+<p class="sub">
+  The composer is <b>mounted and enabled the whole time</b> — only the send button changes meaning. While the node runs
+  it queues; once you stop the node it sends. Stopping is an explicit, visible act rather than something a button does
+  behind your back, which matters because stopping is genuinely what happens underneath.
+</p>
+
+<p class="cap">A · Node running — the button queues</p>
+<div class="room">
+  <div class="room-hd">
+    <span class="type-pill">prompt</span><span class="ph-name">implement</span>
+    <span class="node-badge"><i class="dot"></i>Running · 2m 14s</span>
+    <button class="stopbtn" type="button">■ Stop node</button>
+  </div>
+  <div class="scroller tx">
+    <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-ok">✓</span><span class="fam fam-file">Edit</span><span class="hl hl-path"><span class="h">crates/gigo-harness-worker/src/</span><span class="t">auto_retry.rs</span></span><span class="bd">+2 −2</span></summary></details>
+    <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-run">◐</span><span class="fam fam-shell">run_terminal_command</span><span class="hl">cargo test -p gigo-harness-worker --test auto_retry_bdd</span><span class="bd"><span class="run">running · 1m 48s</span></span></summary>
+      <div class="tbody"><div class="tbar">shell · running · 1m 48s</div>
+        <div class="box"><span class="cmd">$</span> cargo test -p gigo-harness-worker --test auto_retry_bdd
+   Compiling gigo-harness-worker v0.4.1
+<span class="await">awaiting output…</span></div>
+      </div>
+    </details>
+  </div>
+  <div class="composer-wrap">
+    <div class="draftbox">
+      <div class="draft-hd"><span>Queued · 1</span></div>
+      <div class="draft-item"><span class="grip">1</span><span class="t">Wrong suite — it&rsquo;s auto_retry, not auto_retry_bdd.</span><button class="mini" type="button">✕</button></div>
+    </div>
+    <div class="composer">
+      <div class="field"><span class="ph">Message the agent…</span></div>
+      <button class="sendbtn" type="button">Queue ⏎</button>
+    </div>
+    <p class="hint">Node is running · messages wait · queue lives in this tab only</p>
+  </div>
+</div>
+<p class="note">No per-item send button here. While the node runs there is nothing a message can do except wait, so the UI offers only what is actually available: queue it, or delete it.</p>
+
+<p class="cap" style="margin-top:24px">B · You pressed Stop — the same button is now a sender</p>
+<div class="room">
+  <div class="room-hd">
+    <span class="type-pill">prompt</span><span class="ph-name">implement</span>
+    <span class="node-badge" style="color:var(--warning);border-color:color-mix(in oklch, var(--warning) 45%, transparent)"><i class="dot" style="background:var(--warning)"></i>Stopped</span>
+  </div>
+  <div class="scroller tx">
+    <details class="tcall" open><summary><span class="chev">▶</span><span class="gl gl-warn">⚠</span><span class="fam fam-shell">run_terminal_command</span><span class="hl">cargo test -p gigo-harness-worker --test auto_retry_bdd</span><span class="bd"><span class="warnb">interrupted</span> · 1m 52s</span></summary>
+      <div class="tbody"><div class="tbar">shell · interrupted · 1m 52s</div>
+        <div class="box"><span class="cmd">$</span> cargo test -p gigo-harness-worker --test auto_retry_bdd
+   Compiling gigo-harness-worker v0.4.1
+<span class="stopped">stopped by the operator</span></div>
+      </div>
+    </details>
+  </div>
+  <div class="composer-wrap">
+    <div class="draftbox">
+      <div class="draft-hd"><span>Will send · 2</span></div>
+      <div class="draft-item"><span class="grip">1</span><span class="t">Wrong suite — it&rsquo;s auto_retry, not auto_retry_bdd.</span><button class="mini" type="button">✕</button></div>
+      <div class="draft-item"><span class="grip">2</span><span class="t">And skip the BDD suite entirely for now.</span><button class="mini" type="button">✕</button></div>
+    </div>
+    <div class="composer">
+      <div class="field">And skip the BDD suite entirely for now.</div>
+      <button class="sendbtn" type="button" style="border-color:color-mix(in oklch, var(--success) 55%, transparent);color:var(--success)">Send now ⏎</button>
+    </div>
+    <p class="hint">Node is stopped · sending delivers all 2 in order, then the node resumes</p>
+  </div>
+</div>
+<p class="note">
+  <b>Stopping does not undo work already done.</b> Session state is saved up to the last completed tool call, but files
+  the agent already wrote stay written — nothing is rolled back. Stop means “go no further”, never “undo”, and the
+  button must not imply otherwise. This is not a new hazard; the abort path has always behaved this way.
+</p>
+<p class="note">
+  What you type joins the queue rather than jumping it — order is the order you wrote them, so the agent reads your
+  correction the way you thought it. The count on the Draft box header changes from <b>Queued</b> to <b>Will send</b>,
+  which is the one word that tells you the button in front of you is now live.
+</p>
+
+<p class="cap" style="margin-top:24px">C · Sent — both land in the transcript, then the node resumes</p>
+<div class="room">
+  <div class="room-hd">
+    <span class="type-pill">prompt</span><span class="ph-name">implement</span>
+    <span class="node-badge"><i class="dot"></i>Running · 4s</span>
+    <button class="stopbtn" type="button">■ Stop node</button>
+  </div>
+  <div class="scroller tx">
+    <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-warn">⚠</span><span class="fam fam-shell">run_terminal_command</span><span class="hl">cargo test … --test auto_retry_bdd</span><span class="bd"><span class="warnb">interrupted</span> · 1m 52s</span></summary></details>
+    <div class="opmsg"><span class="who">You</span><span class="txt">Wrong suite — it&rsquo;s auto_retry, not auto_retry_bdd.</span><span class="st st-done">sent</span></div>
+    <div class="opmsg"><span class="who">You</span><span class="txt">And skip the BDD suite entirely for now.</span><span class="st st-done">sent</span></div>
+    <p class="asst">Understood — I was running the BDD suite. Re-running <code>auto_retry</code> and leaving the BDD suite alone.</p>
+    <details class="tcall"><summary><span class="chev">▶</span><span class="gl gl-run">◐</span><span class="fam fam-shell">run_terminal_command</span><span class="hl">cargo test -p gigo-harness-worker --test auto_retry</span><span class="bd"><span class="run">running · 4s</span></span></summary></details>
+  </div>
+  <div class="composer-wrap">
+    <div class="composer">
+      <div class="field"><span class="ph">Message the agent…</span></div>
+      <button class="sendbtn" type="button">Queue ⏎</button>
+    </div>
+    <p class="hint">Node is running · messages wait · queue lives in this tab only</p>
+  </div>
+</div>
+<p class="note">
+  The Draft box is gone because it is empty — it renders nothing rather than an empty shell. Both messages are ordinary
+  transcript rows now, sitting between the tool call they interrupted and the one they caused, so the record reads in
+  the order it happened. The <b>⚠</b> row is not extra work: the provider already records an interrupted tool, and
+  stopping the node is exactly what produces one.
+</p>
+
+<h2>2 · The whole rule, in one table</h2>
+<table class="t" style="max-width:880px">
+  <thead><tr><th style="width:17%">Node state</th><th style="width:15%">Header</th><th style="width:15%">Composer</th><th>What sending does</th></tr></thead>
+  <tbody>
+    <tr><td>running</td><td><span class="tag tag-no">Stop node</span></td><td><span class="tag">Queue</span></td><td>Holds the message. The node is untouched — nothing is interrupted and nothing is lost.</td></tr>
+    <tr><td>stopped</td><td><span class="tag tag-later">—</span></td><td><span class="tag tag-now">Send now</span></td><td>Delivers every queued message plus the one just typed, in the order written, then the node resumes from where it stopped.</td></tr>
+    <tr><td>finished</td><td><span class="tag tag-later">—</span></td><td><span class="tag tag-later">?</span></td><td class="openq">Open question: the node is over. Does a message re-run it, or is the composer simply absent? Not decided.</td></tr>
+  </tbody>
+</table>
+<p class="note">
+  Two states, two behaviours, no hidden third path — which is the point. A “send now” offered <em>while running</em>
+  would have to stop the node to work, and a button that silently stops your agent is a button that lies. Making the
+  stop explicit costs one click and buys a UI that matches its own mechanism.
+</p>
+<p class="note">
+  <b>The swap is symmetric and automatic.</b> Both controls follow the node's state, never a mode the reader has to
+  remember setting: the moment the node resumes, the composer says <b>Queue</b> again and <b>Stop node</b> comes back to
+  the header — the same instant, from the same signal. Nothing stays stuck in send mode after a resume, and there is no
+  toggle anywhere for a reader to leave in the wrong position.
+</p>
+
+<h2>4 · The three states a message passes through</h2>
+<div class="grid2">
+  <div>
+    <div class="panel">
+      <p class="cap">1 — queued, in this tab only</p>
+      <div class="draft-item" style="padding:6px 0"><span class="grip">1</span><span class="t">Wrong suite — it's auto_retry…</span><button class="mini mini-go" type="button">Send now</button></div>
+      <p class="cap" style="margin:14px 0 6px">2 — sent, not yet acknowledged</p>
+      <div class="opmsg" style="margin:0"><span class="who">You</span><span class="txt">Wrong suite — it's auto_retry…</span><span class="st st-pending">sending…</span></div>
+      <p class="cap" style="margin:14px 0 6px">3 — the agent acknowledged it</p>
+      <div class="opmsg" style="margin:0"><span class="who">You</span><span class="txt">Wrong suite — it's auto_retry…</span><span class="st st-done">delivered</span></div>
+    </div>
+    <p class="note">State 3 requires the agent to echo back the id we stamped on the message. Without that echo the UI can only claim “sent”, never “delivered” — so the copy has to be honest about which one it knows.</p>
+  </div>
+  <div>
+    <p class="cap">What each provider can do — the five actually in use</p>
+    <table class="t">
+      <thead><tr><th>Provider</th><th style="width:13%">Stop</th><th style="width:16%">Mid-turn</th><th>What it takes</th></tr></thead>
+      <tbody>
+        <tr><td>omp</td><td><span class="tag tag-now">yes</span></td><td><span class="tag tag-now">yes — first class</span></td><td>Its RPC mode has a <code>steer</code> command and <code>steer</code> is the <b>default</b> streaming behaviour. Switch <code>--mode json</code> to <code>--mode rpc</code> and extend the existing parser — RPC emits the same event vocabulary it already reads, wrapped in an envelope. <b>Cheapest of the five.</b><br><br><span class="openq">Trap: use RPC mode, never its ACP mode. ACP <b>implicitly cancels</b> a running turn when a new prompt arrives — it looks like steering and behaves like a stop.</span></td></tr>
+        <tr><td>claude</td><td><span class="tag tag-now">yes</span></td><td><span class="tag tag-now">yes</span></td><td>Streaming input plus <code>interrupt()</code>; needs an SDK upgrade from the pinned version.</td></tr>
+        <tr><td>codex</td><td><span class="tag tag-now">yes</span></td><td><span class="tag tag-now">yes</span></td><td>JSON-RPC <code>turn/steer</code> — a soft injection into the live turn, explicitly not a cancel.</td></tr>
+        <tr><td>grok</td><td><span class="tag tag-now">yes</span></td><td><span class="tag tag-now">yes</span></td><td><b>Not</b> via the method its own client uses — <code>x.ai/interject</code> answers <code>-32601 Method not found</code> to a third-party client, identical to a method invented to serve as a control. Settled by handshake, no model call.<br><br>It uses a different door instead, and that one <b>is</b> advertised to third parties: a hooks extension whose blocking events include <code>pre_tool_use</code> and whose stop signals include <code>additionalContext</code> — a text channel to the agent at each tool boundary. Same delivery point, different mechanism.<br><br><span class="openq">Advertised and reachable; the exact payload is read from the capability shape and wants one spike to confirm.</span></td></tr>
+        <tr><td>deepseek</td><td><span class="tag tag-now">yes</span></td><td><span class="tag tag-later">near-equivalent</span></td><td>No native mid-turn — <b>measured</b>, not assumed: a second prompt is rejected in 2&nbsp;ms because one is already in flight. But cancel-and-continue on the <b>same warm connection</b> was measured at <b>31&nbsp;ms</b> end to end, and the partial output of the cancelled turn is <b>kept</b>, not discarded. The comparison that matters: the first turn spends <b>~3.6&nbsp;s</b> assembling context before any model call, and a cold stop-and-resume pays that again every single time the operator speaks.<br><br><span class="openq">Its own agent runtime does have a real steering inbox with two queues — it simply is not exposed on the protocol we speak to it over. A ceiling we could raise, not one built into it.</span></td></tr>
+      </tbody>
+    </table>
+    <p class="note">
+      An earlier draft of this table said omp could not do it, reasoning from the fact that we spawn it with its standard
+      input ignored. That inference was wrong: ignoring stdin is a <em>consequence</em> of invoking the CLI one-shot with
+      the prompt in its arguments, not a limit of the CLI. Every one of these is a mode switch, never a flag flip.
+      <br><br>
+      <b>Four of the five accept steering natively; the fifth gets within about thirty milliseconds of it.</b> So “every provider can
+      be steered” is reachable — not by bending nine different harnesses, but by building the one seam below and letting
+      each provider plug into it the way it already knows how. The three harnesses not listed here are out of use today,
+      and were checked far enough to know two of them could also do it when they come back.
+    </p>
+  </div>
+</div>
+
+<h2>4b · The real blocker is ours, not theirs</h2>
+<div class="panel" style="border-color:color-mix(in oklch, var(--warning) 45%, transparent)">
+  <p class="sub" style="margin:0">
+    <code>IAgentProvider.sendQuery()</code> is a <b>one-shot generator</b>: it takes a prompt, yields events, and offers no
+    way to push anything in after it starts. Each provider keeps its child process private inside that closure. So even
+    where the agent on the other end accepts steering — and four of the five do — nothing in Archon can reach it.
+  </p>
+</div>
+<p class="note">
+  This is the piece worth naming before any provider work begins: a steering seam on the provider interface, needed once
+  and shared by all five, rather than five separate answers to the same question. It also reframes the phasing — phase 1
+  is not a workaround for weak providers, it is what ships while that seam is designed.
+</p>
+
+<h2>5 · Phase 2 — what changes when mid-turn delivery lands</h2>
+<div class="panel phase2">
+  <table class="t">
+    <thead><tr><th style="width:26%">Phase 1 — ships first</th><th>Phase 2 — after</th></tr></thead>
+    <tbody>
+      <tr><td>You stop the node, then send</td><td>A second button appears <em>while running</em>: send without stopping, folded in at the next tool boundary</td></tr>
+      <tr><td>Stopping loses the in-flight tool, shown as <b>⚠</b></td><td>The no-stop path loses nothing; <b>⚠</b> appears only when you deliberately stop</td></tr>
+      <tr><td>“sent” — the UI knows it left, not that it landed</td><td>“delivered”, from the id the agent echoes back</td></tr>
+      <tr><td>Existing pause and resume, plus a queue</td><td>Provider switches to streaming input; SDK upgrade required</td></tr>
+    </tbody>
+  </table>
+</div>
+<p class="note">
+  Phase 2 is a provider-layer change, not a UI change — the screens above do not move. The SDK exposes a caller-set
+  message id and echoes it back, which is what turns “sent” into “delivered”; a plain string prompt, which is what
+  Archon passes today, carries none. That is the whole reason the confirmation signal does not exist yet.
+</p>
+
+<h2>6 · What is new versus what already exists</h2>
+<table class="t" style="max-width:880px">
+  <thead><tr><th style="width:34%">Piece</th><th style="width:14%">Status</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>the transcript itself</td><td><span class="tag tag-now">designed</span></td><td>Track A — the rows, glyphs, families and bodies you already reviewed</td></tr>
+    <tr><td><b>⚠</b> interrupted row</td><td><span class="tag tag-now">exists</span></td><td>The provider already records it; stopping a node is what produces one</td></tr>
+    <tr><td>agent asks, you answer</td><td><span class="tag tag-now">exists</span></td><td>The Ask card, shipped on both surfaces — a different thing from steering</td></tr>
+    <tr><td>stop a whole run</td><td><span class="tag tag-now">exists</span></td><td>Abandon, at run level, with an API route</td></tr>
+    <tr><td>stop one node</td><td><span class="tag tag-later">new</span></td><td>The abort plumbing is already wired per attempt; the node-level entry point is not</td></tr>
+    <tr><td>composer and draft box</td><td><span class="tag tag-later">new</span></td><td>Browser state — no table, no migration. The button reads Queue while running and Send now once stopped.</td></tr>
+    <tr><td>one route to deliver a message</td><td><span class="tag tag-later">new</span></td><td>The irreducible backend piece</td></tr>
+    <tr><td>mid-turn delivery</td><td><span class="tag tag-later">phase 2</span></td><td>Streaming input plus an SDK upgrade, gated per provider</td></tr>
+  </tbody>
+</table>
+<p class="note">
+  Four of the eight rows already exist. What is genuinely new in phase 1 is a composer, a queue that lives in the tab,
+  a node-level stop, and one endpoint — which is why this is worth doing now rather than treating it as a rewrite.
+</p>

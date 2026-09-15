@@ -7,6 +7,7 @@ import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
 import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
+import { MAX_TOOL_OUTPUT_CHARS } from '../adapters/web/truncate';
 
 // ---------------------------------------------------------------------------
 // Mock setup — must be before dynamic imports of mocked modules
@@ -3131,7 +3132,7 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     expect(body.messages[0]?.payload.questions).toBeUndefined();
   });
 
-  test('no-query response is exactly { messages } with no metadata or paging keys', async () => {
+  test('no-query response is exactly { messages } with row metadata and no paging keys', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
     mockListNodeMessages.mockImplementationOnce(async () => [
       {
@@ -3142,13 +3143,7 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
         kind: 'text',
         payload: { text: 'hello' },
         created_at: '2026-01-01T00:00:00.000Z',
-        metadata: {
-          execution: {
-            occurrence_id: '11111111-1111-4111-8111-111111111111',
-            attempt_id: '22222222-2222-4222-8222-222222222222',
-            retry_epoch: 0,
-          },
-        },
+        metadata: { stream_id: 'stream-1' },
       },
     ]);
 
@@ -3156,58 +3151,112 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     const response = await app.request('/api/workflows/runs/run-uuid-1/nodes/plan/messages');
     expect(response.status).toBe(200);
     const body = (await response.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(['messages']);
+    expect(Object.keys(body)).toEqual(['messages']);
     const messages = body.messages as Array<Record<string, unknown>>;
-    expect(Object.keys(messages[0] ?? {}).sort()).toEqual([
-      'created_at',
-      'id',
-      'kind',
-      'payload',
-      'seq',
-    ]);
-    expect(messages[0]).not.toHaveProperty('metadata');
+    expect(messages[0]?.metadata).toEqual({ stream_id: 'stream-1' });
     expect(body).not.toHaveProperty('nextCursor');
     expect(body).not.toHaveProperty('hasMore');
     expect(body).not.toHaveProperty('highWatermark');
     expect(mockListNodeMessages.mock.calls[0]).toEqual(['run-uuid-1', 'plan']);
   });
 
+  test('cursor mode marks truncated tool output without writing it back', async () => {
+    const fullOutput = 'x'.repeat(MAX_TOOL_OUTPUT_CHARS + 200_000);
+    const storedMetadata = { stream_id: 'stream-1' };
+    const storedRow: MockNodeMessageRow = {
+      id: 'msg-long',
+      workflow_run_id: 'run-uuid-1',
+      node_id: 'plan',
+      seq: 1,
+      kind: 'tool',
+      payload: {
+        name: 'Read',
+        id: 'tool-1',
+        input: { path: 'big.txt' },
+        output: fullOutput,
+      },
+      created_at: '2026-01-01T00:00:00.000Z',
+      metadata: storedMetadata,
+    };
+    mockGetWorkflowRun.mockImplementation(async () => MOCK_RUNNING_RUN);
+    mockGetNodeMessageHighWatermark.mockImplementationOnce(async () => 1);
+    mockListNodeMessages.mockImplementationOnce(async () => [storedRow]);
+    mockGetNodeMessage.mockImplementationOnce(async () => storedRow);
+
+    const { app } = makeApp();
+    const listResponse = await app.request(
+      '/api/workflows/runs/run-uuid-1/nodes/plan/messages?limit=1'
+    );
+    expect(listResponse.status).toBe(200);
+    const listBody = (await listResponse.json()) as {
+      messages: Array<{ payload: { output?: string }; metadata?: Record<string, unknown> }>;
+    };
+    const listOutput = listBody.messages[0]?.payload.output ?? '';
+    expect(listOutput.length).toBeLessThan(fullOutput.length);
+    expect(listBody.messages[0]?.metadata).toEqual({
+      stream_id: 'stream-1',
+      truncated: true,
+      output_state: 'truncated',
+      full_output_available: true,
+    });
+    expect(storedMetadata).toEqual({ stream_id: 'stream-1' });
+    expect(storedRow.payload.output).toBe(fullOutput);
+
+    const detailResponse = await app.request(
+      '/api/workflows/runs/run-uuid-1/nodes/plan/messages/msg-long'
+    );
+    expect(detailResponse.status).toBe(200);
+    const detailBody = (await detailResponse.json()) as {
+      payload: { output?: string };
+      metadata?: Record<string, unknown>;
+    };
+    expect(detailBody.payload.output).toBe(fullOutput);
+    expect(detailBody.metadata).toEqual({ stream_id: 'stream-1' });
+  });
+
   test('cursor mode returns metadata, nextCursor, hasMore, and highWatermark', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
-    mockGetNodeMessageHighWatermark.mockImplementationOnce(async () => 3);
-    mockListNodeMessages.mockImplementationOnce(async () => [
-      {
-        id: 'msg-1',
-        workflow_run_id: 'run-uuid-1',
-        node_id: 'plan',
-        seq: 1,
-        kind: 'tool',
-        payload: {
-          name: 'Read',
-          id: 'tool-1',
-          input: { path: 'a.ts' },
-          output: 'HITL_TOOL_OUTPUT',
-        },
-        created_at: '2026-01-01T00:00:00.000Z',
-        metadata: {
-          execution: {
-            occurrence_id: '11111111-1111-4111-8111-111111111111',
-            attempt_id: '22222222-2222-4222-8222-222222222222',
-            retry_epoch: 0,
+    const queryOrder: string[] = [];
+    mockGetNodeMessageHighWatermark.mockImplementationOnce(async () => {
+      queryOrder.push('watermark');
+      return 3;
+    });
+    mockListNodeMessages.mockImplementationOnce(async () => {
+      queryOrder.push('list');
+      return [
+        {
+          id: 'msg-1',
+          workflow_run_id: 'run-uuid-1',
+          node_id: 'plan',
+          seq: 1,
+          kind: 'tool',
+          payload: {
+            name: 'Read',
+            id: 'tool-1',
+            input: { path: 'a.ts' },
+            output: 'HITL_TOOL_OUTPUT',
           },
-          tool_phase: 'result',
+          created_at: '2026-01-01T00:00:00.000Z',
+          metadata: {
+            execution: {
+              occurrence_id: '11111111-1111-4111-8111-111111111111',
+              attempt_id: '22222222-2222-4222-8222-222222222222',
+              retry_epoch: 0,
+            },
+            tool_phase: 'result',
+          },
         },
-      },
-      {
-        id: 'msg-2',
-        workflow_run_id: 'run-uuid-1',
-        node_id: 'plan',
-        seq: 2,
-        kind: 'text',
-        payload: { text: 'next' },
-        created_at: '2026-01-01T00:00:01.000Z',
-      },
-    ]);
+        {
+          id: 'msg-2',
+          workflow_run_id: 'run-uuid-1',
+          node_id: 'plan',
+          seq: 2,
+          kind: 'text',
+          payload: { text: 'next' },
+          created_at: '2026-01-01T00:00:01.000Z',
+        },
+      ];
+    });
 
     const { app } = makeApp();
     const response = await app.request(
@@ -3235,7 +3284,9 @@ describe('GET /api/workflows/runs/:runId/nodes/:nodeId/messages', () => {
     expect(mockListNodeMessages.mock.calls[0]?.[2]).toEqual({
       afterSeq: 0,
       limit: 2,
+      throughSeq: 3,
     });
+    expect(queryOrder).toEqual(['watermark', 'list']);
   });
 
   test('rejects invalid cursor limit and afterSeq with 400 and does not list rows', async () => {
@@ -4609,7 +4660,7 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
     });
   });
 
-  test('returns 401 when no authenticated requester is present', async () => {
+  test('returns 200 and records admin when no authenticated requester is present', async () => {
     mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
     const { app } = makeApp();
     const response = await app.request(
@@ -4621,11 +4672,16 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
       }
     );
 
-    expect(response.status).toBe(401);
-    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-ask-1',
+      tool_use_id: ASK_REQUEST_ID,
+      answer: ASK_ANSWER_BODY,
+      resolved_by: 'admin',
+    });
   });
 
-  test('returns 401 before body validation when no authenticated requester is present', async () => {
+  test('returns 400 for an invalid body when no authenticated requester is present', async () => {
     mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
     const { app } = makeApp();
     const response = await app.request(
@@ -4637,12 +4693,12 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
       }
     );
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(400);
     expect(mockGetWorkflowRun).not.toHaveBeenCalled();
     expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
   });
 
-  test('returns 401 before run lookup when no authenticated requester is present', async () => {
+  test('returns 404 for a missing run when no authenticated requester is present', async () => {
     mockGetWorkflowRun.mockResolvedValue(null);
     const { app } = makeApp();
     const response = await app.request(
@@ -4654,12 +4710,11 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
       }
     );
 
-    expect(response.status).toBe(401);
-    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+    expect(response.status).toBe(404);
     expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
   });
 
-  test('returns 403 when the requester is not the run starter, including admins', async () => {
+  test('returns 200 when the requester is not the run starter', async () => {
     mockGetWorkflowRun.mockResolvedValue(mockAskPausedRun());
     const { app } = makeApp();
     const response = await app.request(
@@ -4674,8 +4729,13 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
       }
     );
 
-    expect(response.status).toBe(403);
-    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-ask-1',
+      tool_use_id: ASK_REQUEST_ID,
+      answer: ASK_ANSWER_BODY,
+      resolved_by: 'user-other-admin',
+    });
   });
 
   test('returns 404 when the run is missing', async () => {
@@ -4853,6 +4913,35 @@ describe('POST /api/workflows/runs/:runId/ask/:requestId/answer', () => {
     expect(platformConvId).toBe('web-plat-ask');
     expect(dispatchedMessage).toBe('/workflow resume run-ask-1');
     expect(extraContext.userId).toBe(ASK_STARTER_USER_ID);
+  });
+
+  test('solo auto-resume omits userId rather than passing admin', async () => {
+    mockGetWorkflowRun.mockResolvedValue(
+      mockAskPausedRun({ parent_conversation_id: 'parent-conv-uuid' })
+    );
+    mockGetConversationById.mockResolvedValue({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-ask',
+      platform_type: 'web',
+    });
+    mockResolvePendingInteraction.mockResolvedValue(mockResolvedAskInteraction({ resumed: true }));
+
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/workflows/runs/run-ask-1/ask/${ASK_REQUEST_ID}/answer`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ASK_ANSWER_BODY),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({ resolved_by: 'admin' })
+    );
+    const extraContext = mockHandleMessage.mock.calls[0]?.[3] as { userId?: string };
+    expect(extraContext.userId).toBeUndefined();
   });
 
   test('does not auto-dispatch an intermediate answer', async () => {

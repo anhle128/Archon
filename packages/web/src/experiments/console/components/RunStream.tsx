@@ -1,4 +1,4 @@
-import { useMemo, type ReactElement } from 'react';
+import { useMemo, type ReactElement, type ReactNode } from 'react';
 import { MessageItem } from './MessageItem';
 import { ToolCallItem } from './ToolCallItem';
 import { NodeDivider } from './NodeDivider';
@@ -35,6 +35,7 @@ interface RunStreamProps {
   logEntries?: readonly ConsoleLogEntry[];
   selectedLogRowId?: string | null;
   onSelectLogRow?: (rowId: string, nodeId: string) => void;
+  renderExecutionBody?: (entry: ConsoleLogEntry) => ReactNode;
 }
 
 /**
@@ -244,6 +245,7 @@ export function RunStream({
   logEntries,
   selectedLogRowId = null,
   onSelectLogRow,
+  renderExecutionBody,
 }: RunStreamProps): ReactElement {
   // Single source for the folded nodes — consumed by both the timeline (one
   // divider per node) and the node-filter window so they can't drift.
@@ -416,6 +418,58 @@ export function RunStream({
     }
     return true;
   });
+
+  if (logEntries !== undefined) {
+    const visibleEntries =
+      selectedNodeId === 'all'
+        ? logEntries
+        : logEntries.filter(entry => entry.row.nodeId === selectedNodeId);
+    if (visibleEntries.length === 0) {
+      return (
+        <div className="flex min-h-[40vh] items-center justify-center text-center">
+          <div className="flex flex-col items-center gap-2 text-text-tertiary">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-[color:var(--running)]" />
+            <p className="text-sm">Waiting for first event…</p>
+          </div>
+        </div>
+      );
+    }
+    const selectRow = onSelectLogRow ?? noopSelectLogRow;
+    return (
+      <div className="flex flex-col">
+        {visibleEntries.map(entry => {
+          const nodeUsage = entry.showNodeUsage ? usageByNode.get(entry.row.nodeId) : undefined;
+          return (
+            <section key={entry.row.id} data-execution-row-id={entry.row.id}>
+              <NodeDivider
+                rowId={entry.row.id}
+                nodeId={entry.row.nodeId}
+                nodeName={entry.row.label}
+                selected={selectedLogRowId === entry.row.id}
+                onSelect={selectRow}
+                status={entry.displayStatus}
+                durationMs={entry.durationMs}
+                timestamp={entry.startedAt}
+                costUsd={entry.costUsd}
+                reportedUsd={nodeUsage?.aggregate.reportedUsd}
+                estimatedUsd={nodeUsage?.aggregate.estimatedUsd}
+                hasLedgerUsage={nodeUsage !== undefined && nodeUsage.groups.length > 0}
+                numTurns={entry.numTurns}
+                stopReason={entry.stopReason}
+                skipReason={entry.skipReason}
+                skipExpr={entry.skipExpr}
+                showDetail={showSystem}
+                usageGroups={nodeUsage?.groups}
+                usageAggregate={nodeUsage?.aggregate}
+                runUsage={usage}
+              />
+              {renderExecutionBody?.(entry)}
+            </section>
+          );
+        })}
+      </div>
+    );
+  }
 
   if (visible.length === 0) {
     return (

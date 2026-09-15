@@ -1,9 +1,10 @@
 /**
  * Pending-interaction store against a real SqliteAdapter.
  *
- * Covers atomic pending+node_awaiting writes, no-starter / missing-run
- * failures, unique (run, tool_use_id), paused-run accumulation, ordered
- * list, and fail-closed corrupt-row handling that never logs payload bodies.
+ * Covers atomic pending+node_awaiting writes, Ask inserts without a starter,
+ * permission no-starter / missing-run failures, unique (run, tool_use_id),
+ * paused-run accumulation, ordered list, and fail-closed corrupt-row handling
+ * that never logs payload bodies.
  *
  * Own `bun test` segment — mock.module('./connection') conflicts with other DB tests.
  */
@@ -144,12 +145,37 @@ describe('insertPendingInteraction', () => {
     expect(data).not.toHaveProperty('answer');
   });
 
-  test('throws AskHumanNoStarterError when run user_id is null and inserts nothing', async () => {
+  test('inserts a pending Ask when run user_id is null', async () => {
     await db.query('DELETE FROM remote_agent_conversations');
     await db.query('DELETE FROM remote_agent_users');
     await seedRun({ userId: null });
 
-    const err = await insertPendingInteraction(baseInput).then(
+    const row = await insertPendingInteraction(baseInput);
+
+    expect(row.workflow_run_id).toBe('run-1');
+    expect(row.status).toBe('pending');
+    const pending = await db.query<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM remote_agent_pending_interactions',
+      []
+    );
+    const events = await db.query<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM remote_agent_workflow_events',
+      []
+    );
+    expect(Number(pending.rows[0]?.count)).toBe(1);
+    expect(Number(events.rows[0]?.count)).toBe(1);
+  });
+
+  test('throws AskHumanNoStarterError for a permission insert when run user_id is null', async () => {
+    await db.query('DELETE FROM remote_agent_conversations');
+    await db.query('DELETE FROM remote_agent_users');
+    await seedRun({ userId: null });
+
+    const err = await insertPendingInteraction({
+      ...baseInput,
+      kind: 'permission',
+      envelope: { tool: 'Bash' },
+    }).then(
       () => null,
       (caught: unknown) => caught
     );

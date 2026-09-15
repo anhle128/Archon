@@ -17,6 +17,7 @@ export interface ExecutionNodeData extends DagNodeData, RuntimeNodeMetadata {
   maxIterations?: number;
   expectedIterations?: number;
   routeDecision?: RouteLoopDecisionData | Record<string, unknown>;
+  openerId?: string;
 }
 
 export type ExecutionFlowNode = Node<ExecutionNodeData>;
@@ -90,6 +91,8 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
 
   return (
     <div
+      id={data.openerId}
+      tabIndex={-1}
       className={`rounded-lg border border-border px-3 py-2 transition-all duration-300 ${style}${data.selected ? ' ring-2 ring-accent-bright' : ''}`}
       style={{ width: NODE_WIDTH, height: NODE_HEIGHT }}
     >
@@ -97,24 +100,26 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
       <div className="flex items-center gap-2">
         <StatusIcon status={data.status ?? 'pending'} />
         <span
-          className={`text-[10px] font-medium ${TYPE_COLORS[data.nodeType] ?? 'text-text-tertiary'}`}
+          className={`text-[length:var(--rv-node-kind-size)] font-medium ${TYPE_COLORS[data.nodeType] ?? 'text-text-tertiary'}`}
         >
           {typeLabel}
         </span>
-        <span className="text-xs font-medium text-text-primary truncate max-w-[100px]">
+        <span className="text-[length:var(--rv-node-label-size)] font-medium text-text-primary truncate max-w-[100px]">
           {data.label}
         </span>
         {data.duration !== undefined && (
-          <span className="text-[10px] text-text-tertiary ml-auto shrink-0">
+          <span className="text-[length:var(--rv-node-meta-size)] text-text-tertiary ml-auto shrink-0">
             {formatDurationMs(data.duration)}
           </span>
         )}
       </div>
       {data.status === 'awaiting' && (
-        <div className="mt-0.5 text-[10px] text-warning">{nodeStatusLabel('awaiting')}</div>
+        <div className="mt-0.5 text-[length:var(--rv-node-meta-size)] text-warning">
+          {nodeStatusLabel('awaiting')}
+        </div>
       )}
       {data.currentIteration !== undefined && data.maxIterations !== undefined && (
-        <div className="text-[10px] text-text-tertiary mt-0.5">
+        <div className="text-[length:var(--rv-node-meta-size)] text-text-tertiary mt-0.5">
           {data.expectedIterations !== undefined
             ? `${data.currentIteration}/${data.expectedIterations} (max ${data.maxIterations})`
             : `${data.currentIteration}/${data.maxIterations} iterations`}
@@ -122,19 +127,22 @@ function ExecutionDagNodeRender({ data }: NodeProps<ExecutionFlowNode>): React.R
       )}
       {runtimeMetadata && (
         <div
-          className="mx-auto mt-0.5 w-full max-w-[190px] truncate text-center text-[10px] text-text-secondary"
+          className="mx-auto mt-0.5 w-full max-w-[190px] truncate text-center text-[length:var(--rv-node-meta-size)] text-text-secondary"
           title={runtimeMetadata}
         >
           {runtimeMetadata}
         </div>
       )}
       {data.routeDecision && (
-        <div className="text-[10px] text-text-tertiary mt-0.5 truncate">
+        <div className="text-[length:var(--rv-node-meta-size)] text-text-tertiary mt-0.5 truncate">
           {routeOutcome} {'->'} {routeTarget}
         </div>
       )}
       {data.error && (
-        <div className="text-[10px] text-error mt-1 truncate" title={data.error}>
+        <div
+          className="text-[length:var(--rv-node-meta-size)] text-error mt-1 truncate"
+          title={data.error}
+        >
           {data.error.slice(0, 60)}
         </div>
       )}

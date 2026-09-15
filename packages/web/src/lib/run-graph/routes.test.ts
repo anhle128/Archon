@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { BACK_EDGE_GUTTER, NODE_HEIGHT, RANK_SEP } from './constants';
+import { BACK_EDGE_GUTTER, NODE_HEIGHT, NODE_WIDTH, RANK_SEP } from './constants';
 import { buildRoutes } from './routes';
 import type { LayoutEdge, LayoutRoute, NodeState, Point } from './types';
 
@@ -36,7 +36,7 @@ describe('buildRoutes', () => {
     expect(routes[0].labelPosition).toEqual({ x: 112, y: 81 });
   });
 
-  test('vertically aligned multi-layer edge still enters the target top', () => {
+  test('collinear multi-layer skip enters the target from the right flank', () => {
     const routes = route({
       positions: { a: { x: 0, y: 0 }, c: { x: 0, y: 2 * V } },
       layers: { a: 0, c: 2 },
@@ -44,9 +44,73 @@ describe('buildRoutes', () => {
     });
     expect(routes).toHaveLength(1);
     expect(routes[0].sourcePort).toBe('bottom');
-    expect(routes[0].targetPort).toBe('top');
-    expect(routes[0].path).toBe('M 104 58 C 104 125.5 104 140.5 104 208');
-    expect(routes[0].labelPosition).toEqual({ x: 112, y: 133 });
+    expect(routes[0].targetPort).toBe('right');
+    const lane = NODE_WIDTH + BACK_EDGE_GUTTER;
+    expect(routes[0].path).toBe(`M 104 58 C ${lane} 58 ${lane} 237 208 237`);
+    expect(routes[0].labelPosition).toEqual({ x: lane + 4, y: 147.5 });
+  });
+
+  test('clarify-chain then stays on the spine while skips take distinct right lanes', () => {
+    const routes = route({
+      positions: {
+        check: { x: 0, y: 0 },
+        respond: { x: 0, y: V },
+        apply: { x: 0, y: 2 * V },
+        red: { x: 0, y: 3 * V },
+      },
+      layers: { check: 0, respond: 1, apply: 2, red: 3 },
+      edges: [
+        {
+          id: 'check->respond',
+          source: 'check',
+          target: 'respond',
+          kind: 'conditional',
+          label: "$check.output == 'HAS_QUESTIONS'",
+        },
+        { id: 'respond->apply', source: 'respond', target: 'apply' },
+        { id: 'apply->red', source: 'apply', target: 'red' },
+        { id: 'check->red', source: 'check', target: 'red' },
+        { id: 'respond->red', source: 'respond', target: 'red' },
+      ],
+    });
+    const thenEdge = routes.find(item => item.edgeId === 'check->respond');
+    const skip = routes.find(item => item.edgeId === 'check->red');
+    const joinSkip = routes.find(item => item.edgeId === 'respond->red');
+    expect(thenEdge?.sourcePort).toBe('bottom');
+    expect(thenEdge?.targetPort).toBe('top');
+    expect(skip?.targetPort).toBe('right');
+    expect(joinSkip?.targetPort).toBe('right');
+    expect(skip?.path).not.toBe(thenEdge?.path);
+    expect(joinSkip?.path).not.toBe(skip?.path);
+    expect(skip?.labelPosition).not.toEqual(thenEdge?.labelPosition);
+  });
+
+  test('parallel same-endpoint edges get distinct paths and label positions', () => {
+    const routes = route({
+      positions: { a: { x: 0, y: 0 }, b: { x: 0, y: V } },
+      layers: { a: 0, b: 1 },
+      edges: [
+        {
+          id: 'a->b:positive',
+          source: 'a',
+          target: 'b',
+          kind: 'route',
+          outcome: 'positive',
+          label: 'positive',
+        },
+        {
+          id: 'a->b:negative',
+          source: 'a',
+          target: 'b',
+          kind: 'route',
+          outcome: 'negative',
+          label: 'negative',
+        },
+      ],
+    });
+    expect(routes).toHaveLength(2);
+    expect(routes[0].path).not.toBe(routes[1].path);
+    expect(routes[0].labelPosition).not.toEqual(routes[1].labelPosition);
   });
 
   test('long edge offset to the right leaves bottom and enters left', () => {

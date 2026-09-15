@@ -131,6 +131,7 @@ import type {
 } from '@archon/workflows/schemas/workflow-run';
 import type { ThinkingConfig } from '@archon/workflows/schemas/dag-node';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { NodeMessage } from '@archon/workflows/schemas/node-message';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
@@ -420,8 +421,6 @@ import {
   abandonWorkflow,
   answerAskHuman,
   approveWorkflow,
-  AskHumanAuthenticationRequiredError,
-  AskHumanForbiddenError,
   AskHumanRunNotFoundError,
   confirmPermission,
   PermissionAuthenticationRequiredError,
@@ -1510,7 +1509,6 @@ const answerAskHumanRoute = createRoute({
     },
     400: jsonError('Invalid AskHuman answer'),
     401: jsonError('Authentication required'),
-    403: jsonError('Forbidden'),
     404: jsonError('Not found'),
     409: jsonError('Conflict'),
     500: jsonError('Server error'),
@@ -4978,10 +4976,11 @@ export function registerApiRoutes(
     }
   });
 
-  // Enforce Ask answer auth before OpenAPI body validation so unauthenticated
-  // callers receive 401 even when the install-wide API gate is disabled.
+  // When web auth / the API gate is on, require an identity before OpenAPI
+  // body validation. Solo installs record answers as `admin`.
   app.use('/api/workflows/runs/:runId/ask/:requestId/answer', async (c, next) => {
     if (c.req.method !== 'POST') return next();
+    if (!isWebAuthEnabled() && !isApiGateEnabled()) return next();
     const requester = await resolveAuthContext(c);
     if (!requester) return apiError(c, 401, 'Authentication required');
     return next();
@@ -4993,7 +4992,7 @@ export function registerApiRoutes(
     const requestId = c.req.param('requestId') ?? '';
     try {
       const requester = await resolveAuthContext(c);
-      if (!requester) {
+      if ((isWebAuthEnabled() || isApiGateEnabled()) && !requester) {
         return apiError(c, 401, 'Authentication required');
       }
       const body = getValidatedBody(c, askAnswerRequestSchema);
@@ -5001,7 +5000,7 @@ export function registerApiRoutes(
         runId,
         requestId,
         body,
-        actorUserId: requester.userId,
+        actorUserId: requester?.userId,
       });
 
       if (!result.resumed) {
@@ -5011,7 +5010,7 @@ export function registerApiRoutes(
         });
       }
 
-      const autoResumed = await tryAutoResumeAfterGate(result.run, 'ask-answer', requester.userId);
+      const autoResumed = await tryAutoResumeAfterGate(result.run, 'ask-answer', requester?.userId);
       return c.json({
         success: true,
         message: autoResumed
@@ -5019,12 +5018,6 @@ export function registerApiRoutes(
           : `AskHuman answer accepted: ${result.run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or resume it from the originating conversation.`,
       });
     } catch (error) {
-      if (error instanceof AskHumanAuthenticationRequiredError) {
-        return apiError(c, 401, error.message);
-      }
-      if (error instanceof AskHumanForbiddenError) {
-        return apiError(c, 403, error.message);
-      }
       if (
         error instanceof AskHumanRunNotFoundError ||
         error instanceof workflowPendingInteractionDb.PendingInteractionNotFoundError
@@ -5211,6 +5204,67 @@ export function registerApiRoutes(
     }
   });
 
+  function nodeMessageMetadata(
+    metadata: NodeMessage['metadata']
+  ): { metadata: NonNullable<NodeMessage['metadata']> } | Record<string, never> {
+    return metadata !== undefined && metadata !== null ? { metadata } : {};
+  }
+
+  function toWorkflowNodeMessageResponse(
+    row: NodeMessage,
+    truncateOutput: boolean
+  ): z.infer<typeof workflowNodeMessageResponseSchema> {
+    const createdAt = toISOString(row.created_at);
+    if (row.kind === 'tool') {
+      if (truncateOutput && typeof row.payload.output === 'string') {
+        const output = truncateToolOutput(row.payload.output);
+        const metadata =
+          output !== row.payload.output
+            ? {
+                ...(row.metadata ?? {}),
+                truncated: true,
+                output_state: 'truncated' as const,
+                full_output_available: true,
+              }
+            : row.metadata;
+        return {
+          id: row.id,
+          seq: row.seq,
+          kind: row.kind,
+          payload: { ...row.payload, output },
+          created_at: createdAt,
+          ...nodeMessageMetadata(metadata),
+        };
+      }
+      return {
+        id: row.id,
+        seq: row.seq,
+        kind: row.kind,
+        payload: row.payload,
+        created_at: createdAt,
+        ...nodeMessageMetadata(row.metadata),
+      };
+    }
+    if (row.kind === 'text') {
+      return {
+        id: row.id,
+        seq: row.seq,
+        kind: row.kind,
+        payload: row.payload,
+        created_at: createdAt,
+        ...nodeMessageMetadata(row.metadata),
+      };
+    }
+    return {
+      id: row.id,
+      seq: row.seq,
+      kind: row.kind,
+      payload: row.payload,
+      created_at: createdAt,
+      ...nodeMessageMetadata(row.metadata),
+    };
+  }
+
   // GET /api/workflows/runs/:runId/nodes/:nodeId/messages - One node transcript
   registerOpenApiRoute(getWorkflowNodeMessagesRoute, async c => {
     const runId = c.req.param('runId') ?? '';
@@ -5227,44 +5281,26 @@ export function registerApiRoutes(
       if (!cursorMode) {
         const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId);
         return c.json({
-          messages: rows.map(row => ({
-            id: row.id,
-            seq: row.seq,
-            kind: row.kind,
-            payload: row.payload,
-            created_at: toISOString(row.created_at),
-          })),
+          messages: rows.map(row => toWorkflowNodeMessageResponse(row, false)),
         });
       }
       const limit = query.limit ?? 100;
-      const listQuery = {
-        ...(query.afterSeq !== undefined ? { afterSeq: query.afterSeq } : {}),
-        limit: limit + 1,
-        ...(query.occurrenceId !== undefined ? { occurrenceId: query.occurrenceId } : {}),
-        ...(query.attemptId !== undefined ? { attemptId: query.attemptId } : {}),
-      };
-      const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId, listQuery);
-      const hasMore = rows.length > limit;
-      const page = hasMore ? rows.slice(0, limit) : rows;
       const highWatermark = await workflowNodeMessageDb.getNodeMessageHighWatermark(runId, nodeId, {
         ...(query.occurrenceId !== undefined ? { occurrenceId: query.occurrenceId } : {}),
         ...(query.attemptId !== undefined ? { attemptId: query.attemptId } : {}),
       });
+      const rows = await workflowNodeMessageDb.listNodeMessages(runId, nodeId, {
+        ...(query.afterSeq !== undefined ? { afterSeq: query.afterSeq } : {}),
+        limit: limit + 1,
+        throughSeq: highWatermark,
+        ...(query.occurrenceId !== undefined ? { occurrenceId: query.occurrenceId } : {}),
+        ...(query.attemptId !== undefined ? { attemptId: query.attemptId } : {}),
+      });
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
       const last = page[page.length - 1];
       return c.json({
-        messages: page.map(row => ({
-          id: row.id,
-          seq: row.seq,
-          kind: row.kind,
-          payload:
-            row.kind === 'tool' && typeof row.payload.output === 'string'
-              ? { ...row.payload, output: truncateToolOutput(row.payload.output) }
-              : row.payload,
-          created_at: toISOString(row.created_at),
-          ...(row.metadata !== undefined && row.metadata !== null
-            ? { metadata: row.metadata }
-            : {}),
-        })),
+        messages: page.map(row => toWorkflowNodeMessageResponse(row, true)),
         ...(last !== undefined ? { nextCursor: String(last.seq) } : {}),
         hasMore,
         highWatermark,
@@ -5291,14 +5327,7 @@ export function registerApiRoutes(
       if (!run) return apiError(c, 404, 'Workflow run not found');
       const row = await workflowNodeMessageDb.getNodeMessage(runId, nodeId, messageId);
       if (!row) return apiError(c, 404, 'Workflow node message not found');
-      return c.json({
-        id: row.id,
-        seq: row.seq,
-        kind: row.kind,
-        payload: row.payload,
-        created_at: toISOString(row.created_at),
-        ...(row.metadata !== undefined && row.metadata !== null ? { metadata: row.metadata } : {}),
-      });
+      return c.json(toWorkflowNodeMessageResponse(row, false));
     } catch (error) {
       getLog().error(
         {

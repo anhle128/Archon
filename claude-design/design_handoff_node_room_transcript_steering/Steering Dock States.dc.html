@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap">
+<style>
+/* Tokens ported verbatim from packages/web/src/experiments/console/theme.css (hue 265). */
+:root{
+  --surface:oklch(0.175 0.007 265); --surface-inset:oklch(0.13 0.006 265); --surface-elevated:oklch(0.205 0.009 265);
+  --surface-hover:oklch(0.225 0.01 265);
+  --border:oklch(0.275 0.012 265); --border-bright:oklch(0.355 0.016 265);
+  --text-primary:oklch(0.975 0.004 265); --text-secondary:oklch(0.745 0.014 265); --text-tertiary:oklch(0.56 0.017 265);
+  --brand-teal:oklch(0.755 0.165 168); --accent-bright:oklch(0.64 0.295 330);
+  --running:oklch(0.72 0.155 245); --success:oklch(0.755 0.165 168); --warning:oklch(0.8 0.14 85); --error:oklch(0.68 0.215 18);
+  --node-command:oklch(0.62 0.18 250); --node-bash:oklch(0.75 0.15 75);
+  --font-sans:'Geist','Inter',ui-sans-serif,system-ui,sans-serif;
+  --font-mono:'Geist Mono','JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+body{margin:0;background:oklch(0.11 0.005 265);color:var(--text-primary);font-family:var(--font-sans)}
+*{box-sizing:border-box}
+a{color:var(--accent-bright)}
+a:hover{color:oklch(0.72 0.26 335)}
+</style>
+</helmet>
+
+<div style="padding:28px;font-size:13px">
+
+<h1 style="font-size:15px;letter-spacing:.02em;margin:0 0 4px">Steering dock — the agent's states inside a running node</h1>
+<p style="color:var(--text-secondary);font-size:12px;margin:0 0 22px;max-width:92ch;line-height:1.55;text-wrap:pretty">Console shown at a 300px crop of the node panel. Legacy differs in <span style="font-family:var(--font-mono)">:root</span> only — DESIGN.md reversed the earlier filled send control on measurement, so both shells are bordered. Anatomy, order and wording are identical on both. The dock is a <strong>sibling</strong> of the transcript's scroller, never a child of it — so it cannot cover the last row, which on a running node is the row being watched. The node pill stays <span style="font-family:var(--font-mono)">running</span> across every state below except the terminal fail: steering acts on the <em>agent</em>, never the node lifecycle.</p>
+
+<h2 style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin:28px 0 10px;font-weight:600">Agent sub-states — the node stays running throughout</h2>
+<div style="display:flex;gap:16px;flex-wrap:wrap">
+
+  <div style="width:300px">
+    <div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">1 · agent generating</div>
+    <div style="background:var(--surface);border:1px solid var(--border-bright);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;height:250px">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--surface);font-family:var(--font-mono);font-size:11.5px">
+        <span style="font-weight:600">implement</span>
+        <span style="margin-left:auto;font-size:10px;border-radius:999px;padding:2px 8px;border:1px solid oklch(0.72 0.155 245 / .4);color:var(--running)">running</span>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:6px 8px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--success)">✓</span><span style="font-size:11px;border:1px solid oklch(0.62 0.18 250 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-command)">read_file</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">dag-executor.ts</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">418 lines</span></div>
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--running)">◐</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test --workspace</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">12s</span></div>
+      </div>
+      <div style="border-top:1px solid var(--border);background:var(--surface-elevated);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+        <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;padding:8px 10px">
+          <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:5px">Queued · 2</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">wrong suite — use -p archon-workflows</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">and skip the doctests</div>
+          <div style="font-size:10px;color:var(--text-secondary);margin-top:4px">this tab only</div>
+        </div>
+        <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;min-height:56px;padding:7px 9px;font-family:var(--font-sans);font-size:12.5px;line-height:1.5;color:var(--text-secondary)">Message the agent…</div>
+        <div style="display:flex;align-items:center">
+          <button type="button" style="font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;border:1px solid var(--border-bright);color:var(--text-primary);font-family:var(--font-sans)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">Stop</button>
+          <button type="button" style="margin-left:auto;min-width:84px;font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;border:1px solid var(--border-bright);color:var(--text-primary);font-family:var(--font-sans)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">Queue</button>
+        </div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px;text-wrap:pretty">Composer enabled while it works. <span style="font-family:var(--font-mono)">Queue</span> holds the message; no row changes, no tool call is interrupted. <span style="font-family:var(--font-mono)">Stop</span> interrupts the agent's current turn — it does not stop the node.</div>
+  </div>
+
+  <div style="width:300px">
+    <div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">2 · interrupting · brief transient</div>
+    <div style="background:var(--surface);border:1px solid var(--border-bright);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;height:250px">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--surface);font-family:var(--font-mono);font-size:11.5px">
+        <span style="font-weight:600">implement</span>
+        <span style="margin-left:auto;font-size:10px;border-radius:999px;padding:2px 8px;border:1px solid oklch(0.72 0.155 245 / .4);color:var(--running)">running</span>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:6px 8px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--success)">✓</span><span style="font-size:11px;border:1px solid oklch(0.62 0.18 250 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-command)">read_file</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">dag-executor.ts</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">418 lines</span></div>
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--running)">◐</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test --workspace</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">18s</span></div>
+      </div>
+      <div style="border-top:1px solid var(--border);background:var(--surface-elevated);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+        <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;padding:8px 10px">
+          <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:5px">Queued · 2</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">wrong suite — use -p archon-workflows</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">and skip the doctests</div>
+          <div style="font-size:10px;color:var(--text-secondary);margin-top:4px">this tab only</div>
+        </div>
+        <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;min-height:56px;padding:7px 9px;font-family:var(--font-sans);font-size:12.5px;line-height:1.5;color:var(--text-secondary)">Message the agent…</div>
+        <div style="display:flex;align-items:center">
+          <button type="button" aria-disabled="true" style="font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;border:1px solid var(--border);color:var(--text-secondary);font-family:var(--font-sans)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">Stopping…</button>
+          <button type="button" style="margin-left:auto;min-width:84px;font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;border:1px solid var(--border-bright);color:var(--text-primary);font-family:var(--font-sans)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">Queue</button>
+        </div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px;text-wrap:pretty"><strong>A brief UI-local transient, not a node state.</strong> The interrupt is a provider primitive / stream-abort in-process — <strong>sub-second</strong>, not a status poll — so whether to show this at all is Kevin's call; if shown it must be brief and must not fake being done. No progress bar — nothing is being tracked. Send still reads <span style="font-family:var(--font-mono)">Queue</span>, because the node is still running. Announced once, politely: <span style="font-family:var(--font-mono)">agent interrupting</span>.</div>
+  </div>
+
+  <div style="width:300px">
+    <div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">3 · idle after interrupt</div>
+    <div style="background:var(--surface);border:1px solid var(--border-bright);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;height:250px">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--surface);font-family:var(--font-mono);font-size:11.5px">
+        <span style="font-weight:600">implement</span>
+        <span style="margin-left:auto;font-size:10px;border-radius:999px;padding:2px 8px;border:1px solid oklch(0.72 0.155 245 / .4);color:var(--running)">running</span>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:6px 8px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--success)">✓</span><span style="font-size:11px;border:1px solid oklch(0.62 0.18 250 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-command)">read_file</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">dag-executor.ts</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">418 lines</span></div>
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--warning)">⚠</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test --workspace</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">interrupted</span></div>
+      </div>
+      <div style="border-top:1px solid var(--border);background:var(--surface-elevated);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+        <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;padding:8px 10px">
+          <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:5px">Will send · 2</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">wrong suite — use -p archon-workflows</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">and skip the doctests</div>
+          <div style="font-size:10px;color:var(--text-secondary);margin-top:4px">this tab only</div>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary);line-height:1.45">stopped after the last completed tool call · files already written stay written</div>
+        <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;min-height:56px;padding:7px 9px;font-family:var(--font-sans);font-size:12.5px;line-height:1.5;color:var(--text-secondary)">Message the agent…</div>
+        <div style="display:flex;align-items:center">
+          <button type="button" style="margin-left:auto;min-width:84px;font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;border:1px solid var(--border-bright);color:var(--text-primary);font-family:var(--font-sans)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">Send now</button>
+        </div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px;text-wrap:pretty">The node never left <span style="font-family:var(--font-mono)">running</span> — only the agent's current generation was interrupted. Stop control gone. Header word flips to <span style="font-family:var(--font-mono)">Will send</span>: that one word is the whole signal the control below changed meaning. The disclosure is <em>text</em>, shown exactly when the operator is most likely to assume a stop undoes work.</div>
+  </div>
+
+  <div style="width:300px">
+    <div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">4 · generating again</div>
+    <div style="background:var(--surface);border:1px solid var(--border-bright);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;height:250px">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--surface);font-family:var(--font-mono);font-size:11.5px">
+        <span style="font-weight:600">implement</span>
+        <span style="margin-left:auto;font-size:10px;border-radius:999px;padding:2px 8px;border:1px solid oklch(0.72 0.155 245 / .4);color:var(--running)">running</span>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:6px 8px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--warning)">⚠</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test --workspace</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">interrupted</span></div>
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--running)">◐</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test -p archon-workflows</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">3s</span></div>
+      </div>
+      <div style="border-top:1px solid var(--border);background:var(--surface-elevated);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+        <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;min-height:56px;padding:7px 9px;font-family:var(--font-sans);font-size:12.5px;line-height:1.5;color:var(--text-secondary)">Message the agent…</div>
+        <div style="display:flex;align-items:center">
+          <button type="button" style="font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;border:1px solid var(--border-bright);color:var(--text-primary);font-family:var(--font-sans)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">Stop</button>
+          <button type="button" style="margin-left:auto;min-width:84px;font-size:11.5px;font-weight:500;border-radius:6px;min-height:32px;padding:0 12px;background:transparent;border:1px solid var(--border-bright);color:var(--text-primary);font-family:var(--font-sans)" style-focus="outline:2px solid var(--accent-bright);outline-offset:2px">Queue</button>
+        </div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px;text-wrap:pretty">Both controls revert the instant the agent's sub-state says generating again — read from the projected sub-state, never from a remembered mode. Draft box gone because it is empty; it is never drawn as an empty shell.</div>
+  </div>
+
+</div>
+
+<h2 style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin:28px 0 10px;font-weight:600">Terminal states — the dock on a node that has ended</h2>
+<div style="display:flex;gap:16px;flex-wrap:wrap">
+
+  <div style="width:300px">
+    <div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">5 · finished · something undelivered</div>
+    <div style="background:var(--surface);border:1px solid var(--border-bright);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;height:250px">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--surface);font-family:var(--font-mono);font-size:11.5px">
+        <span style="font-weight:600">implement</span>
+        <span style="margin-left:auto;font-size:10px;border-radius:999px;padding:2px 8px;border:1px solid oklch(0.755 0.165 168 / .4);color:var(--success)">completed</span>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:6px 8px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--warning)">⚠</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test --workspace</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">interrupted</span></div>
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--success)">✓</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test -p archon-workflows</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">41 passed</span></div>
+      </div>
+      <div style="border-top:1px solid var(--border);background:var(--surface-elevated);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+        <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;padding:8px 10px">
+          <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:5px">Never sent · 2</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">and skip the doctests</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">check the fixture path too</div>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary);line-height:1.45">node finished · these never left this tab</div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px;text-wrap:pretty">No field, no <span style="font-family:var(--font-mono)">Stop</span>, no send — there is nothing left to steer, and a control that cannot act is not drawn. What survives is <strong>read-only</strong>: the operator's own words are never discarded without saying so, and the half-typed line folds in as the last item. Reconciliation runs on the node's terminal event: any <span style="font-family:var(--font-mono)">sent</span> id with no matching row is restored here.</div>
+  </div>
+
+  <div style="width:300px">
+    <div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">6 · finished · nothing undelivered</div>
+    <div style="background:var(--surface);border:1px solid var(--border-bright);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;height:250px">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--surface);font-family:var(--font-mono);font-size:11.5px">
+        <span style="font-weight:600">implement</span>
+        <span style="margin-left:auto;font-size:10px;border-radius:999px;padding:2px 8px;border:1px solid oklch(0.755 0.165 168 / .4);color:var(--success)">completed</span>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:6px 8px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--success)">✓</span><span style="font-size:11px;border:1px solid oklch(0.62 0.18 250 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-command)">read_file</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">dag-executor.ts</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">418 lines</span></div>
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--success)">✓</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test -p archon-workflows</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">41 passed</span></div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px;text-wrap:pretty">No dock at all — the transcript runs to the bottom of the panel. Sending here would mean <span style="font-family:var(--font-mono)">retry-node</span>, which resets the checkout to this node's checkpoint and re-runs every node after it. That is its own capability with its own confirmation, not a composer.</div>
+  </div>
+
+  <div style="width:300px">
+    <div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">7 · interrupted, no redirect · node failed (30-min)</div>
+    <div style="background:var(--surface);border:1px solid var(--border-bright);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;height:250px">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--surface);font-family:var(--font-mono);font-size:11.5px">
+        <span style="font-weight:600">implement</span>
+        <span style="margin-left:auto;font-size:10px;border-radius:999px;padding:2px 8px;border:1px solid oklch(0.68 0.215 18 / .4);color:var(--error)">failed</span>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:6px 8px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--success)">✓</span><span style="font-size:11px;border:1px solid oklch(0.62 0.18 250 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-command)">read_file</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">dag-executor.ts</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">418 lines</span></div>
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--warning)">⚠</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test --workspace</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">interrupted</span></div>
+      </div>
+      <div style="border-top:1px solid var(--border);background:var(--surface-elevated);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+        <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;padding:8px 10px">
+          <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:5px">Never sent · 2</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">wrong suite — use -p archon-workflows</div>
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">and skip the doctests</div>
+        </div>
+        <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary);line-height:1.45">interrupted by operator, no redirect received · failed after 30-minute idle timeout</div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px;text-wrap:pretty">The owner-ratified bound. While idle-after-interrupt the dock waits (<span style="font-family:var(--font-mono)">Send now</span>). If nothing is sent, the <strong>engine</strong> — the in-process owner, which can tell idle-after-interrupt from a crash — fails the node after 30 minutes: never a wait-forever, never a quiet finish on partial output. The in-memory queue dies with the run; anything still <span style="font-family:var(--font-mono)">sent</span> but unmatched returns read-only as <span style="font-family:var(--font-mono)">Never sent</span>. Resuming re-runs the node with a fresh session — the interrupted context is gone.</div>
+  </div>
+
+  <div style="width:300px">
+    <div style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:6px">8 · detached run · not steerable</div>
+    <div style="background:var(--surface);border:1px solid var(--border-bright);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;height:250px">
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);background:var(--surface);font-family:var(--font-mono);font-size:11.5px">
+        <span style="font-weight:600">implement</span>
+        <span style="margin-left:auto;font-size:10px;border-radius:999px;padding:2px 8px;border:1px solid oklch(0.72 0.155 245 / .4);color:var(--running)">running</span>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:6px 8px;font-family:var(--font-mono);font-size:12px;color:var(--text-secondary)">
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--success)">✓</span><span style="font-size:11px;border:1px solid oklch(0.62 0.18 250 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-command)">read_file</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">dag-executor.ts</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">418 lines</span></div>
+        <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden"><span style="width:12px;font-weight:700;text-align:center;color:var(--running)">◐</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test --workspace</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">12s</span></div>
+      </div>
+      <div style="border-top:1px solid var(--border);background:var(--surface-elevated);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+        <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-secondary);line-height:1.45">not steerable here · this run was started detached, so its live session is not in this process</div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px;text-wrap:pretty"><strong>Added in this port</strong> — the state the spec requires but no earlier mockup drew. All of steering binds to the in-process live handle, which a CLI <span style="font-family:var(--font-mono)">--detach</span> run has no entry in. Cancel and normal resume still work; the dock states the limit rather than offering a field whose send would 409.</div>
+  </div>
+
+</div>
+
+<h2 style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin:28px 0 10px;font-weight:600">The operator in the record</h2>
+<div style="background:var(--surface);border:1px solid var(--border-bright);border-radius:10px;padding:12px 14px;max-width:680px">
+  <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden;font-family:var(--font-mono);font-size:12px"><span style="width:12px;font-weight:700;text-align:center;color:var(--warning)">⚠</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test --workspace</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">interrupted</span></div>
+
+  <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);display:flex;align-items:center;gap:8px;margin:10px 0 3px">operator · kevin<span style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;color:var(--text-secondary)">sent</span></div>
+  <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-primary)">wrong suite — use -p archon-workflows</div>
+
+  <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);display:flex;align-items:center;gap:8px;margin:10px 0 3px">operator · kevin<span style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;color:var(--text-secondary)">sent</span></div>
+  <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-primary)">and skip the doctests</div>
+
+  <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);display:flex;align-items:center;gap:8px;margin:10px 0 3px">assistant</div>
+  <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-secondary)">Understood — switching to the workspace-scoped crate and dropping doctests from the run.</div>
+
+  <div style="display:flex;gap:8px;align-items:center;padding:3px 4px;white-space:nowrap;overflow:hidden;font-family:var(--font-mono);font-size:12px;margin-top:10px"><span style="width:12px;font-weight:700;text-align:center;color:var(--running)">◐</span><span style="font-size:11px;border:1px solid oklch(0.75 0.15 75 / .4);border-radius:4px;padding:1px 7px;background:var(--surface-elevated);color:var(--node-bash)">shell</span><span style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis">cargo test -p archon-workflows --lib</span><span style="margin-left:auto;font-size:11px;color:var(--text-secondary)">3s</span></div>
+</div>
+<p style="color:var(--text-secondary);font-size:12px;margin:10px 0 0;max-width:92ch;line-height:1.55;text-wrap:pretty">Three things separate the operator from the model, and none is a hue: the <span style="font-family:var(--font-mono)">operator</span> label with the <strong>sender's name</strong> (the <span style="font-family:var(--font-mono)">operator_user_id</span>, so a multi-user install attributes each message), and full-strength text against the model's secondary saying it again. The badge reads <span style="font-family:var(--font-mono)">sent</span> here and stays that way — only Claude echoes back the id we stamp, and that echo needs an SDK bump, so <span style="font-family:var(--font-mono)">delivered</span> is not claimed for anyone today.</p>
+
+<h2 style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin:28px 0 10px;font-weight:600">Message status — the two reachable states, and the one that is gated</h2>
+<div style="display:flex;gap:16px;flex-wrap:wrap;max-width:980px">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px;width:300px">
+    <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);display:flex;align-items:center;gap:8px;margin-bottom:3px">operator · kevin<span style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;color:var(--text-secondary)">sent</span></div>
+    <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-primary)">wrong suite — use -p archon-workflows</div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px">Today's ceiling on every provider. The message left the browser; nothing claims it reached the agent.</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px;width:300px">
+    <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);display:flex;align-items:center;gap:8px;margin-bottom:3px">operator · kevin<span style="margin-left:auto;font-size:11px;text-transform:none;letter-spacing:0;color:var(--success)">delivered</span></div>
+    <div style="font-family:var(--font-sans);font-size:12.5px;line-height:1.55;color:var(--text-primary)">wrong suite — use -p archon-workflows</div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px">Claude only, and unreachable until the SDK pin moves to ≥ 0.3.246. The word carries it; the success colour is added on top, never instead.</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px;width:300px">
+    <div style="background:var(--surface-inset);border:1px solid var(--border);border-radius:6px;padding:8px 10px">
+      <div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-secondary);margin-bottom:5px">Never sent · 1</div>
+      <div style="font-family:var(--font-mono);font-size:11px;color:var(--text-secondary);padding:4px 8px;border-radius:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">wrong suite — use -p archon-workflows</div>
+    </div>
+    <div style="font-size:11px;color:var(--text-secondary);line-height:1.5;margin-top:8px">A <span style="font-family:var(--font-mono)">sent</span> id with no matching operator row at the node's terminal event is restored to the draft box, read-only. No message stays <span style="font-family:var(--font-mono)">sent</span> yet silently undelivered on any path.</div>
+  </div>
+</div>
+
+<h2 style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-secondary);margin:28px 0 10px;font-weight:600">What the dock refuses to do</h2>
+<table style="border-collapse:collapse;font-size:11.5px;max-width:980px">
+  <tr>
+    <th style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary);font-weight:600;font-size:10px;letter-spacing:.08em;text-transform:uppercase">Refused</th>
+    <th style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary);font-weight:600;font-size:10px;letter-spacing:.08em;text-transform:uppercase">Why</th>
+  </tr>
+  <tr>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);font-family:var(--font-mono);color:var(--text-primary);white-space:nowrap">a send that stops the node</td>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary);line-height:1.5">A send is never a node-stop — stopping the whole node is the separate <span style="font-family:var(--font-mono)">Cancel</span> button. <span style="font-family:var(--font-mono)">Stop</span> interrupts the agent's current turn, which is a distinct act; a send control that silently stopped the agent would lie about what it does.</td>
+  </tr>
+  <tr>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);font-family:var(--font-mono);color:var(--text-primary);white-space:nowrap">per-item send while generating</td>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary);line-height:1.5">There is nothing an individual message could do but wait. Same lie, one row down.</td>
+  </tr>
+  <tr>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);font-family:var(--font-mono);color:var(--text-primary);white-space:nowrap">optimistic flip to idle before the interrupt lands</td>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary);line-height:1.5">The interrupt is sub-second but not zero. The interface must not fake being done before the agent acknowledges — a flip that runs ahead of the ack is wrong for exactly as long as it leads.</td>
+  </tr>
+  <tr>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);font-family:var(--font-mono);color:var(--text-primary);white-space:nowrap">a delivered badge without an echo</td>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary);line-height:1.5">Correlation is by id alone. Text and timestamps mis-attribute silently when messages merge into one turn.</td>
+  </tr>
+  <tr>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);font-family:var(--font-mono);color:var(--text-primary);white-space:nowrap">an empty draft box</td>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary);line-height:1.5">A panel that is always there stops being a signal.</td>
+  </tr>
+  <tr>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);font-family:var(--font-mono);color:var(--text-primary);white-space:nowrap">Enter to send</td>
+    <td style="text-align:left;padding:6px 12px 6px 0;vertical-align:top;border-bottom:1px solid var(--border);color:var(--text-secondary);line-height:1.5">A stray keystroke must not be able to reach a running agent.</td>
+  </tr>
+</table>
+
+</div>
+
+</x-dc>
+</body>
+</html>

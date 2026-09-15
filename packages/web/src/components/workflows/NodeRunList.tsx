@@ -1,3 +1,4 @@
+import { roomOpenerId } from '@/lib/execution-room-model';
 import { cn } from '@/lib/utils';
 
 import { nodeStatusLabel } from './awaiting-chrome';
@@ -30,6 +31,8 @@ export function NodeRunList({
         return (
           <button
             key={row.id}
+            id={roomOpenerId('legacy', 'log', row.id)}
+            data-node-id={row.nodeId}
             type="button"
             aria-current={selected ? 'true' : undefined}
             className={cn(

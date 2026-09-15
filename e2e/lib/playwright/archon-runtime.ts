@@ -2,22 +2,42 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // e2e/lib/playwright -> repo root is three levels up.
-const REPO_ROOT = join(HERE, '..', '..', '..');
+const REPO_ROOT = process.env.ARCHON_E2E_REPO_ROOT
+  ? resolve(process.env.ARCHON_E2E_REPO_ROOT)
+  : join(HERE, '..', '..', '..');
 const CLI_ENTRY = join(REPO_ROOT, 'packages', 'cli', 'src', 'cli.ts');
 const SERVER_ENTRY = join(REPO_ROOT, 'packages', 'server', 'src', 'index.ts');
 const WEB_DIST_INDEX = join(REPO_ROOT, 'packages', 'web', 'dist', 'index.html');
 const WORKFLOW_FIXTURE = join(HERE, '..', '..', 'fixtures', 'workflows', 'e2e-usage-record.yaml');
 const HITL_WORKFLOW_FIXTURE = join(HERE, '..', '..', 'fixtures', 'workflows', 'e2e-hitl-run.yaml');
+const HITL_LONG_WORKFLOW_FIXTURE = join(
+  HERE,
+  '..',
+  '..',
+  'fixtures',
+  'workflows',
+  'e2e-hitl-long-history.yaml'
+);
+const HITL_TWO_ASKS_WORKFLOW_FIXTURE = join(
+  HERE,
+  '..',
+  '..',
+  'fixtures',
+  'workflows',
+  'e2e-hitl-two-asks.yaml'
+);
 
 /** Name of the seeded workflow whose single AI node runs on the fake provider. */
 export const E2E_WORKFLOW_NAME = 'e2e-usage-record';
 export const E2E_HITL_WORKFLOW_NAME = 'e2e-hitl-run';
+export const E2E_HITL_LONG_WORKFLOW_NAME = 'e2e-hitl-long-history';
+export const E2E_HITL_TWO_ASKS_WORKFLOW_NAME = 'e2e-hitl-two-asks';
 export const E2E_STARTER_WEB_USER = 'e2e-hitl-starter';
 export const E2E_TEAMMATE_WEB_USER = 'e2e-hitl-teammate';
 export const E2E_CLI_USER = 'e2e-hitl-cli';
@@ -25,6 +45,9 @@ export const HITL_TOOL_OUTPUT = 'HITL_TOOL_OUTPUT_VISIBLE';
 export const HITL_INSPECT_NODE = 'inspect-file';
 export const HITL_LOOP_NODE = 'inspect-twice';
 export const HITL_ASK_NODE = 'ask-starter';
+export const HITL_LONG_NODE = 'long-history';
+export const HITL_ASK_ANSWER_NODE = 'ask-answer';
+export const HITL_ASK_DECLINE_NODE = 'ask-decline';
 
 /**
  * The one model the seeded config prices. A usage entry for
@@ -43,6 +66,15 @@ export interface CliRunResult {
   state?: string;
   terminal?: boolean;
   stdout: string;
+}
+
+export class UnsupportedSetupError extends Error {
+  readonly code = 'UNSUPPORTED_SETUP';
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'UnsupportedSetupError';
+  }
 }
 
 export interface LiveWorkflowRun {
@@ -80,6 +112,12 @@ export interface ArchonRuntime {
   runWorkflow(directive?: string): Promise<string>;
   /** Run the HITL fixture to a CLI envelope (typically `paused` at Ask). */
   runHitlWorkflow(): Promise<CliRunResult>;
+  /** Real CLI run without ARCHON_USER_ID or its USER/USERNAME identity fallbacks. */
+  runUnownedHitlWorkflow(): Promise<CliRunResult>;
+  /** Run the multi-page HITL history fixture through the existing CLI runner. */
+  runHitlLongHistoryWorkflow(): Promise<CliRunResult>;
+  /** Run two parallel AskHuman nodes so answered and declined records coexist. */
+  runHitlTwoAsksWorkflow(): Promise<CliRunResult>;
   /**
    * Start the HITL fixture without waiting for CLI exit. `runId` resolves as
    * soon as the run row exists. Use only while work is still running.
@@ -104,12 +142,24 @@ export interface ArchonRuntime {
  * the server's dotenv re-inject the repo `.env` Postgres URL. `ARCHON_E2E_FAKE_PROVIDER`
  * registers the fake AI provider (no-op in any process without it).
  */
-function isolatedEnv(home: string, port?: number): NodeJS.ProcessEnv {
+export function isolatedEnv(home: string, port?: number): NodeJS.ProcessEnv {
   return {
     ...process.env,
     ARCHON_HOME: home,
+    HOST: '127.0.0.1',
     DATABASE_URL: '',
+    SLACK_BOT_TOKEN: '',
+    SLACK_APP_TOKEN: '',
+    TELEGRAM_BOT_TOKEN: '',
+    DISCORD_BOT_TOKEN: '',
+    GITHUB_TOKEN: '',
+    GITHUB_APP_ID: '',
+    GITEA_TOKEN: '',
+    GITLAB_TOKEN: '',
+    BETTER_AUTH_SECRET: '',
+    ARCHON_TELEMETRY_DISABLED: '1',
     ARCHON_E2E_FAKE_PROVIDER: '1',
+    DEFAULT_AI_ASSISTANT: 'e2e-fake',
     ARCHON_USER_ID: E2E_CLI_USER,
     LOG_LEVEL: 'warn',
     ...(port ? { PORT: String(port) } : {}),
@@ -203,7 +253,7 @@ function seedStarterIdentities(dbPath: string, userId: string): void {
 }
 
 async function terminateChild(child: ChildProcess, exited: Promise<number>): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
     await exited;
     return;
   }
@@ -218,6 +268,12 @@ async function terminateChild(child: ChildProcess, exited: Promise<number>): Pro
   }
 }
 
+interface OwnedProcess {
+  child: ChildProcess;
+  exited: Promise<number>;
+  command: string;
+}
+
 export async function createArchonRuntime(workerIndex: number): Promise<ArchonRuntime> {
   if (!existsSync(WEB_DIST_INDEX)) {
     throw new Error(
@@ -225,7 +281,45 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
     );
   }
 
+  const portBase = Number(process.env.ARCHON_E2E_PORT_BASE ?? '3400');
+  const port = portBase + workerIndex;
+  if (!Number.isInteger(portBase) || portBase < 1024 || port > 65535) {
+    throw new Error(
+      'ARCHON_E2E_PORT_BASE must be an integer between 1024 and 65535 minus the worker index'
+    );
+  }
+  if (await isPortListening(port)) {
+    throw new Error(
+      `Port ${port} is already in use by an unrelated process. Refusing to launch this worker's Archon server.`
+    );
+  }
   const base = mkdtempSync(join(tmpdir(), 'archon-e2e-'));
+  const owned: OwnedProcess[] = [];
+  const stop = async (): Promise<void> => {
+    try {
+      for (const item of [...owned].reverse()) {
+        await terminateChild(item.child, item.exited);
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  };
+  let initialized = false;
+  try {
+    const runtime = await startArchonRuntime(port, base, owned, stop);
+    initialized = true;
+    return runtime;
+  } finally {
+    if (!initialized) await stop();
+  }
+}
+
+async function startArchonRuntime(
+  port: number,
+  base: string,
+  owned: OwnedProcess[],
+  stop: () => Promise<void>
+): Promise<ArchonRuntime> {
   const home = join(base, 'home');
   const workdir = join(base, 'workdir');
   mkdirSync(join(home, 'workflows'), { recursive: true });
@@ -237,6 +331,14 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
   writeFileSync(
     join(home, 'workflows', `${E2E_HITL_WORKFLOW_NAME}.yaml`),
     readFileSync(HITL_WORKFLOW_FIXTURE)
+  );
+  writeFileSync(
+    join(home, 'workflows', `${E2E_HITL_LONG_WORKFLOW_NAME}.yaml`),
+    readFileSync(HITL_LONG_WORKFLOW_FIXTURE)
+  );
+  writeFileSync(
+    join(home, 'workflows', `${E2E_HITL_TWO_ASKS_WORKFLOW_NAME}.yaml`),
+    readFileSync(HITL_TWO_ASKS_WORKFLOW_FIXTURE)
   );
 
   writeFileSync(
@@ -252,19 +354,15 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
     ].join('\n')
   );
 
-  const port = 3400 + workerIndex;
-  if (await isPortListening(port)) {
-    throw new Error(
-      `Port ${port} is already in use by an unrelated process. Refusing to launch this worker's Archon server.`
-    );
-  }
   const baseURL = `http://127.0.0.1:${port}`;
   const starterUserId = randomUUID();
   const dbPath = join(home, 'archon.db');
-  const owned: { child: ChildProcess; exited: Promise<number>; command: string }[] = [];
 
   const track = (child: ChildProcess, command: string): Promise<number> => {
-    const exited = new Promise<number>(resolve => child.on('exit', code => resolve(code ?? -1)));
+    const exited = new Promise<number>(resolve => {
+      child.once('error', () => resolve(-1));
+      child.once('exit', code => resolve(code ?? -1));
+    });
     owned.push({ child, exited, command });
     return exited;
   };
@@ -277,6 +375,7 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
   let serverLog = '';
   server.stdout?.on('data', d => (serverLog += String(d)));
   server.stderr?.on('data', d => (serverLog += String(d)));
+  server.once('error', error => (serverLog += error.message));
   const serverExited = track(server, `bun ${SERVER_ENTRY} PORT=${String(port)}`);
 
   try {
@@ -299,18 +398,20 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
   seedStarterIdentities(dbPath, starterUserId);
 
   const spawnCli = (
-    args: string[]
+    args: string[],
+    env: NodeJS.ProcessEnv = isolatedEnv(home)
   ): { child: ChildProcess; stdout: { text: string }; exited: Promise<number> } => {
-    const cli = spawn('bun', args, { cwd: workdir, env: isolatedEnv(home), stdio: 'pipe' });
+    const cli = spawn('bun', args, { cwd: workdir, env, stdio: 'pipe' });
     const buf = { text: '' };
     cli.stdout?.on('data', d => (buf.text += String(d)));
     cli.stderr?.on('data', d => (buf.text += String(d)));
+    cli.once('error', error => (buf.text += error.message));
     const exited = track(cli, `bun ${args.join(' ')}`);
     return { child: cli, stdout: buf, exited };
   };
 
-  const runCli = async (args: string[]): Promise<CliRunResult> => {
-    const launched = spawnCli(args);
+  const runCli = async (args: string[], env?: NodeJS.ProcessEnv): Promise<CliRunResult> => {
+    const launched = spawnCli(args, env);
     const code = await launched.exited;
     if (code !== 0) {
       throw new Error(
@@ -330,6 +431,54 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
 
   const runHitlWorkflow = async (): Promise<CliRunResult> => {
     return runCli([CLI_ENTRY, 'workflow', 'run', E2E_HITL_WORKFLOW_NAME, '--folder', '--json']);
+  };
+
+  const runUnownedHitlWorkflow = async (): Promise<CliRunResult> => {
+    // Empty ARCHON_USER_ID alone falls back to USER/USERNAME in resolveCliUserId.
+    // Remove all three in this subprocess to exercise actual solo CLI ownership.
+    return runCli([CLI_ENTRY, 'workflow', 'run', E2E_HITL_WORKFLOW_NAME, '--folder', '--json'], {
+      ...isolatedEnv(home),
+      ARCHON_USER_ID: '',
+      USER: '',
+      USERNAME: '',
+    });
+  };
+
+  const runHitlLongHistoryWorkflow = async (): Promise<CliRunResult> => {
+    try {
+      return await runCli([
+        CLI_ENTRY,
+        'workflow',
+        'run',
+        E2E_HITL_LONG_WORKFLOW_NAME,
+        '--folder',
+        '--json',
+      ]);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes('e2e-fake: scenario directive failed validation') &&
+        error.message.includes('"unrecognized_keys"') &&
+        error.message.includes('"repeatTool"')
+      ) {
+        throw new UnsupportedSetupError(
+          'Target fake provider rejects the long-history repeatTool directive',
+          { cause: error }
+        );
+      }
+      throw error;
+    }
+  };
+
+  const runHitlTwoAsksWorkflow = async (): Promise<CliRunResult> => {
+    return runCli([
+      CLI_ENTRY,
+      'workflow',
+      'run',
+      E2E_HITL_TWO_ASKS_WORKFLOW_NAME,
+      '--folder',
+      '--json',
+    ]);
   };
 
   const listWorkflowRunIds = async (workflowName: string): Promise<string[]> => {
@@ -493,17 +642,6 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
     return { runId, conversationId: conv.conversationId, codebaseId: codebase.id };
   };
 
-  const stop = async (): Promise<void> => {
-    for (const item of [...owned].reverse()) {
-      await terminateChild(item.child, item.exited);
-    }
-    try {
-      rmSync(base, { recursive: true, force: true });
-    } catch {
-      // best effort — temp dir cleanup should never fail a run
-    }
-  };
-
   return {
     baseURL,
     home,
@@ -513,6 +651,9 @@ export async function createArchonRuntime(workerIndex: number): Promise<ArchonRu
     teammateWebUser: E2E_TEAMMATE_WEB_USER,
     runWorkflow,
     runHitlWorkflow,
+    runUnownedHitlWorkflow,
+    runHitlLongHistoryWorkflow,
+    runHitlTwoAsksWorkflow,
     startHitlWorkflow,
     resumeWorkflow,
     runHitlWorkflowViaWeb,

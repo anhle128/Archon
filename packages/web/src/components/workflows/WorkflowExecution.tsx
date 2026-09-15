@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -11,6 +11,7 @@ import {
   type AskActionState,
   type AskActionStateByRequest,
 } from './ask-answer-controller';
+import { buildLogRows } from './build-log-rows';
 import { StepLogs } from './StepLogs';
 import { WorkflowLogs } from './WorkflowLogs';
 import { WorkflowDagViewer } from './WorkflowDagViewer';
@@ -36,8 +37,24 @@ import {
   type PendingInteraction,
   type WorkflowEventResponse,
 } from '@/lib/api';
+import {
+  applyRoomDeepLink,
+  buildExecutionHeader,
+  chooseExecutionForInteraction,
+  chooseExecutionForNode,
+  closeRoom,
+  openRoom,
+  openExplicitRoom,
+  askCardId,
+  rememberRoomScroll,
+  resetRoomVisit,
+  roomOpenerId,
+  type RoomVisitState,
+} from '@/lib/execution-room-model';
+import { nodeMessageScopeKey, type NodeMessageSelection } from '@/lib/node-message-pages';
+import type { AskDraft, AskDraftByRequest } from './parse-ask-envelope';
 import { ensureUtc, formatDurationMs } from '@/lib/format';
-import { selectInitialNode } from '@/lib/select-initial-node';
+import { readRoomRatio, writeRoomRatio } from '@/lib/room-split-layout';
 import { settleRunningDagNodesForTerminalStatus } from '@/lib/workflow-utils';
 import type {
   WorkflowState,
@@ -335,11 +352,32 @@ function StatusBadge({ status }: { status: string }): React.ReactElement {
   );
 }
 
+function nodeMessageSelectionFromRow(row: {
+  id: string;
+  selection: import('./build-log-rows').LogRowSelection;
+}): NodeMessageSelection {
+  if (row.selection.kind === 'occurrence') {
+    const selection: NodeMessageSelection = {
+      kind: 'occurrence',
+      occurrenceId: row.selection.occurrenceId,
+    };
+    if (row.selection.attemptId !== undefined) {
+      selection.attemptId = row.selection.attemptId;
+    }
+    return selection;
+  }
+  return { kind: 'node', rowId: row.id };
+}
+
 export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.ReactElement {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const liveWorkflow = useWorkflowStore(s => s.workflows.get(runId));
-  const [selectedDagNode, setSelectedDagNode] = useState<string | null>(null);
+  const [room, setRoom] = useState<RoomVisitState>(() => resetRoomVisit(runId));
+  const [roomRatio, setRoomRatio] = useState(() =>
+    typeof window === 'undefined' ? 40 : readRoomRatio('legacy', window.localStorage)
+  );
   const [codebaseName, setCodebaseName] = useState<string | null>(null);
   const [codebaseCwd, setCodebaseCwd] = useState<string | null>(null);
   const [workerRunId, setWorkerRunId] = useState<string | null>(null);
@@ -350,10 +388,15 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   const fetchedCodebaseIdRef = useRef<string | null>(null);
   const [askActionStates, setAskActionStates] =
     useState<AskActionStateByRequest>(emptyAskActionStates);
+  const [askDrafts, setAskDrafts] = useState<AskDraftByRequest>({});
+  const updateAskDraft = useCallback((requestId: string, draft: AskDraft): void => {
+    setAskDrafts(current => ({ ...current, [requestId]: draft }));
+  }, []);
+  const selectedDagNode = room.selection?.nodeId ?? null;
+  const queryNode = searchParams.get('node');
 
   // Reset local state when navigating to a different workflow run
   useEffect(() => {
-    setSelectedDagNode(null);
     setCodebaseName(null);
     setCodebaseCwd(null);
     setWorkerRunId(null);
@@ -361,6 +404,7 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     setNodeScrollTrigger(0);
     fetchedCodebaseIdRef.current = null;
     setAskActionStates(emptyAskActionStates());
+    setAskDrafts({});
   }, [runId]);
 
   const setAskActionState = useCallback((requestId: string, state: AskActionState): void => {
@@ -559,13 +603,29 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     };
   })();
 
-  // Auto-select the first DAG node when workflow data loads and no node is selected.
-  // Prefer the currently executing node (for running workflows), otherwise pick the first node.
+  const executionRows = useMemo(
+    () =>
+      buildLogRows(
+        queryData?.nodeStates ?? [],
+        queryData?.events ?? [],
+        queryData?.nodeExecutions,
+        queryData?.workflowState.startedAt
+      ),
+    [
+      queryData?.events,
+      queryData?.nodeExecutions,
+      queryData?.nodeStates,
+      queryData?.workflowState.startedAt,
+    ]
+  );
+
   useEffect(() => {
-    if (selectedDagNode !== null) return;
-    const nodeId = selectInitialNode(workflow?.dagNodes);
-    if (nodeId) setSelectedDagNode(nodeId);
-  }, [selectedDagNode, workflow?.dagNodes]);
+    if (queryData === undefined) return;
+    setRoom(previous => {
+      const base = previous.runId === runId ? previous : resetRoomVisit(runId);
+      return applyRoomDeepLink(base, queryNode, executionRows);
+    });
+  }, [executionRows, queryData, queryNode, runId]);
 
   // Force re-render every second while workflow is running (for live timer)
   const [, setTick] = useState(0);
@@ -681,12 +741,113 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
     ? (nodeStartTimes.get(selectedDagNode) ?? null)
     : null;
 
+  const handleOpenRoom = useCallback(
+    (rowId: string, nodeId: string, openerId: string | null, rememberExplicit: boolean): void => {
+      const selection = { nodeId, rowId, openerId };
+      setRoom(previous =>
+        rememberExplicit ? openExplicitRoom(previous, selection) : openRoom(previous, selection)
+      );
+      setNodeScrollTrigger(prev => prev + 1);
+    },
+    []
+  );
+
+  const handleCloseRoom = useCallback((): void => {
+    const openerId = room.selection?.openerId ?? null;
+    setRoom(closeRoom);
+    requestAnimationFrame(() => {
+      if (openerId !== null) document.getElementById(openerId)?.focus({ preventScroll: true });
+    });
+  }, [room.selection?.openerId]);
+
+  const selectedExecutionRow =
+    executionRows.find(candidate => candidate.id === room.selection?.rowId) ?? null;
+  const runStartedAtIso = workflow === null ? '' : new Date(workflow.startedAt).toISOString();
+  const headerModel =
+    selectedExecutionRow === null
+      ? undefined
+      : buildExecutionHeader({
+          row: selectedExecutionRow,
+          events: queryData?.events ?? [],
+          runStartedAt: runStartedAtIso,
+        });
+  const headerOptions =
+    selectedExecutionRow === null
+      ? []
+      : executionRows
+          .filter(candidate => candidate.nodeId === selectedExecutionRow.nodeId)
+          .map(candidate => ({
+            rowId: candidate.id,
+            label: buildExecutionHeader({
+              row: candidate,
+              events: queryData?.events ?? [],
+              runStartedAt: runStartedAtIso,
+            }).executionLabel,
+          }));
+  const handleSelectExecution = useCallback(
+    (rowId: string): void => {
+      const next = executionRows.find(candidate => candidate.id === rowId);
+      if (next === undefined) return;
+      setRoom(previous =>
+        openExplicitRoom(previous, {
+          nodeId: next.nodeId,
+          rowId: next.id,
+          openerId: previous.selection?.openerId ?? null,
+        })
+      );
+    },
+    [executionRows]
+  );
+  const transcriptScopeKey =
+    selectedExecutionRow === null
+      ? undefined
+      : nodeMessageScopeKey(
+          runId,
+          selectedExecutionRow.nodeId,
+          nodeMessageSelectionFromRow(selectedExecutionRow)
+        );
+  const initialScrollTop =
+    transcriptScopeKey === undefined ? undefined : room.scrollTopByScope[transcriptScopeKey];
+  const handleScrollTopChange = useCallback(
+    (scrollTop: number): void => {
+      if (transcriptScopeKey === undefined) return;
+      setRoom(previous => rememberRoomScroll(previous, transcriptScopeKey, scrollTop));
+    },
+    [transcriptScopeKey]
+  );
+
+  const handleRoomRatioChange = useCallback((value: number): void => {
+    writeRoomRatio('legacy', value, window.localStorage);
+    setRoomRatio(value);
+  }, []);
+
   // Handler for user-initiated node clicks (graph or sidebar).
   // Increments scroll trigger so WorkflowLogs scrolls to the node's section.
-  const handleNodeClick = useCallback((nodeId: string): void => {
-    setSelectedDagNode(nodeId);
-    setNodeScrollTrigger(prev => prev + 1);
-  }, []);
+  const handleNodeClick = useCallback(
+    (nodeId: string): void => {
+      const lastExplicit = room.lastExplicitRowByNode[nodeId] ?? null;
+      const row = chooseExecutionForNode(executionRows, nodeId, lastExplicit);
+      if (row === null) {
+        setRoom(previous =>
+          openRoom(previous, {
+            nodeId,
+            rowId: `node:${nodeId}`,
+            openerId: roomOpenerId('legacy', 'graph', nodeId),
+          })
+        );
+      } else {
+        setRoom(previous =>
+          openRoom(previous, {
+            nodeId,
+            rowId: row.id,
+            openerId: roomOpenerId('legacy', 'graph', nodeId),
+          })
+        );
+      }
+      setNodeScrollTrigger(prev => prev + 1);
+    },
+    [executionRows, room.lastExplicitRowByNode]
+  );
 
   const handleRetryDispatched = useCallback((): void => {
     void queryClient.invalidateQueries({ queryKey: ['workflowRun', runId] });
@@ -757,7 +918,6 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
   // Sequential non-DAG runs keep the merged logs panel and selected-node empty state.
   const sequentialLogsPanel = (
     <div className="flex-1 flex flex-col overflow-hidden min-h-0 h-full">
-      {retryActionPanel}
       <div className="flex-1 flex flex-col overflow-hidden min-h-0">
         {logsPlatformId && !selectedStepHasEvents && !isRunning ? (
           <div className="flex-1 flex items-center justify-center text-text-secondary text-sm">
@@ -779,11 +939,6 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           <StepLogs runId={runId} lines={stepLogLines} />
         )}
       </div>
-      {!isRunning && workflow.artifacts.length > 0 && (
-        <div className="border-t border-border p-3">
-          <ArtifactSummary artifacts={workflow.artifacts} runId={runId} />
-        </div>
-      )}
     </div>
   );
 
@@ -855,8 +1010,14 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           activeView={activeView === 'chat' ? 'chat' : activeView === 'graph' ? 'graph' : 'logs'}
           renderGraph={renderGraph}
           selectedNodeId={selectedDagNode}
-          onSelectNode={setSelectedDagNode}
+          selectedLogRowId={room.selection?.rowId ?? null}
+          lastExplicitRowByNode={room.lastExplicitRowByNode}
+          onOpenRoom={handleOpenRoom}
+          onCloseRoom={handleCloseRoom}
+          roomRatio={roomRatio}
+          onRoomRatioChange={handleRoomRatioChange}
           runId={runId}
+          runStartedAt={runStartedAtIso}
           nodeStates={queryData?.nodeStates ?? []}
           events={queryData?.events ?? []}
           nodeExecutions={queryData?.nodeExecutions}
@@ -876,14 +1037,14 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           starterDisplayName={queryData?.starterDisplayName ?? null}
           actionStates={askActionStates}
           onSubmitAsk={askController.submit}
-          roomHeader={retryActionPanel}
-          roomFooter={
-            isRunning || workflow.artifacts.length === 0 ? undefined : (
-              <div className="border-t border-border p-3">
-                <ArtifactSummary artifacts={workflow.artifacts} runId={runId} />
-              </div>
-            )
-          }
+          headerModel={headerModel}
+          headerOptions={headerOptions}
+          onSelectExecution={handleSelectExecution}
+          scopeKey={transcriptScopeKey}
+          initialScrollTop={initialScrollTop}
+          onScrollTopChange={handleScrollTopChange}
+          askDrafts={askDrafts}
+          onAskDraftChange={updateAskDraft}
         />
       );
     }
@@ -932,10 +1093,30 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
             pendingInteractions={queryData?.pendingInteractions ?? []}
             nodeStates={queryData?.nodeStates ?? []}
             runError={queryData?.runError ?? null}
-            onSelectAwaitingNode={setSelectedDagNode}
-            onRequestGraphView={(): void => {
-              setActiveView('graph');
+            onSelectAwaitingNode={(nodeId, interaction): void => {
+              const row = chooseExecutionForInteraction(executionRows, interaction);
+              if (row === null) return;
+              handleOpenRoom(row.id, nodeId, null, false);
+              const requestId = interaction.tool_use_id;
+              let attempts = 0;
+              const focusAsk = (): void => {
+                const card = document.getElementById(askCardId(requestId, 'room'));
+                if (card === null) {
+                  if (attempts < 30) {
+                    attempts += 1;
+                    requestAnimationFrame(focusAsk);
+                  }
+                  return;
+                }
+                card.focus();
+                const control = card.querySelector(
+                  'input:not([disabled]), textarea:not([disabled]), button:not([disabled])'
+                );
+                if (control instanceof HTMLElement) control.focus();
+              };
+              requestAnimationFrame(focusAsk);
             }}
+            onRequestGraphView={(): void => undefined}
           />
         </div>
         <div className="flex items-center gap-2 ml-auto shrink-0">
@@ -965,8 +1146,14 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
           />
         </div>
       )}
-
-      {/* Body — content depends on activeView for DAG, or default layout for sequential */}
+      <div data-testid="legacy-run-shell-chrome">
+        {retryActionPanel}
+        {!isRunning && workflow.artifacts.length > 0 ? (
+          <div className="border-t border-border p-3">
+            <ArtifactSummary artifacts={workflow.artifacts} runId={runId} />
+          </div>
+        ) : null}
+      </div>
       {renderBody()}
     </div>
   );

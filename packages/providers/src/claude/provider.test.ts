@@ -3324,7 +3324,7 @@ const ASK_HUMAN_INPUT_SCHEMA: Record<string, unknown> = {
   properties: {
     questions: {
       type: 'array',
-      description: 'Ordered structured questions for the run starter.',
+      description: 'Ordered structured questions for a human operator.',
       minItems: 1,
       items: {
         type: 'object',
@@ -3358,7 +3358,7 @@ function askHumanTool(handler: NativeTool['handler']): NativeTool {
   return {
     name: 'AskHuman',
     description:
-      'Ask the run starter one or more structured questions. Call this tool instead of asking in prose. Wait after calling; do not guess the answer.',
+      'Ask a human operator one or more structured questions. Call this tool instead of asking in prose. Wait after calling; do not guess the answer.',
     inputSchema: ASK_HUMAN_INPUT_SCHEMA,
     handler,
   };

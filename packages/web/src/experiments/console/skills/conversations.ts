@@ -81,3 +81,14 @@ export async function sendMessage(
     throw new HttpError(res.status, path, msg);
   }
 }
+
+export async function getConversation(
+  platformId: string,
+  options?: { signal?: AbortSignal }
+): Promise<ConversationSummary> {
+  const raw = await requestJson<Parameters<typeof toConversationSummary>[0]>(
+    '/api/conversations/' + encodeURIComponent(platformId),
+    options?.signal === undefined ? undefined : { signal: options.signal }
+  );
+  return toConversationSummary(raw);
+}

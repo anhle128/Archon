@@ -128,3 +128,6 @@ test-results/
 
 # Stray run logs from a mis-threaded logDir argument (see #2299) — never committed.
 main/
+
+# Superpowers brainstorm mockups (local, not shared)
+.superpowers/

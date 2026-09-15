@@ -81,6 +81,8 @@ interface CardArgs {
   nodeId?: string;
   autoFocus?: boolean;
   nowMs?: number;
+  draft?: import('./parse-ask-envelope').AskDraft;
+  onDraftChange?: (next: import('./parse-ask-envelope').AskDraft) => void;
   onSubmit?: (body: Extract<AskAnswerBody, { answers: unknown }>) => void;
   onDecline?: () => void;
 }
@@ -97,6 +99,8 @@ function cardProps(overrides: CardArgs = {}): AskCardProps {
     nodeId: overrides.nodeId ?? 'review',
     autoFocus: overrides.autoFocus ?? false,
     nowMs: overrides.nowMs ?? NOW_MS,
+    draft: overrides.draft ?? {},
+    onDraftChange: overrides.onDraftChange ?? ((): void => undefined),
     onSubmit: overrides.onSubmit ?? ((): void => undefined),
     onDecline: overrides.onDecline ?? ((): void => undefined),
   };
@@ -477,8 +481,20 @@ describe('AskCard actions', () => {
 
   async function renderCard(overrides: CardArgs = {}): Promise<void> {
     const { AskCard: askCard } = await loadAskCardModule();
+    function StatefulCard(): React.ReactElement {
+      const base = cardProps(overrides);
+      const [draft, setDraft] = react.useState(base.draft);
+      return createElement(askCard, {
+        ...base,
+        draft,
+        onDraftChange: (next): void => {
+          setDraft(next);
+          base.onDraftChange(next);
+        },
+      });
+    }
     await act(async () => {
-      root.render(createElement(askCard, cardProps(overrides)));
+      root.render(createElement(StatefulCard));
     });
     await flush();
   }
@@ -560,7 +576,7 @@ describe('AskCard actions', () => {
     ]);
   });
 
-  test('keeps Other selected when custom text matches a listed option', async () => {
+  test('selecting Other then typing a listed option selects that listed option', async () => {
     await renderCard({ questions: [SINGLE] });
     await act(async () => {
       setControlValue(control('input[value="__other__"][type="radio"]'), '__other__', true);
@@ -571,12 +587,17 @@ describe('AskCard actions', () => {
       throw new Error('missing Other textarea');
     }
     await act(async () => {
+      setControlValue(otherField, 'unique-other');
+    });
+    await flush();
+    expect(control('input[value="__other__"][type="radio"]').checked).toBe(true);
+
+    await act(async () => {
       setControlValue(otherField, 'Ship');
     });
     await flush();
-
-    expect(control('input[type="radio"][value="Ship"]').checked).toBe(false);
-    expect(control('input[value="__other__"][type="radio"]').checked).toBe(true);
+    expect(control('input[type="radio"][value="Ship"]').checked).toBe(true);
+    expect(control('input[value="__other__"][type="radio"]').checked).toBe(false);
   });
 
   test('confirms Decline as a separate action', async () => {
@@ -651,5 +672,71 @@ describe('AskCard actions', () => {
     expect(second).not.toBeNull();
     const activeId = (win.document.activeElement as { id?: string } | null)?.id;
     expect(activeId).toBe('default:ask-focus-1:q1:Ship');
+  });
+
+  test('is controlled by draft and reports a copied draft on change', async () => {
+    const supplied = { q1: 'Hold', q2: 'notes from parent' };
+    const drafts: import('./parse-ask-envelope').AskDraft[] = [];
+    const { AskCard: askCard } = await loadAskCardModule();
+    const questions: readonly AskQuestion[] = [
+      SINGLE,
+      { id: 'q2', prompt: 'Notes', selection: 'single', options: [], allowOther: true },
+    ];
+
+    await act(async () => {
+      root.render(
+        createElement(
+          askCard,
+          cardProps({
+            questions,
+            draft: supplied,
+            onDraftChange: (next): void => {
+              drafts.push(next);
+            },
+          })
+        )
+      );
+    });
+    await flush();
+
+    expect(control('input[type="radio"][value="Hold"]').checked).toBe(true);
+    const notes = host.querySelector('textarea');
+    if (notes === null) throw new Error('missing notes');
+    expect((notes as unknown as HTMLTextAreaElement).value).toBe('notes from parent');
+    const rootForm = host.querySelector('form');
+    expect(rootForm?.id).toBe('run-ask-card-tool-a');
+    expect(rootForm?.getAttribute('tabindex')).toBe('-1');
+
+    await act(async () => {
+      setControlValue(control('input[type="radio"][value="Ship"]'), 'Ship', true);
+    });
+    await flush();
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toEqual({ q1: 'Ship', q2: 'notes from parent' });
+    expect(drafts[0]).not.toBe(supplied);
+    expect(supplied).toEqual({ q1: 'Hold', q2: 'notes from parent' });
+
+    await act(async () => {
+      root.render(
+        createElement(
+          askCard,
+          cardProps({
+            questions,
+            draft: drafts[0],
+            onDraftChange: (next): void => {
+              drafts.push(next);
+            },
+          })
+        )
+      );
+    });
+    await flush();
+    expect(control('input[type="radio"][value="Ship"]').checked).toBe(true);
+
+    await act(async () => {
+      setControlValue(notes, 'updated notes');
+    });
+    await flush();
+    expect(drafts[drafts.length - 1]).toEqual({ q1: 'Ship', q2: 'updated notes' });
   });
 });

@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Archon — steering dock states</title>
+<style>
+/*
+ * KEY SCREEN — the composer dock across the AGENT's sub-states inside a node that stays
+ * `running`, plus the operator row in the transcript. Steering never stops the node:
+ * `Stop` interrupts the AGENT's current turn (a provider primitive / stream-abort, in-process
+ * and sub-second), the node stays `running` throughout, and `interrupting` is a brief UI-local
+ * transient — NOT a node-lifecycle state and NOT a status poll. Stopping the whole node is the
+ * separate Cancel button, out of scope here. An interrupted turn never completes the node; a
+ * node that is interrupted and then left with nothing sent FAILS after a 30-minute idle-await
+ * timeout (owner-ratified).
+ * Governing spine sections:
+ *   DESIGN.md          Components → Composer dock · Send control · Stop control · Draft box · Operator text
+ *   EXPERIENCE.md      Component Patterns (dock rows) · State Patterns (dock rows) · Accessibility Floor → The dock · Key Flows → Flow 4
+ *   control-states.md  the agent sub-states (generating | interrupting | idle-after-interrupt) + the 30-min fail
+ * Tokens mirror packages/web/src/experiments/console/theme.css — hue 265, Geist / Geist Mono.
+ * Console shown; Legacy differs only in :root and in the send control, which is filled there.
+ */
+:root {
+  --surface: oklch(0.175 0.007 265); --surface-inset: oklch(0.13 0.006 265); --surface-elevated: oklch(0.205 0.009 265);
+  --surface-hover: oklch(0.225 0.01 265);
+  --border: oklch(0.275 0.012 265); --border-bright: oklch(0.355 0.016 265);
+  --text-primary: oklch(0.975 0.004 265); --text-secondary: oklch(0.745 0.014 265); --text-tertiary: oklch(0.56 0.017 265);
+  --brand-teal: oklch(0.755 0.165 168);
+  --running: oklch(0.72 0.155 245); --success: var(--brand-teal); --warning: oklch(0.8 0.14 85); --error: oklch(0.68 0.215 18);
+  --node-command: oklch(0.62 0.18 250); --node-bash: oklch(0.75 0.15 75);
+  --radius: 0.625rem;
+  --font-sans: 'Geist','Inter',ui-sans-serif,system-ui,sans-serif;
+  --font-mono: 'Geist Mono','JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+* { box-sizing: border-box; }
+html,body { margin:0; }
+body { background: oklch(0.11 0.005 265); color: var(--text-primary); font-family: var(--font-sans); font-size: 13px; padding: 28px; }
+h1 { font-size: 15px; letter-spacing:.02em; margin: 0 0 4px; }
+.sub { color: var(--text-secondary); font-size: 12px; margin: 0 0 22px; max-width: 92ch; line-height:1.55; }
+h2 { font-size: 10px; letter-spacing:.09em; text-transform: uppercase; color: var(--text-secondary); margin: 28px 0 10px; font-weight: 600; }
+.mono { font-family: var(--font-mono); }
+
+/* ---- panel + dock ---- */
+.row4 { display: flex; gap: 16px; flex-wrap: wrap; }
+.col { width: 300px; }
+.col > .cap { font-size: 10px; letter-spacing:.09em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 6px; }
+.col > .note { font-size: 11px; color: var(--text-secondary); line-height:1.5; margin-top: 8px; }
+.panel { background: var(--surface); border:1px solid var(--border-bright); border-radius: 10px; overflow: hidden; display:flex; flex-direction: column; height: 250px; }
+.p-head { display:flex; align-items:center; gap:8px; padding:7px 10px; border-bottom:1px solid var(--border); background: var(--surface); font-family: var(--font-mono); font-size: 11.5px; }
+.p-head .nm { font-weight:600; }
+.p-head .pill { margin-left:auto; font-size:10px; border-radius:999px; padding:2px 8px; border:1px solid var(--border); color: var(--text-secondary); }
+.p-head .pill.run { color: var(--running); border-color: oklch(0.72 0.155 245 / .4); }
+.p-head .pill.done { color: var(--success); border-color: oklch(0.755 0.165 168 / .4); }
+.p-head .pill.failed { color: var(--error); border-color: oklch(0.68 0.215 18 / .4); }
+.p-body { flex:1; min-height:0; overflow:hidden; padding: 6px 8px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); }
+.tr { display:flex; gap:8px; align-items:center; padding: 3px 4px; white-space: nowrap; overflow:hidden; }
+.tr .g { width:12px; font-weight:700; text-align:center; }
+.tr .g.ok { color: var(--success); } .tr .g.run { color: var(--running); } .tr .g.warn { color: var(--warning); }
+.tr .ch { font-size:11px; border:1px solid; border-radius:4px; padding:1px 7px; background: var(--surface-elevated); }
+.tr .ch.shell { color: var(--node-bash); border-color: oklch(0.75 0.15 75 / .4); }
+.tr .ch.file { color: var(--node-command); border-color: oklch(0.62 0.18 250 / .4); }
+.tr .hl { color: var(--text-primary); overflow:hidden; text-overflow: ellipsis; }
+.tr .bd { margin-left:auto; font-size:11px; color: var(--text-secondary); }
+
+/* dock — a SIBLING of the scrolling body, never inside it (SC 2.4.11) */
+.dock { border-top:1px solid var(--border); background: var(--surface-elevated); padding: 8px 10px; display:flex; flex-direction: column; gap: 6px; }
+.draft { background: var(--surface-inset); border:1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.draft .dh { font-size:10px; letter-spacing:.07em; text-transform: uppercase; color: var(--text-secondary); margin-bottom:5px; }
+.draft .di { font-family: var(--font-mono); font-size:11px; color: var(--text-secondary); padding: 4px 8px; border-radius:4px; background: var(--surface-inset); margin-bottom:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.draft .tabonly { font-size:10px; color: var(--text-secondary); margin-top:4px; } /* was text-tertiary: 2.71:1 on Legacy. It is a load-bearing fact, so it takes the same tier every other fact in this run took. */
+.field { background: var(--surface-inset); border:1px solid var(--border); border-radius:6px; min-height:56px; padding:7px 9px; font-family: var(--font-sans); font-size:12.5px; line-height:1.5; color: var(--text-primary); }
+.field.ph { color: var(--text-secondary); }
+.ctl { display:flex; align-items:center; }
+.btn:focus-visible, .field:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; } /* the fixed ring, 4.6:1 on Console — never the shipped --accent-ring at 1.4:1 */
+.btn { font-size:11.5px; font-weight:500; border-radius:6px; min-height:32px; padding:0 12px; background:transparent; border:1px solid var(--border-bright); color: var(--text-primary); font-family: var(--font-sans); }
+.btn.send { margin-left:auto; min-width: 84px; } /* width held to the wider of Queue / Send now, so the control never resizes as it renames */
+.btn[aria-disabled="true"] { color: var(--text-secondary); border-color: var(--border); } /* aria-disabled, NOT the disabled attribute: disabling a focused element blurs it to <body>. */
+.disclose { font-family: var(--font-mono); font-size:10.5px; color: var(--text-secondary); line-height:1.45; }
+.blocked { font-family: var(--font-mono); font-size:10.5px; color: var(--warning); }
+
+/* ---- operator row ---- */
+.op-demo { background: var(--surface); border:1px solid var(--border-bright); border-radius:10px; padding: 12px 14px; max-width: 680px; }
+.rolelab { font-size:10px; letter-spacing:.07em; text-transform:uppercase; color: var(--text-secondary); display:flex; align-items:center; gap:8px; margin: 10px 0 3px; }
+.rolelab .st { margin-left:auto; font-size:11px; text-transform:none; letter-spacing:0; color: var(--text-secondary); }
+.rolelab .st.deliv { color: var(--success); }
+.prose { font-family: var(--font-sans); font-size:12.5px; line-height:1.55; }
+.prose.assistant { color: var(--text-secondary); }
+.prose.operator { color: var(--text-primary); }
+
+table { border-collapse: collapse; font-size: 11.5px; max-width: 980px; }
+th,td { text-align:left; padding: 6px 12px 6px 0; vertical-align: top; border-bottom: 1px solid var(--border); }
+th { color: var(--text-secondary); font-weight:600; font-size:10px; letter-spacing:.08em; text-transform:uppercase; }
+td.k { font-family: var(--font-mono); color: var(--text-primary); white-space:nowrap; }
+td.v { color: var(--text-secondary); line-height:1.5; }
+</style>
+</head>
+<body>
+
+<h1>Steering dock — the agent's states inside a running node</h1>
+<p class="sub">Console shown at a 300px crop of the node panel. Legacy differs in <span class="mono">:root</span> and in one place only: its send control is the filled shadcn <span class="mono">Button</span> the ask card already uses, where Console's is bordered. Anatomy, order and wording are identical on both. The dock is a <strong>sibling</strong> of the transcript's scroller, never a child of it — so it cannot cover the last row, which on a running node is the row being watched. The node pill stays <span class="mono">running</span> across every state below except the terminal fail: steering acts on the <em>agent</em>, never the node lifecycle.</p>
+
+<h2>Agent sub-states — the node stays running throughout</h2>
+<div class="row4">
+
+  <div class="col">
+    <div class="cap">1 · agent generating</div>
+    <div class="panel">
+      <div class="p-head"><span class="nm">implement</span><span class="pill run">running</span></div>
+      <div class="p-body">
+        <div class="tr"><span class="g ok">✓</span><span class="ch file">read_file</span><span class="hl">dag-executor.ts</span><span class="bd">418 lines</span></div>
+        <div class="tr"><span class="g run">◐</span><span class="ch shell">shell</span><span class="hl">cargo test --workspace</span><span class="bd">12s</span></div>
+      </div>
+      <div class="dock">
+        <div class="draft">
+          <div class="dh">Queued · 2</div>
+          <div class="di">wrong suite — use -p archon-workflows</div>
+          <div class="di">and skip the doctests</div>
+          <div class="tabonly">this tab only</div>
+        </div>
+        <div class="field ph">Message the agent…</div>
+        <div class="ctl"><button class="btn">Stop</button><button class="btn send">Queue</button></div>
+      </div>
+    </div>
+    <div class="note">Composer enabled while it works. <span class="mono">Queue</span> holds the message; no row changes, no tool call is interrupted. <span class="mono">Stop</span> interrupts the agent's current turn — it does not stop the node.</div>
+  </div>
+
+  <div class="col">
+    <div class="cap">2 · interrupting · brief transient</div>
+    <div class="panel">
+      <div class="p-head"><span class="nm">implement</span><span class="pill run">running</span></div>
+      <div class="p-body">
+        <div class="tr"><span class="g ok">✓</span><span class="ch file">read_file</span><span class="hl">dag-executor.ts</span><span class="bd">418 lines</span></div>
+        <div class="tr"><span class="g run">◐</span><span class="ch shell">shell</span><span class="hl">cargo test --workspace</span><span class="bd">18s</span></div>
+      </div>
+      <div class="dock">
+        <div class="draft">
+          <div class="dh">Queued · 2</div>
+          <div class="di">wrong suite — use -p archon-workflows</div>
+          <div class="di">and skip the doctests</div>
+          <div class="tabonly">this tab only</div>
+        </div>
+        <div class="field ph">Message the agent…</div>
+        <div class="ctl"><button class="btn" aria-disabled="true">Stopping…</button><button class="btn send">Queue</button></div>
+      </div>
+    </div>
+    <div class="note"><strong>A brief UI-local transient, not a node state.</strong> The interrupt is a provider primitive / stream-abort in-process — <strong>sub-second</strong>, not a status poll — so whether to show this at all is Kevin's call; if shown it must be brief and must not fake being done. No progress bar — nothing is being tracked. Send still reads <span class="mono">Queue</span>, because the node is still running. Announced once, politely: <span class="mono">agent interrupting</span>.</div>
+  </div>
+
+  <div class="col">
+    <div class="cap">3 · idle after interrupt</div>
+    <div class="panel">
+      <div class="p-head"><span class="nm">implement</span><span class="pill run">running</span></div>
+      <div class="p-body">
+        <div class="tr"><span class="g ok">✓</span><span class="ch file">read_file</span><span class="hl">dag-executor.ts</span><span class="bd">418 lines</span></div>
+        <div class="tr"><span class="g warn">⚠</span><span class="ch shell">shell</span><span class="hl">cargo test --workspace</span><span class="bd">interrupted</span></div>
+      </div>
+      <div class="dock">
+        <div class="draft">
+          <div class="dh">Will send · 2</div>
+          <div class="di">wrong suite — use -p archon-workflows</div>
+          <div class="di">and skip the doctests</div>
+          <div class="tabonly">this tab only</div>
+        </div>
+        <div class="disclose">stopped after the last completed tool call · files already written stay written</div>
+        <div class="field ph">Message the agent…</div>
+        <div class="ctl"><button class="btn send">Send now</button></div>
+      </div>
+    </div>
+    <div class="note">The node never left <span class="mono">running</span> — only the agent's current generation was interrupted. Stop control gone. Header word flips to <span class="mono">Will send</span>: that one word is the whole signal the control below changed meaning. The disclosure is <em>text</em>, shown exactly when the operator is most likely to assume a stop undoes work.</div>
+  </div>
+
+  <div class="col">
+    <div class="cap">4 · generating again</div>
+    <div class="panel">
+      <div class="p-head"><span class="nm">implement</span><span class="pill run">running</span></div>
+      <div class="p-body">
+        <div class="tr"><span class="g warn">⚠</span><span class="ch shell">shell</span><span class="hl">cargo test --workspace</span><span class="bd">interrupted</span></div>
+        <div class="tr"><span class="g run">◐</span><span class="ch shell">shell</span><span class="hl">cargo test -p archon-workflows</span><span class="bd">3s</span></div>
+      </div>
+      <div class="dock">
+        <div class="field ph">Message the agent…</div>
+        <div class="ctl"><button class="btn">Stop</button><button class="btn send">Queue</button></div>
+      </div>
+    </div>
+    <div class="note">Both controls revert the instant the agent's sub-state says generating again — read from the projected sub-state, never from a remembered mode. Draft box gone because it is empty; it is never drawn as an empty shell.</div>
+  </div>
+
+</div>
+
+<h2>Terminal states — the dock on a node that has ended</h2>
+<div class="row4">
+
+  <div class="col">
+    <div class="cap">5 · finished · something undelivered</div>
+    <div class="panel">
+      <div class="p-head"><span class="nm">implement</span><span class="pill done">completed</span></div>
+      <div class="p-body">
+        <div class="tr"><span class="g warn">⚠</span><span class="ch shell">shell</span><span class="hl">cargo test --workspace</span><span class="bd">interrupted</span></div>
+        <div class="tr"><span class="g ok">✓</span><span class="ch shell">shell</span><span class="hl">cargo test -p archon-workflows</span><span class="bd">41 passed</span></div>
+      </div>
+      <div class="dock">
+        <div class="draft">
+          <div class="dh">Never sent &middot; 2</div>
+          <div class="di">and skip the doctests</div>
+          <div class="di">check the fixture path too</div>
+        </div>
+        <div class="disclose">node finished &middot; these never left this tab</div>
+      </div>
+    </div>
+    <div class="note">No field, no <span class="mono">Stop</span>, no send &mdash; there is nothing left to steer, and a control that cannot act is not drawn. What survives is <strong>read-only</strong>: the operator&rsquo;s own words are never discarded without saying so, and the half-typed line folds in as the last item. Reconciliation runs on the node&rsquo;s terminal event: any <span class="mono">sent</span> id with no matching row is restored here.</div>
+  </div>
+
+  <div class="col">
+    <div class="cap">6 · finished · nothing undelivered</div>
+    <div class="panel">
+      <div class="p-head"><span class="nm">implement</span><span class="pill done">completed</span></div>
+      <div class="p-body">
+        <div class="tr"><span class="g ok">✓</span><span class="ch file">read_file</span><span class="hl">dag-executor.ts</span><span class="bd">418 lines</span></div>
+        <div class="tr"><span class="g ok">✓</span><span class="ch shell">shell</span><span class="hl">cargo test -p archon-workflows</span><span class="bd">41 passed</span></div>
+      </div>
+    </div>
+    <div class="note">No dock at all &mdash; the transcript runs to the bottom of the panel. Sending here would mean <span class="mono">retry-node</span>, which resets the checkout to this node&rsquo;s checkpoint and re-runs every node after it. That is its own capability with its own confirmation, not a composer.</div>
+  </div>
+
+  <div class="col">
+    <div class="cap">7 · interrupted, no redirect · node failed (30-min)</div>
+    <div class="panel">
+      <div class="p-head"><span class="nm">implement</span><span class="pill failed">failed</span></div>
+      <div class="p-body">
+        <div class="tr"><span class="g ok">✓</span><span class="ch file">read_file</span><span class="hl">dag-executor.ts</span><span class="bd">418 lines</span></div>
+        <div class="tr"><span class="g warn">⚠</span><span class="ch shell">shell</span><span class="hl">cargo test --workspace</span><span class="bd">interrupted</span></div>
+      </div>
+      <div class="dock">
+        <div class="draft">
+          <div class="dh">Never sent &middot; 2</div>
+          <div class="di">wrong suite — use -p archon-workflows</div>
+          <div class="di">and skip the doctests</div>
+        </div>
+        <div class="disclose">interrupted by operator, no redirect received &middot; failed after 30-minute idle timeout</div>
+      </div>
+    </div>
+    <div class="note">The owner-ratified bound. While idle-after-interrupt the dock waits (<span class="mono">Send now</span>). If nothing is sent, the <strong>engine</strong> — the in-process owner, which can tell idle-after-interrupt from a crash — fails the node after 30 minutes: never a wait-forever, never a quiet finish on partial output. The in-memory queue dies with the run; anything still <span class="mono">sent</span> but unmatched returns read-only as <span class="mono">Never sent</span>. Resuming re-runs the node with a fresh session — the interrupted context is gone.</div>
+  </div>
+
+</div>
+
+<h2>The operator in the record</h2>
+<div class="op-demo">
+  <div class="tr"><span class="g warn">⚠</span><span class="ch shell">shell</span><span class="hl">cargo test --workspace</span><span class="bd">interrupted</span></div>
+
+  <div class="rolelab">operator &middot; kevin <span class="st">sent</span></div>
+  <div class="prose operator">wrong suite — use -p archon-workflows</div>
+
+  <div class="rolelab">operator &middot; kevin <span class="st">sent</span></div>
+  <div class="prose operator">and skip the doctests</div>
+
+  <div class="rolelab">assistant</div>
+  <div class="prose assistant">Understood — switching to the workspace-scoped crate and dropping doctests from the run.</div>
+
+  <div class="tr"><span class="g run">◐</span><span class="ch shell">shell</span><span class="hl">cargo test -p archon-workflows --lib</span><span class="bd">3s</span></div>
+</div>
+<p class="sub" style="margin-top:10px">Three things separate the operator from the model, and none is a hue: the <span class="mono">operator</span> label with the <strong>sender's name</strong> (the <span class="mono">operator_user_id</span>, so a multi-user install attributes each message), and full-strength text against the model's secondary saying it again. The badge reads <span class="mono">sent</span> here and stays that way — only Claude echoes back the id we stamp, so on every other provider <span class="mono">delivered</span> is never claimed.</p>
+
+<h2>What the dock refuses to do</h2>
+<table>
+  <tr><th>Refused</th><th>Why</th></tr>
+  <tr><td class="k">a send that stops the node</td><td class="v">A send is never a node-stop — stopping the whole node is the separate <span class="mono">Cancel</span> button. <span class="mono">Stop</span> interrupts the agent's current turn (every provider can be interrupted), which is a distinct act; a send control that silently stopped the agent would lie about what it does.</td></tr>
+  <tr><td class="k">per-item send while generating</td><td class="v">There is nothing an individual message could do but wait. Same lie, one row down.</td></tr>
+  <tr><td class="k">optimistic flip to idle before the interrupt lands</td><td class="v">The interrupt is sub-second but not zero. The interface must not fake being done before the agent acknowledges — a flip that runs ahead of the ack is wrong for exactly as long as it leads.</td></tr>
+  <tr><td class="k">a delivered badge without an echo</td><td class="v">Correlation is by id alone. Text and timestamps mis-attribute silently when messages merge into one turn.</td></tr>
+  <tr><td class="k">an empty draft box</td><td class="v">A panel that is always there stops being a signal.</td></tr>
+  <tr><td class="k">Enter to send</td><td class="v">A stray keystroke must not be able to reach a running agent.</td></tr>
+</table>
+
+</body>
+</html>

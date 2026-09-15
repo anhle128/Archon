@@ -65,7 +65,9 @@ describe('NodeRunList', () => {
     expect(markup.split('<button').length - 1).toBe(3);
     expect(markup).toContain('type="button"');
 
-    expect(markup).toContain('Review');
+    expect(markup).toContain('id="legacy-log-start-review"');
+    expect(markup).toContain('id="legacy-log-loop-start-2"');
+    expect(markup).toContain('data-node-id="review"');
     expect(markup).toContain('Loop ×2');
     expect(markup).toContain('Router #4');
     expect(markup).toContain('running');

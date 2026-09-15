@@ -1,4 +1,7 @@
 import { useState, type ReactElement } from 'react';
+
+import { roomOpenerId } from '@/lib/execution-room-model';
+
 import {
   formatElapsed,
   formatRelativeToBaseline,
@@ -198,6 +201,7 @@ export function NodeDivider({
     >
       <div className="flex items-center gap-2">
         <button
+          id={roomOpenerId('console', 'log', rowId)}
           type="button"
           onClick={() => {
             onSelect(rowId, nodeId);

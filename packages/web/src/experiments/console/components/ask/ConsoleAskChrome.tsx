@@ -3,7 +3,7 @@ import type { PendingInteraction, WorkflowNodeState } from '../../skills/runs';
 
 import {
   countPendingAsks,
-  firstPendingAskAwaitingNodeId,
+  firstPendingAskAwaitingInteraction,
   isAskAwaitingRun,
   isAskHumanUnsupportedError,
 } from './awaiting-chrome';
@@ -13,7 +13,7 @@ export interface ConsoleAskChromeProps {
   pendingInteractions: readonly PendingInteraction[];
   nodeStates: readonly WorkflowNodeState[];
   runError: string | null;
-  onSelectAwaitingNode: (nodeId: string) => void;
+  onSelectAwaitingNode: (nodeId: string, interaction: PendingInteraction) => void;
   onRequestGraphView: () => void;
 }
 
@@ -41,15 +41,15 @@ export function ConsoleAskChrome({
   }
 
   const handleClick = (): void => {
-    const nodeId = firstPendingAskAwaitingNodeId({
+    const interaction = firstPendingAskAwaitingInteraction({
       pending: pendingInteractions,
       nodes: nodeStates,
     });
-    if (nodeId === null) {
+    if (interaction === null) {
       return;
     }
     onRequestGraphView();
-    onSelectAwaitingNode(nodeId);
+    onSelectAwaitingNode(interaction.node_id, interaction);
   };
 
   return (

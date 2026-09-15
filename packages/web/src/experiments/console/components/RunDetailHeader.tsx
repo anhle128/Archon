@@ -16,6 +16,7 @@ interface RunDetailHeaderProps {
   /** Direct-run usage from GET detail (`null` = query failed). */
   usage: UsageReport | null;
   askAwaiting?: boolean;
+  onAwaitingInput?: () => void;
 }
 
 /** Cost strip for the run header — keeps event-only distinct from not-recorded. */
@@ -122,6 +123,7 @@ export function RunDetailHeader({
   projectId,
   usage,
   askAwaiting = false,
+  onAwaitingInput,
 }: RunDetailHeaderProps): ReactElement {
   const elapsed = useLiveElapsed(run);
   const isPaused = run.status === 'paused';
@@ -190,11 +192,21 @@ export function RunDetailHeader({
             }`}
           />
         )}
-        <span
-          className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${statusTextClass[run.status]}`}
-        >
-          {isPaused && askAwaiting ? 'Awaiting input' : statusLabel[run.status]}
-        </span>
+        {isPaused && askAwaiting && onAwaitingInput !== undefined ? (
+          <button
+            type="button"
+            onClick={onAwaitingInput}
+            className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${statusTextClass[run.status]}`}
+          >
+            Awaiting input
+          </button>
+        ) : (
+          <span
+            className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${statusTextClass[run.status]}`}
+          >
+            {isPaused && askAwaiting ? 'Awaiting input' : statusLabel[run.status]}
+          </span>
+        )}
       </div>
 
       {/* Workflow name */}

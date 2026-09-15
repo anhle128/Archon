@@ -156,7 +156,7 @@ nodes:
     depends_on:
       - verify-and-fix-plan
     provider: omp
-    model: cursor/gemini-3.8-flash  
+    model: cursor/composer-2.5  
     effort: hight
     context: fresh
     prompt: |
@@ -622,7 +622,7 @@ nodes:
     description: Create the pull request after the exhausted final Ralph pass.
     command: archon-create-pr
     provider: omp
-    model: cursor/gemini-3.8-flash  
+    model: cursor/composer-2.5  
     effort: hight
     context: fresh
     idle_timeout: 900000

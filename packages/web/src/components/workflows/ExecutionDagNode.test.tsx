@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import React from 'react';
+import { roomOpenerId } from '@/lib/execution-room-model';
 import { executionDagNode } from './ExecutionDagNode';
 import type { ExecutionNodeData } from './ExecutionDagNode';
 
@@ -23,6 +24,14 @@ function render(data: ExecutionNodeData): React.ReactElement {
 function classNameOf(el: React.ReactElement): string {
   const className = (el.props as { className?: unknown }).className;
   return typeof className === 'string' ? className : '';
+}
+
+function collectClassNames(node: unknown): string[] {
+  if (Array.isArray(node)) return node.flatMap(collectClassNames);
+  if (!React.isValidElement(node)) return [];
+  const el = node as React.ReactElement<{ className?: unknown; children?: unknown }>;
+  const own = typeof el.props.className === 'string' ? [el.props.className] : [];
+  return [...own, ...collectClassNames(el.props.children)];
 }
 
 describe('ExecutionDagNode loop iteration display', () => {
@@ -77,5 +86,23 @@ describe('ExecutionDagNode awaiting chrome', () => {
     } as ExecutionNodeData);
     expect(classNameOf(failed)).toContain('border-error');
     expect(collectText(failed)).not.toContain('waiting on you');
+  });
+});
+
+describe('ExecutionDagNode graph opener', () => {
+  test('roots the node with a legacy graph opener id, programmatic tabIndex, and token typography', () => {
+    const openerId = roomOpenerId('legacy', 'graph', 'review/1');
+    const el = render({
+      nodeType: 'prompt',
+      label: 'Review',
+      openerId,
+      duration: 1200,
+    } as ExecutionNodeData);
+    expect((el.props as { id?: string }).id).toBe(openerId);
+    expect((el.props as { tabIndex?: number }).tabIndex).toBe(-1);
+    const classes = collectClassNames(el).join(' ');
+    expect(classes).toContain('text-[length:var(--rv-node-kind-size)]');
+    expect(classes).toContain('text-[length:var(--rv-node-label-size)]');
+    expect(classes).toContain('text-[length:var(--rv-node-meta-size)]');
   });
 });

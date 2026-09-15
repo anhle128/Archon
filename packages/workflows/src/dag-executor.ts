@@ -5182,27 +5182,31 @@ async function executeLoopNode(
   // each event's data (`iteration`), so no separate iteration param is threaded here.
   const stepName = stepNamePrefix + node.id;
   const loopRetryEpoch = getRunRetryEpoch(workflowRun, undefined);
-  let executionScope: TranscriptExecutionScope =
-    recoveredExecutionScope ??
-    mintTranscriptExecutionScope({
-      retryEpoch: loopRetryEpoch,
-      loopAncestry: parentLoopAncestry,
-      routeActivationSeq: routeActivationSeqForNode(workflowRun, node.id),
-    });
+  const outerExecutionScope = mintTranscriptExecutionScope({
+    retryEpoch: loopRetryEpoch,
+    loopAncestry: parentLoopAncestry,
+    routeActivationSeq: routeActivationSeqForNode(workflowRun, node.id),
+  });
+  let iterationExecutionScope: TranscriptExecutionScope =
+    recoveredExecutionScope ?? outerExecutionScope;
   const nativeTools = nativeToolsForAskHuman(
     workflowProvider,
     deps.store,
     workflowRun.id,
     stepName,
-    () => executionScope
+    () => iterationExecutionScope
   );
-  const recordLoopStatus = (state: string, detail?: string): Promise<void> =>
+  const recordLoopStatus = (
+    scope: TranscriptExecutionScope,
+    state: string,
+    detail?: string
+  ): Promise<void> =>
     appendNodeTranscript(deps.store, {
       workflow_run_id: workflowRun.id,
       node_id: stepName,
       kind: 'status',
       payload: { state, ...(detail !== undefined ? { detail } : {}) },
-      metadata: transcriptMetadata(executionScope),
+      metadata: transcriptMetadata(scope),
     });
 
   // Emit node_started up-front so every terminal outcome of this loop node is
@@ -5231,7 +5235,7 @@ async function executeLoopNode(
         // so it belongs on the node's single _started row. Spread the shared
         // metadata object so loop node_started equals ENV resolved rows.
         ...(requestMetadata ?? { provider: workflowProvider }),
-        ...executionScopeEventFields(executionScope),
+        ...executionScopeEventFields(outerExecutionScope),
       },
     })
     .catch((err: Error) => {
@@ -5248,7 +5252,7 @@ async function executeLoopNode(
     nodeName: node.id,
     ...(requestMetadata ?? { provider: workflowProvider }),
   });
-  await recordLoopStatus('started');
+  await recordLoopStatus(outerExecutionScope, 'started');
 
   /**
    * Single failure finalizer for this loop node (see the pairing contract on
@@ -5276,7 +5280,7 @@ async function executeLoopNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: { error, ...(extras.data ?? {}), ...executionScopeEventFields(executionScope) },
+        data: { error, ...(extras.data ?? {}), ...executionScopeEventFields(outerExecutionScope) },
       })
       .catch((err: Error) => {
         getLog().error(
@@ -5291,7 +5295,7 @@ async function executeLoopNode(
       nodeName: node.id,
       error,
     });
-    await recordLoopStatus('failed', error);
+    await recordLoopStatus(outerExecutionScope, 'failed', error);
     return {
       state: 'failed',
       output: extras.output ?? '',
@@ -5333,13 +5337,13 @@ async function executeLoopNode(
       stepName,
       'Loop node',
       finalizeOutput,
-      executionScope,
+      outerExecutionScope,
       readSignaledTokens(loopGateMeta.signaledTokens, {
         workflowRunId: workflowRun.id,
         nodeId: node.id,
       })
     );
-    await recordLoopStatus('completed');
+    await recordLoopStatus(outerExecutionScope, 'completed');
     // Same declared-field capture as the normal completion return below and as the
     // resume-hydration path (#2091). This is a COMPLETION exit, so a consumer's
     // `$loop.output.field` must get the identical strict contract here: without it a
@@ -5454,7 +5458,7 @@ async function executeLoopNode(
       { node_id: stepName, iteration: i },
     ];
     if (!(i === startIteration && recoveredExecutionScope !== undefined)) {
-      executionScope = mintTranscriptExecutionScope({
+      iterationExecutionScope = mintTranscriptExecutionScope({
         retryEpoch: loopRetryEpoch,
         loopAncestry: iterationAncestry,
         routeActivationSeq: routeActivationSeqForNode(workflowRun, node.id),
@@ -5462,7 +5466,7 @@ async function executeLoopNode(
     }
     const iterationScopeMeta = (
       extra: Omit<ReturnType<typeof transcriptMetadata>, 'execution'> = {}
-    ): ReturnType<typeof transcriptMetadata> => transcriptMetadata(executionScope, extra);
+    ): ReturnType<typeof transcriptMetadata> => transcriptMetadata(iterationExecutionScope, extra);
 
     // Check for non-running status between iterations. `paused` is tolerated
     // here for the same reason as the streaming check: a sibling approval
@@ -5507,13 +5511,13 @@ async function executeLoopNode(
           iteration: i,
           maxIterations: loop.max_iterations,
           nodeId: node.id,
-          ...executionScopeEventFields(executionScope),
+          ...executionScopeEventFields(iterationExecutionScope),
         },
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
       });
-    await recordLoopStatus('iteration_started', String(i));
+    await recordLoopStatus(iterationExecutionScope, 'iteration_started', String(i));
 
     const failLoopIteration = async (
       iterationError: string,
@@ -5538,13 +5542,13 @@ async function executeLoopNode(
             error: iterationError,
             duration,
             nodeId: node.id,
-            ...executionScopeEventFields(executionScope),
+            ...executionScopeEventFields(iterationExecutionScope),
           },
         })
         .catch((eventError: Error) => {
           logEventStoreError(eventError, i);
         });
-      await recordLoopStatus('iteration_failed', String(i));
+      await recordLoopStatus(iterationExecutionScope, 'iteration_failed', String(i));
       return failLoopNode(nodeError, extras);
     };
 
@@ -6061,6 +6065,8 @@ async function executeLoopNode(
                 tool_phase: 'result',
                 ...(msg.truncated === true ? { truncated: true } : {}),
                 ...(msg.outputState !== undefined ? { output_state: msg.outputState } : {}),
+                ...(msg.toolOutcome !== undefined ? { outcome: msg.toolOutcome } : {}),
+                ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
               }),
             });
             if (completedTool) {
@@ -6157,7 +6163,9 @@ async function executeLoopNode(
       } catch (error) {
         foldIterationUsage();
         if (error instanceof AskHumanAwaitingError) {
-          await pauseOnAskHuman(deps, workflowRun.id, node.id, recordLoopStatus);
+          await pauseOnAskHuman(deps, workflowRun.id, node.id, state =>
+            recordLoopStatus(iterationExecutionScope, state)
+          );
           return {
             state: 'pending',
             output: cleanOutput,
@@ -6319,7 +6327,7 @@ async function executeLoopNode(
         );
         if (canReask) {
           reaskAttempt++;
-          executionScope = newTranscriptAttempt(executionScope);
+          iterationExecutionScope = newTranscriptAttempt(iterationExecutionScope);
           reaskErrors = validation.errors;
           await safeSendMessage(
             platform,
@@ -6568,13 +6576,13 @@ async function executeLoopNode(
           duration,
           completionDetected,
           nodeId: node.id,
-          ...executionScopeEventFields(executionScope),
+          ...executionScopeEventFields(iterationExecutionScope),
         },
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
       });
-    await recordLoopStatus('iteration_completed', String(i));
+    await recordLoopStatus(iterationExecutionScope, 'iteration_completed', String(i));
 
     await logNodeComplete(logDir, workflowRun.id, `${node.id}-iteration-${String(i)}`, node.id, {
       durationMs: duration,
@@ -6602,7 +6610,7 @@ async function executeLoopNode(
           workflow_run_id: workflowRun.id,
           event_type: 'node_completed',
           step_name: stepName,
-          data: withLifecycleScopeData(workflowRun, undefined, executionScope, {
+          data: withLifecycleScopeData(workflowRun, undefined, outerExecutionScope, {
             duration_ms: Date.now() - iterationStart,
             node_output: lastIterationOutput,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
@@ -6644,7 +6652,7 @@ async function executeLoopNode(
         ...(loopFinalStopReason ? { stopReason: loopFinalStopReason } : {}),
         ...(loopTotalNumTurns !== undefined ? { numTurns: loopTotalNumTurns } : {}),
       });
-      await recordLoopStatus('completed');
+      await recordLoopStatus(outerExecutionScope, 'completed');
       // Declared field set, so a downstream `$loop.output.field` gets the same
       // strict contract every other producer enforces: a field not in the schema
       // fails the consumer, a declared-optional absent one resolves to ''. Only

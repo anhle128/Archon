@@ -2409,15 +2409,6 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description Forbidden */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
-                    };
-                };
                 /** @description Not found */
                 404: {
                     headers: {
@@ -5236,6 +5227,10 @@ export interface components {
                 truncated?: boolean;
                 /** @enum {string} */
                 output_state?: "full" | "truncated" | "missing" | "unknown";
+                full_output_available?: boolean;
+                /** @enum {string} */
+                outcome?: "success" | "error" | "interrupted" | "unknown";
+                exit_code?: number;
             } | null;
             /** @enum {string} */
             kind: "text";
@@ -5269,6 +5264,10 @@ export interface components {
                 truncated?: boolean;
                 /** @enum {string} */
                 output_state?: "full" | "truncated" | "missing" | "unknown";
+                full_output_available?: boolean;
+                /** @enum {string} */
+                outcome?: "success" | "error" | "interrupted" | "unknown";
+                exit_code?: number;
             } | null;
             /** @enum {string} */
             kind: "tool";
@@ -5305,6 +5304,10 @@ export interface components {
                 truncated?: boolean;
                 /** @enum {string} */
                 output_state?: "full" | "truncated" | "missing" | "unknown";
+                full_output_available?: boolean;
+                /** @enum {string} */
+                outcome?: "success" | "error" | "interrupted" | "unknown";
+                exit_code?: number;
             } | null;
             /** @enum {string} */
             kind: "status";

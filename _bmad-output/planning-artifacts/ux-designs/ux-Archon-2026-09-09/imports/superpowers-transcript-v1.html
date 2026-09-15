@@ -1,0 +1,193 @@
+<h2>Node room — transcript đề xuất</h2>
+<p class="subtitle">
+  Dữ liệu thật lấy từ <code>~/.archon/archon.db</code>, run <code>superpower-feature</code> (provider <code>omp</code>).
+  Bên trái là hiện trạng, bên phải là đề xuất. Cuộn xuống dưới để chọn mật độ dòng.
+</p>
+
+<style>
+  .tx { background:#0f1115; border:1px solid #232833; border-radius:10px; padding:10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; color:#c9d1d9; }
+  .tx .row { display:flex; align-items:baseline; gap:8px; padding:5px 7px; border-radius:6px; }
+  .tx .row:hover { background:#161b22; }
+  .tx .chev { color:#4d5566; width:9px; flex:0 0 9px; }
+  .tx .ic { width:12px; flex:0 0 12px; text-align:center; }
+  .ok { color:#3fb950; } .bad { color:#f85149; } .run { color:#58a6ff; } .mut { color:#6e7681; }
+  .tx .nm { color:#d2a8ff; font-weight:600; flex:0 0 46px; }
+  .tx .hl { color:#c9d1d9; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tx .bd { color:#6e7681; flex:0 0 auto; font-size:11px; }
+  .tx .body { margin:2px 0 8px 31px; border-left:2px solid #232833; padding-left:10px; }
+  .term { background:#010409; border:1px solid #232833; border-radius:6px; padding:8px 10px; color:#8b949e; }
+  .term .cmd { color:#58a6ff; }
+  .att { display:flex; align-items:center; gap:8px; margin:14px 0 6px; color:#6e7681; font-size:10.5px;
+         text-transform:uppercase; letter-spacing:.08em; }
+  .att::after { content:""; flex:1; height:1px; background:#232833; }
+  .chk { color:#8b949e; line-height:1.85; }
+  .chk .ph { color:#6e7681; text-transform:uppercase; font-size:10px; letter-spacing:.07em; }
+  .sub { background:#161b22; border:1px solid #232833; border-radius:6px; padding:6px 9px; margin-top:5px; }
+  .agent { color:#f0883e; }
+  .add { color:#3fb950; } .del { color:#f85149; }
+  .asst { color:#adbac7; font-family:-apple-system,system-ui,sans-serif; font-size:12.5px;
+          line-height:1.6; margin:8px 0 10px 2px; }
+  .old { background:#0f1115; border:1px solid #232833; border-radius:10px; padding:10px;
+         font-family: ui-monospace, Menlo, monospace; font-size:11px; color:#6e7681;
+         max-height:430px; overflow:hidden; position:relative; }
+  .old pre { margin:0 0 3px; white-space:pre-wrap; color:#6e7681; }
+  .old .k { color:#8b949e; font-size:9.5px; text-transform:uppercase; letter-spacing:.06em; }
+  .fade { position:absolute; left:0; right:0; bottom:0; height:70px;
+          background:linear-gradient(transparent,#0f1115); }
+  .cap { color:#6e7681; font-size:11px; margin:0 0 6px; }
+</style>
+
+<div class="split">
+  <div>
+    <p class="cap"><strong style="color:#f85149">Hiện trạng</strong> — <code>&lt;details open&gt;</code> + <code>JSON.stringify</code></p>
+    <div class="old">
+      <div class="k">read · succeeded</div>
+      <div class="k" style="margin-top:5px">Input</div>
+      <pre>{
+  "path": "packages/web/src/experiments/console/primitives/event.ts"
+}</pre>
+      <div class="k" style="margin-top:5px">Output</div>
+      <pre>{
+  "content": "/**\n * Console event primitives.\n */\nimport type { compo
+nents } from '@/lib/api.generated';\n\nexport interface NodeRun {\n  node
+Id: string;\n  status: NodeRunStatus;\n  occurrenceId: string | null;\n
+...",
+  "truncated": true,
+  "lines": 237
+}</pre>
+      <div class="k" style="margin-top:9px">grep · succeeded</div>
+      <div class="k" style="margin-top:5px">Input</div>
+      <pre>{
+  "pattern": "foldNodeRuns",
+  "path": "packages/web/src"
+}</pre>
+      <div class="k" style="margin-top:5px">Output</div>
+      <pre>{
+  "matches": [
+    { "file": "src/experiments/console/primitives/event.ts", "line": 88 },
+    { "file": "src/experiments/console/components/RunStream.tsx", "li</pre>
+      <div class="fade"></div>
+    </div>
+  </div>
+
+  <div>
+    <p class="cap"><strong style="color:#3fb950">Đề xuất</strong> — thu gọn, lỗi tự bung</p>
+    <div class="tx">
+
+      <div class="att">Attempt 1</div>
+
+      <div class="asst">Tôi sẽ scout surface run-detail của Console trước, rồi lập kế hoạch.</div>
+
+      <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+        ><span class="nm">read</span><span class="hl">console/primitives/event.ts</span><span class="bd">237 dòng · 120ms</span></div>
+
+      <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+        ><span class="nm">glob</span><span class="hl">packages/web/src</span><span class="bd">31 files</span></div>
+
+      <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+        ><span class="nm">grep</span><span class="hl">"foldNodeRuns" in packages/web/src</span><span class="bd">14 matches</span></div>
+
+      <div class="row"><span class="chev">▾</span><span class="ic ok">✓</span
+        ><span class="nm">todo</span><span class="hl">Research · Plan</span><span class="bd">1/6 xong</span></div>
+      <div class="body chk">
+        <div class="ph">Research</div>
+        <div><span class="ok">☑</span> Read story 5.5 spec and brainstorm</div>
+        <div><span class="mut">☐</span> Scout Command Center and run-view code</div>
+        <div><span class="mut">☐</span> Map files, tests, and acceptance criteria</div>
+        <div class="ph" style="margin-top:5px">Plan</div>
+        <div><span class="mut">☐</span> Write complete implementation plan</div>
+        <div><span class="mut">☐</span> Self-review coverage and placeholders</div>
+        <div><span class="mut">☐</span> Save plan and return JSON</div>
+      </div>
+
+      <div class="row"><span class="chev">▾</span><span class="ic ok">✓</span
+        ><span class="nm">task</span><span class="hl">Scout Command Center run-detail</span><span class="bd">1 subagent</span></div>
+      <div class="body">
+        <div class="mut" style="font-size:11px">Read-only. Do not edit. Skip formatters, linters, tests.</div>
+        <div class="sub">
+          <span class="agent">scout</span> · <strong>ScoutConsole</strong>
+          <span class="mut">— foldNodeRuns, NodeDivider, RunStream…</span>
+        </div>
+      </div>
+
+      <div class="row"><span class="chev">▾</span><span class="ic bad">✕</span
+        ><span class="nm">bash</span><span class="hl">bun test node-room</span><span class="bd bad">exit 1 · 2.4s</span></div>
+      <div class="body">
+        <div class="term"><span class="cmd">$ bun test node-room</span><br>
+          <span class="bad">FAIL</span> NodeRoom.test.tsx<br>
+          &nbsp;&nbsp;● collapses a successful tool call<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;expected 0 open, received 4
+        </div>
+      </div>
+
+      <div class="row"><span class="chev">▾</span><span class="ic ok">✓</span
+        ><span class="nm">edit</span><span class="hl">lib/agent-history.ts</span><span class="bd"><span class="add">+12</span> <span class="del">−3</span></span></div>
+      <div class="body">
+        <div style="background:#010409;border:1px solid #232833;border-radius:6px;padding:7px 9px">
+          <div class="del">50 −  const TOOL_CONTEXT_KEYS = ['cmd', 'path',</div>
+          <div class="add">50 +  presentation: toolPresentation(card),</div>
+          <div class="add">51 +  exitCode: resultFields.exitCode,</div>
+        </div>
+      </div>
+
+      <div class="att">Attempt 2 · sau retry</div>
+      <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+        ><span class="nm">bash</span><span class="hl">bun test node-room</span><span class="bd">exit 0 · 2.1s</span></div>
+
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:26px">
+  <h3>Chốt mật độ dòng</h3>
+  <p class="subtitle">Ba cách trình bày cùng một dòng thu gọn. Bấm để chọn.</p>
+
+  <div class="options">
+    <div class="option" data-choice="a" onclick="toggleSelect(this)">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>Cột đều — như trên</h3>
+        <div class="tx" style="margin:7px 0">
+          <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span><span class="nm">read</span><span class="hl">console/primitives/event.ts</span><span class="bd">237 dòng · 120ms</span></div>
+          <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span><span class="nm">grep</span><span class="hl">"foldNodeRuns" in packages/web/src</span><span class="bd">14 matches</span></div>
+        </div>
+        <p>Tên tool canh cột cố định. Quét dọc nhanh nhất, nhưng tên dài bị bó hẹp.</p>
+      </div>
+    </div>
+
+    <div class="option" data-choice="b" onclick="toggleSelect(this)">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>Nhãn nền — tên tool là chip</h3>
+        <div class="tx" style="margin:7px 0">
+          <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+            ><span style="background:#21262d;color:#d2a8ff;padding:1px 6px;border-radius:4px;flex:0 0 auto">read</span
+            ><span class="hl">console/primitives/event.ts</span><span class="bd">237 dòng</span></div>
+          <div class="row"><span class="chev">▸</span><span class="ic ok">✓</span
+            ><span style="background:#21262d;color:#d2a8ff;padding:1px 6px;border-radius:4px;flex:0 0 auto">grep</span
+            ><span class="hl">"foldNodeRuns" in packages/web/src</span><span class="bd">14 matches</span></div>
+        </div>
+        <p>Tên tool nổi hơn, chịu được tên dài như <code>mcp__gitnexus__query</code>. Đổi lại mất canh cột.</p>
+      </div>
+    </div>
+
+    <div class="option" data-choice="c" onclick="toggleSelect(this)">
+      <div class="letter">C</div>
+      <div class="content">
+        <h3>Hai dòng — headline xuống dòng riêng</h3>
+        <div class="tx" style="margin:7px 0">
+          <div style="padding:5px 7px">
+            <div><span class="chev">▸</span> <span class="ok">✓</span> <span class="nm">read</span> <span class="bd">237 dòng · 120ms</span></div>
+            <div style="margin-left:31px;color:#8b949e">console/primitives/event.ts</div>
+          </div>
+          <div style="padding:5px 7px">
+            <div><span class="chev">▸</span> <span class="ok">✓</span> <span class="nm">grep</span> <span class="bd">14 matches</span></div>
+            <div style="margin-left:31px;color:#8b949e">"foldNodeRuns" in packages/web/src</div>
+          </div>
+        </div>
+        <p>Không bao giờ bị cắt chữ, đọc được đường dẫn dài. Đổi lại tốn gấp đôi chiều cao.</p>
+      </div>
+    </div>
+  </div>
+</div>

@@ -6965,20 +6965,40 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
 
       expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
       // Accepted contract: speckit-ralph-native-feature.yaml ralph-loop-run uses
-      // codex + gpt-5.6-terra @ xhigh (final loop: anthropic/claude-sonnet-5).
+      // grok + grok-4.5 @ high (final loop: omp + anthropic/claude-sonnet-5).
       const loopNode = fixture.workflow.nodes.find(node => node.id === 'ralph-loop-run');
-      expect(loopNode?.provider).toBe('codex');
-      expect(loopNode?.model).toBe('gpt-5.6-terra');
-      expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('codex');
+      expect(loopNode?.provider).toBe('grok');
+      expect(loopNode?.model).toBe('grok-4.5');
+      expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('grok');
       const options = mockSendQueryDag.mock.calls[0][3] as SendQueryOptions;
       expect(options.model).toBe(loopNode?.model);
-      expect(options.nodeConfig?.effort).toBe('xhigh');
+      expect(options.nodeConfig?.effort).toBe('high');
       expect(store.completeWorkflowRun).toHaveBeenCalled();
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(existsSync(fixture.syncMarkerPath)).toBe(true);
       const eventTypes = store.createWorkflowEvent.mock.calls.map(call => call[0].event_type);
       expect(eventTypes.filter(type => type === 'loop_iteration_started')).toHaveLength(1);
       expect(eventTypes.filter(type => type === 'loop_iteration_completed')).toHaveLength(1);
+      const persistedEvents = store.createWorkflowEvent.mock.calls.map(
+        call =>
+          call[0] as {
+            event_type: string;
+            step_name?: string;
+            data: Record<string, unknown>;
+          }
+      );
+      const loopEvents = persistedEvents.filter(event => event.step_name === 'ralph-loop-run');
+      const nodeStarted = loopEvents.find(event => event.event_type === 'node_started');
+      const iterationStarted = loopEvents.find(
+        event => event.event_type === 'loop_iteration_started'
+      );
+      const iterationCompleted = loopEvents.find(
+        event => event.event_type === 'loop_iteration_completed'
+      );
+      const nodeCompleted = loopEvents.find(event => event.event_type === 'node_completed');
+      expect(nodeStarted?.data.occurrence_id).toBe(nodeCompleted?.data.occurrence_id);
+      expect(iterationStarted?.data.occurrence_id).toBe(iterationCompleted?.data.occurrence_id);
+      expect(nodeStarted?.data.occurrence_id).not.toBe(iterationStarted?.data.occurrence_id);
     });
 
     it('fails the native Ralph loop on exhaustion and does not run the downstream node', async () => {
@@ -7068,16 +7088,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(store.completeWorkflowRun).toHaveBeenCalled();
     });
 
-    it('skips the speckit-ralph-test loop when the PRD has no pending userStories', async () => {
+    it('skips a Ralph loop when the PRD has no pending userStories', async () => {
       const sourceRoot = join(import.meta.dir, '..', '..', '..');
       await git.execFileAsync('git', ['init', '--quiet'], { cwd: testDir });
-      const wfPath = join(
-        sourceRoot,
-        '.archon',
-        'workflows',
-        'defaults',
-        'speckit-ralph-test.yaml'
-      );
       const cmdPath = join(
         sourceRoot,
         '.archon',
@@ -7085,9 +7098,31 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         'defaults',
         'archon-speckit-ralph-iteration.md'
       );
-      const parsed = parseWorkflow(await readFile(wfPath, 'utf8'), basename(wfPath));
+      const parsed = parseWorkflow(
+        `name: ralph-skip-fixture
+description: Test-only Ralph loop skip fixture.
+nodes:
+  - id: ralph-native-preflight
+    bash: |
+      set -euo pipefail
+      RLN_PRD=$(jq -r '.ralph_prd_file' .specify/feature.json)
+      RLN_PENDING=$(jq '[.userStories[] | select(.completed == false)] | length' "$RLN_PRD")
+      if [ "$RLN_PENDING" -gt 0 ]; then RLN_HAS=true; else RLN_HAS=false; fi
+      printf '{"type":"loop_progress","targetNodeId":"ralph-loop-run","expectedIterations":%d,"hasPending":%s}\\n' "$RLN_PENDING" "$RLN_HAS"
+  - id: ralph-loop-run
+    loop:
+      command: archon-speckit-ralph-iteration
+      max_iterations: 2
+      until_bash: exit 0
+    depends_on: [ralph-native-preflight]
+    when: "$ralph-native-preflight.output.hasPending == 'true'"
+`,
+        'ralph-skip-fixture.yaml'
+      );
       if (parsed.error || !parsed.workflow) {
-        throw new Error(parsed.error ?? 'speckit-ralph-test did not load');
+        throw new Error(
+          parsed.error ? JSON.stringify(parsed.error) : 'Ralph skip fixture did not load'
+        );
       }
 
       const commandsDir = join(testDir, '.archon', 'commands');
@@ -7221,6 +7256,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         name: 'read_file',
         id: 'anonymous-1',
         output: 'contents',
+      });
+      expect(toolRows[1]?.metadata).toMatchObject({
+        tool_phase: 'result',
+        outcome: 'success',
       });
     });
 
@@ -24344,6 +24383,106 @@ describe('executeDagWorkflow -- production Plannotator gate integration', () => 
       gateSpy.mockRestore();
     }
   }, 30_000);
+});
+
+describe('bundled feature verification routing', () => {
+  for (const failures of [0, 1, 4]) {
+    it(`routes ${failures} proof failures without publishing an unverified PR`, async (): Promise<void> => {
+      const root = mkdtempSync(join(tmpdir(), 'feature-verify-routing-'));
+      const source = readFileSync(
+        join(
+          import.meta.dir,
+          '../../../.archon/workflows/defaults/archon-superpower-feature-verify-loop.yml'
+        ),
+        'utf8'
+      );
+      const parsed = parseWorkflow(source, 'archon-superpower-feature-verify-loop.yml');
+      if (!parsed.workflow) throw new Error(JSON.stringify(parsed.error));
+      const calls: string[] = [];
+      let attempts = 0;
+      // Preserve the shipped graph and route policy; replace costly AI/proof/PR bodies.
+      const nodes: DagNode[] = parsed.workflow.nodes.map((node): DagNode => {
+        if ('route_loop' in node) return node;
+        const base = {
+          id: node.id,
+          depends_on: node.depends_on,
+          trigger_rule: node.trigger_rule,
+          always_run: node.always_run,
+        };
+        if (node.id === 'verify-blocked') return { ...base, bash: 'exit 1' };
+        return { ...base, prompt: `Fixture ${node.id}`, provider: 'claude' };
+      });
+      mockGetAgentProviderDag.mockImplementation(() => ({
+        sendQuery: mock(function* (
+          _prompt: string,
+          _cwd: string,
+          _resumeSessionId?: string,
+          options?: SendQueryOptions
+        ) {
+          const id = options?.nodeConfig?.nodeId;
+          if (typeof id !== 'string') throw new Error('Fixture node id missing');
+          calls.push(id);
+          if (id === 'begin-verify') attempts++;
+          yield {
+            type: 'assistant' as const,
+            content: id === 'record-verify' ? JSON.stringify(attempts > failures) : id,
+          };
+          yield { type: 'result' as const, sessionId: `fixture-${id}` };
+        }),
+        getType: (): string => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      }));
+      const store = createMockStore();
+      try {
+        await executeDagWorkflow(
+          createMockDeps(store),
+          createMockPlatform(),
+          'feature-verify-fixture',
+          root,
+          {
+            ...parsed.workflow,
+            provider: 'claude',
+            model: undefined,
+            nodes,
+            mutates_checkout: false,
+          },
+          makeWorkflowRun(`feature-verify-${failures}`),
+          'claude',
+          undefined,
+          join(root, 'artifacts'),
+          join(root, 'state'),
+          join(root, 'logs'),
+          'main',
+          'docs/',
+          minimalConfig
+        );
+        const expectedAttempts = Math.min(failures + 1, 4);
+        for (const id of [
+          'begin-verify',
+          'finalize-change',
+          'prepare-verify',
+          'select-verify-targets',
+          'normalize-verify-targets',
+          'prove',
+          'record-verify',
+        ]) {
+          expect(calls.filter(call => call === id)).toHaveLength(expectedAttempts);
+        }
+        expect(calls.filter(id => id === 'fix-verify')).toHaveLength(expectedAttempts - 1);
+        expect(calls.filter(id => id === 'ralph-loop-run')).toHaveLength(1);
+        expect(calls.filter(id => id === 'create-pull-request')).toHaveLength(failures > 3 ? 0 : 1);
+        if (failures > 3) {
+          expect(store.failWorkflowRun).toHaveBeenCalled();
+          expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+        } else {
+          expect(calls.slice(-2)).toEqual(['authorize-pr', 'create-pull-request']);
+          expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 describe('executeDagWorkflow -- superseded plannotator supervisor', () => {

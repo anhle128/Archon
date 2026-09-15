@@ -32,6 +32,10 @@ A small set of scoped CSS custom properties is defined in `packages/web/src/inde
 
 | Token | Value | Usage |
 |-------|-------|-------|
+| `--rv-node-kind-size` | `0.625rem` | Graph node kind label |
+| `--rv-node-label-size` | `0.8125rem` | Graph node name |
+| `--rv-node-meta-size` | `0.6875rem` | Graph node duration, status, and metadata |
+| `--rv-tab-size` | `0.6875rem` | Run-detail Log/Graph/Artifacts tab labels |
 | `--rv-agent-font-size` | `12.5px` | Agent message text (`.pmsg-text`) |
 | `--rv-agent-line-height` | `1.5` | Agent message line-height |
 | `--rv-tool-card-bg` | `var(--surface-inset)` | Tool card inset background |

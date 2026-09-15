@@ -123,8 +123,6 @@ const {
   resetWorkflowNodeSessions,
   answerAskHuman,
   AskHumanRunNotFoundError,
-  AskHumanAuthenticationRequiredError,
-  AskHumanForbiddenError,
   confirmPermission,
   PermissionAuthenticationRequiredError,
   PermissionForbiddenError,
@@ -979,46 +977,58 @@ describe('answerAskHuman', () => {
     mockLogger.trace.mockClear();
   });
 
-  test('requires an authenticated actor', async () => {
+  test('defaults a missing actor to admin', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
 
-    await expect(
-      answerAskHuman({
-        runId: 'run-1',
-        requestId: 'tool-1',
-        body: answerBody,
-        actorUserId: undefined,
-      })
-    ).rejects.toBeInstanceOf(AskHumanAuthenticationRequiredError);
-    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+    await answerAskHuman({
+      runId: 'run-1',
+      requestId: 'tool-1',
+      body: answerBody,
+      actorUserId: undefined,
+    });
+
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-1',
+      tool_use_id: 'tool-1',
+      answer: answerBody,
+      resolved_by: 'admin',
+    });
   });
 
-  test('rejects a different starter even when that actor is admin upstream', async () => {
+  test('accepts an actor who is not the run starter', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: starterId }));
 
-    await expect(
-      answerAskHuman({
-        runId: 'run-1',
-        requestId: 'tool-1',
-        body: answerBody,
-        actorUserId: 'admin-upstream',
-      })
-    ).rejects.toBeInstanceOf(AskHumanForbiddenError);
-    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+    await answerAskHuman({
+      runId: 'run-1',
+      requestId: 'tool-1',
+      body: answerBody,
+      actorUserId: 'admin-upstream',
+    });
+
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-1',
+      tool_use_id: 'tool-1',
+      answer: answerBody,
+      resolved_by: 'admin-upstream',
+    });
   });
 
-  test('rejects an unowned run', async () => {
+  test('accepts an unowned run', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ user_id: null }));
 
-    await expect(
-      answerAskHuman({
-        runId: 'run-1',
-        requestId: 'tool-1',
-        body: answerBody,
-        actorUserId: starterId,
-      })
-    ).rejects.toBeInstanceOf(AskHumanForbiddenError);
-    expect(mockResolvePendingInteraction).not.toHaveBeenCalled();
+    await answerAskHuman({
+      runId: 'run-1',
+      requestId: 'tool-1',
+      body: answerBody,
+      actorUserId: starterId,
+    });
+
+    expect(mockResolvePendingInteraction).toHaveBeenCalledWith({
+      workflow_run_id: 'run-1',
+      tool_use_id: 'tool-1',
+      answer: answerBody,
+      resolved_by: starterId,
+    });
   });
 
   test('passes the matching starter as resolved_by', async () => {

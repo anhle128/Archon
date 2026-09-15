@@ -303,15 +303,28 @@ nodes:
   # ───────────────────────────────────────────────────────────────────
   # STEP 4 / 5 — Implement via archon-ralph-dag-project-aware (sub-run)
   # Governed child run in this SAME worktree (isolation: inherit).
-  # Ready Ralph PRD => detect-input -> "ready" (generation skipped).
-  # Loops one story per iteration (fresh context, validate + commit).
-  # Next node audits original-plan coverage; PR creation is a later node.
+  # Receives the ready Ralph PRD directory produced by build-ralph-prd.
+  # Loops one story per iteration (fresh context), validates, and returns
+  # uncommitted changes. This parent audits, commits, pushes, and creates the PR.
   # ───────────────────────────────────────────────────────────────────
   - id: ralph-implement
     workflow: archon-ralph-dag-project-aware
     input: '$build-ralph-prd.output.prd_dir'
     isolation: inherit
     depends_on: [build-ralph-prd]
+
+  - id: ralph-implementation-complete
+    depends_on: [ralph-implement]
+    when: "$ralph-implement.output.done == true"
+    bash: |
+      echo "Ralph implementation complete; parent workflow owns finalization."
+
+  - id: ralph-implementation-blocked
+    depends_on: [ralph-implement]
+    when: "$ralph-implement.output.done == false"
+    bash: |
+      echo "Ralph implementation returned a blocker for parent resolution." >&2
+      exit 1
 
   # ───────────────────────────────────────────────────────────────────
   # STEP 5a / 5 — Verify/fix loop: audit-only gate + route_loop
@@ -379,7 +392,7 @@ nodes:
       - Do not rewrite the plan or expand scope.
       - If a gap cannot be decided from evidence, prefer `FAIL` (a fix pass is cheaper
         than shipping an unverified gap).
-    depends_on: [ralph-implement, fix-gaps]
+    depends_on: [ralph-implementation-complete, fix-gaps]
     trigger_rule: one_success
     provider: omp
     effort: xhigh

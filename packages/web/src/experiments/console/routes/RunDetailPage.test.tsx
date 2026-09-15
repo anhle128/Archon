@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { act, createElement, Fragment, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { WorkflowEnvResolvedTable } from '../components/WorkflowEnvResolvedTable';
 import { toRun, type Run } from '../primitives/run';
@@ -16,6 +16,7 @@ import type {
 } from '../skills/runs';
 import type { DagNode } from '../skills/workflows';
 import { invalidate } from '../store/cache';
+import { roomOpenerId } from '@/lib/execution-room-model';
 import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
 import { hasRunEnvOverlayUi, RunDetailPage } from './RunDetailPage';
 
@@ -205,6 +206,34 @@ function SearchProbe(): ReactElement {
   return createElement('span', { 'data-testid': 'location-search' }, location.search);
 }
 
+function QueryControls(): ReactElement {
+  const navigate = useNavigate();
+  return createElement(
+    Fragment,
+    null,
+    createElement(
+      'button',
+      {
+        type: 'button',
+        onClick: (): void => {
+          navigate({ search: '' });
+        },
+      },
+      'clear-node'
+    ),
+    createElement(
+      'button',
+      {
+        type: 'button',
+        onClick: (): void => {
+          navigate({ search: '?node=review' });
+        },
+      },
+      'set-review'
+    )
+  );
+}
+
 describe('RunDetailPage inspect selection', () => {
   let win: ReturnType<typeof installHappyDom>;
   let host: Element;
@@ -216,6 +245,8 @@ describe('RunDetailPage inspect selection', () => {
   let cwd = '';
   let workflow = '';
   let answerPosts: { path: string; body: unknown }[] = [];
+  let conversationCreates: string[] = [];
+  let messagePosts: { path: string; body: unknown }[] = [];
 
   beforeEach(() => {
     seq += 1;
@@ -224,6 +255,8 @@ describe('RunDetailPage inspect selection', () => {
     cwd = `/repo us010 ${String(seq)}`;
     workflow = `inspect-us010-${String(seq)}`;
     answerPosts = [];
+    conversationCreates = [];
+    messagePosts = [];
     win = installHappyDom();
     win.localStorage.clear();
     const el = win.document.createElement('div');
@@ -247,6 +280,7 @@ describe('RunDetailPage inspect selection', () => {
     invalidate('noop:no-conversation-id');
     invalidate('noop:no-project-id');
     invalidate('noop:no-run-id');
+    invalidate('parent-conversation');
     fetchSpy?.mockRestore();
     fetchSpy = undefined;
     win.localStorage.clear();
@@ -401,6 +435,9 @@ describe('RunDetailPage inspect selection', () => {
       pendingInteractions?: PendingInteraction[];
       viewerIsStarter?: boolean;
       starterDisplayName?: string | null;
+      parentPlatformId?: string | null;
+      parentPlatformType?: string;
+      parentConversationStatus?: number;
     } = {}
   ): void {
     const detailStatus = options.status ?? 'running';
@@ -410,6 +447,7 @@ describe('RunDetailPage inspect selection', () => {
       init?: RequestInit
     ) => {
       const path = requestPath(input);
+      const pathNoQuery = path.split('?')[0] ?? path;
       if (path === `/api/codebases/${encodeURIComponent(projectId)}`) {
         return Promise.resolve(
           jsonResponse({
@@ -430,7 +468,12 @@ describe('RunDetailPage inspect selection', () => {
         }
         return Promise.resolve(
           jsonResponse({
-            run: runPayload(detailStatus, options.metadata),
+            run: {
+              ...runPayload(detailStatus, options.metadata),
+              ...(options.parentPlatformId !== undefined && options.parentPlatformId !== null
+                ? { parent_platform_id: options.parentPlatformId }
+                : {}),
+            },
             events: options.events ?? eventsFor(runId),
             nodeStates: options.nodeStates ?? NODE_STATES,
             pending_interactions: options.pendingInteractions ?? [],
@@ -464,7 +507,7 @@ describe('RunDetailPage inspect selection', () => {
         );
       }
       if (
-        path ===
+        pathNoQuery ===
         `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent('review')}/messages`
       ) {
         return Promise.resolve(
@@ -482,7 +525,7 @@ describe('RunDetailPage inspect selection', () => {
         );
       }
       if (
-        path ===
+        pathNoQuery ===
         `/api/workflows/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent('build')}/messages`
       ) {
         return Promise.resolve(
@@ -514,6 +557,35 @@ describe('RunDetailPage inspect selection', () => {
         answerPosts.push({ path, body: JSON.parse(init.body) as unknown });
         return Promise.resolve(jsonResponse({ success: true, message: 'ok' }));
       }
+      if (path === '/api/conversations' || pathNoQuery === '/api/conversations') {
+        conversationCreates.push(path);
+        return Promise.resolve(jsonResponse({ error: 'must not create conversations' }, 500));
+      }
+      if (pathNoQuery.startsWith('/api/conversations/')) {
+        const rest = pathNoQuery.slice('/api/conversations/'.length);
+        if (rest.endsWith('/message')) {
+          if (init?.method !== 'POST') throw new Error('conversation message must use POST');
+          messagePosts.push({
+            path,
+            body: typeof init.body === 'string' ? JSON.parse(init.body) : init.body,
+          });
+          return Promise.resolve(jsonResponse({ accepted: true, status: 'ok' }));
+        }
+        const status = options.parentConversationStatus ?? 200;
+        if (status !== 200) {
+          return Promise.resolve(jsonResponse({ error: 'conversation lookup failed' }, status));
+        }
+        const platformId = decodeURIComponent(rest);
+        return Promise.resolve(
+          jsonResponse({
+            id: 'db-parent',
+            platform_conversation_id: platformId,
+            platform_type: options.parentPlatformType ?? 'web',
+            title: 'Parent chat',
+            last_activity_at: CREATED_AT,
+          })
+        );
+      }
       return Promise.resolve(jsonResponse({ error: `unmocked ${path}` }, 404));
     }) as typeof fetch);
   }
@@ -535,6 +607,7 @@ describe('RunDetailPage inspect selection', () => {
               Fragment,
               null,
               createElement(SearchProbe),
+              createElement(QueryControls),
               createElement(RunDetailPage)
             ),
           })
@@ -591,19 +664,30 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.textContent).toContain('Review plan in Plannotator');
     expect(host.textContent).toContain('Review session document');
     expect(host.querySelector('a[href="https://plannotator.example/review"]')).not.toBeNull();
-    expect(host.textContent).not.toContain(REVIEW_TEXT);
+    expect(host.querySelector('[aria-label="review room"]')?.textContent).not.toContain(
+      REVIEW_TEXT
+    );
     expect(host.textContent).toContain('Waiting for approval');
     expect(host.textContent).not.toContain('Awaiting input (');
+    const streamApprovalActions = Array.from(host.querySelectorAll('[data-keymap-approve]')).filter(
+      action => action.closest('[aria-label="review room"]') === null
+    );
+    expect(streamApprovalActions).toHaveLength(1);
+    expect(streamApprovalActions[0]?.closest('[data-execution-row-id]')).not.toBeNull();
   });
 
-  test('an invalid ?node= query falls back to the inspect-running node', async () => {
+  test('an invalid ?node= query does not open a room', async () => {
     stubPageFetch();
     await act(async () => {
       renderPage('?node=ghost');
     });
-    await flushUntil('build fallback', () => (host.textContent ?? '').includes(BUILD_TEXT));
-    expect(host.querySelector('[aria-label="build room"]')).not.toBeNull();
+    await flushUntil(
+      'log rows',
+      () => host.querySelector('#node-transition-review-start') !== null
+    );
+    expect(host.querySelector('[aria-label="build room"]')).toBeNull();
     expect(host.querySelector('[aria-label="review room"]')).toBeNull();
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).toBeNull();
   });
 
   test('switching Log to Graph retains the mounted room and selecting a graph node updates ?node=', async () => {
@@ -634,7 +718,7 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.querySelector('[aria-label="build room"]')).not.toBeNull();
   });
 
-  test('closing the room removes only the node query parameter', async () => {
+  test('closing the room restores log opener focus and does not reopen the deep link', async () => {
     stubPageFetch();
     await act(async () => {
       renderPage('?keep=1&node=review');
@@ -647,10 +731,26 @@ describe('RunDetailPage inspect selection', () => {
         'close room'
       ).click();
     });
-    await flushUntil('room closed', () => (host.textContent ?? '').includes('Select a node'));
+    await flushUntil(
+      'room closed',
+      () => host.querySelector('[data-testid="console-inspect-room"]') === null
+    );
     expect(host.querySelector('[aria-label="review room"]')).toBeNull();
-    expect(locationSearch()).toBe('?keep=1');
-    expect(locationSearch()).not.toContain('node=');
+    expect(locationSearch()).toContain('node=review');
+    expect(locationSearch()).toContain('keep=1');
+    expect(win.document.activeElement?.id).toBe(roomOpenerId('console', 'log', 'review-start'));
+
+    await act(async () => {
+      tabButton('clear-node').click();
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).toBeNull();
+
+    await act(async () => {
+      tabButton('set-review').click();
+    });
+    await flushUntil('reopened', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
   });
 
   test('StreamToolbar All nodes filtering does not close or change the selected room', async () => {
@@ -693,12 +793,13 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.querySelector('[aria-label="review room"]')).toBe(roomBefore);
   });
 
-  test('Artifacts stays full width and returning to Log restores the selected room', async () => {
+  test('Artifacts keeps the selected room docked and Log/Graph survive open and close', async () => {
     stubPageFetch();
     await act(async () => {
       renderPage('?node=review');
     });
     await flushUntil('review room', () => (host.textContent ?? '').includes(REVIEW_TEXT));
+    const roomBefore = host.querySelector('[aria-label="review room"]');
 
     await act(async () => {
       tabButton('Artifacts').click();
@@ -706,16 +807,15 @@ describe('RunDetailPage inspect selection', () => {
     await flushUntil('artifacts view', () =>
       (host.textContent ?? '').includes('No artifacts written to disk for this run.')
     );
-    expect(host.querySelector('[data-testid="console-inspect-pane"]')).toBeNull();
-    expect(host.querySelector('[aria-label="review room"]')).toBeNull();
+    expect(host.querySelector('[data-testid="console-inspect-pane"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="review room"]')).toBe(roomBefore);
     expect(host.querySelector('[data-testid="console-run-graph-scroller"]')).toBeNull();
 
     await act(async () => {
       tabButton('Log').click();
     });
     await flushUntil('log restored', () => (host.textContent ?? '').includes(REVIEW_TEXT));
-    expect(host.querySelector('[data-testid="console-inspect-pane"]')).not.toBeNull();
-    expect(host.querySelector('[aria-label="review room"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="review room"]')).toBe(roomBefore);
     expect(locationSearch()).toContain('node=review');
   });
 
@@ -763,12 +863,17 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.textContent).not.toContain('Cancel');
   });
 
-  test('a log-row click stores the node query without changing the All nodes filter', async () => {
+  test('ordinary visits have no room until a log row is opened', async () => {
     stubPageFetch();
     await act(async () => {
       renderPage();
     });
-    await flushUntil('build fallback', () => (host.textContent ?? '').includes(BUILD_TEXT));
+    await flushUntil(
+      'log rows',
+      () => host.querySelector('#node-transition-review-start') !== null
+    );
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).toBeNull();
+    expect(host.querySelector('[role="separator"]')).toBeNull();
     const filter = requireSelect(
       host.querySelector('[aria-label="Filter stream by node"]'),
       'node filter'
@@ -779,13 +884,16 @@ describe('RunDetailPage inspect selection', () => {
       host.querySelector('#node-transition-review-start'),
       'review row'
     );
+    const opener = requireButton(reviewRow.querySelector('button'), 'review identity');
+    expect(opener.id).toBe(roomOpenerId('console', 'log', 'review-start'));
     await act(async () => {
-      requireButton(reviewRow.querySelector('button'), 'review identity').click();
+      opener.click();
     });
     await flushUntil('review selected', () => (host.textContent ?? '').includes(REVIEW_TEXT));
     expect(locationSearch()).toBe('?node=review');
     expect(filter.value).toBe('all');
     expect(host.querySelector('#node-transition-build-start')).not.toBeNull();
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).not.toBeNull();
   });
 
   test('jumps to an awaiting room, answers through the skill, and keeps gate keys inactive', async () => {
@@ -874,7 +982,7 @@ describe('RunDetailPage inspect selection', () => {
     expect(host.textContent).not.toContain('Reply…');
   });
 
-  test('initial room selection prefers the pending Ask node over permission awaiting nodes', async () => {
+  test('ordinary visits stay closed and Awaiting input opens the pending Ask node', async () => {
     const pending = ask();
     const permission = ask({
       id: 'permission-1',
@@ -896,11 +1004,133 @@ describe('RunDetailPage inspect selection', () => {
     await act(async () => {
       renderPage();
     });
+    await flushUntil('awaiting chrome', () =>
+      (host.textContent ?? '').includes('Awaiting input (1)')
+    );
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).toBeNull();
+
+    await act(async () => {
+      tabButton('Awaiting input (1)').click();
+    });
     await flushUntil(
       'review Ask room',
       () => host.querySelector('[aria-label="review room"] form') !== null
     );
     expect(host.querySelector('[aria-label="approve room"] form')).toBeNull();
+  });
+
+  test('shares Ask drafts between the log section and room', async () => {
+    stubPageFetch({
+      pendingInteractions: [ask()],
+      viewerIsStarter: true,
+      starterDisplayName: 'Avery',
+    });
+    await act(async () => {
+      renderPage('?node=review');
+    });
+    await flushUntil(
+      'shared ask',
+      () => host.querySelectorAll('form[id^="run-ask-card-tool-1-"]').length >= 2
+    );
+    expect(host.querySelector('[data-ask-draft-count]')?.getAttribute('data-ask-draft-count')).toBe(
+      '0'
+    );
+    const section = host.querySelector('#console-run-view');
+    const room = host.querySelector('[aria-label="review room"]');
+    expect(section).not.toBeNull();
+    expect(room).not.toBeNull();
+    const logChoice = section?.querySelector('input[type="radio"][value="Ship"]');
+    if (!(logChoice instanceof HTMLInputElement)) throw new Error('missing log Ship');
+    await act(async () => {
+      logChoice.click();
+    });
+    await flush();
+    const logShip = section?.querySelector('input[type="radio"][value="Ship"]');
+    const roomShip = room?.querySelector('input[type="radio"][value="Ship"]');
+    if (!(logShip instanceof HTMLInputElement) || !(roomShip instanceof HTMLInputElement)) {
+      throw new Error('missing shared radios');
+    }
+    expect(logShip.checked).toBe(true);
+    expect(roomShip.checked).toBe(true);
+    expect(host.querySelector('[data-ask-draft-count]')?.getAttribute('data-ask-draft-count')).toBe(
+      '1'
+    );
+  });
+
+  test('sends replies only to an existing parent web conversation', async () => {
+    stubPageFetch();
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil('missing parent', () =>
+      (host.textContent ?? '').includes(
+        'Replies need a parent web conversation. This run has none.'
+      )
+    );
+    const missingSend = [...host.querySelectorAll('button')].find(button =>
+      (button.textContent ?? '').includes('Send')
+    );
+    expect((missingSend as unknown as HTMLButtonElement | undefined)?.disabled).toBe(true);
+    expect(conversationCreates).toEqual([]);
+
+    await act(async () => {
+      root.unmount();
+    });
+    invalidate('run');
+    invalidate('parent-conversation');
+    stubPageFetch({ parentPlatformId: 'cli-parent-1', parentPlatformType: 'cli' });
+    root = createRoot(host);
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil('non-web parent', () =>
+      (host.textContent ?? '').includes(
+        'Replies are available only for runs with a parent web conversation.'
+      )
+    );
+    const nonWebSend = [...host.querySelectorAll('button')].find(button =>
+      (button.textContent ?? '').includes('Send')
+    );
+    expect((nonWebSend as unknown as HTMLButtonElement | undefined)?.disabled).toBe(true);
+    expect(conversationCreates).toEqual([]);
+
+    await act(async () => {
+      root.unmount();
+    });
+    invalidate('run');
+    invalidate('parent-conversation');
+    stubPageFetch({ parentPlatformId: 'web/parent-1', parentPlatformType: 'web' });
+    root = createRoot(host);
+    await act(async () => {
+      renderPage();
+    });
+    await flushUntil('web parent', () => host.querySelector('textarea:not([disabled])') !== null);
+    const textarea = host.querySelector('textarea');
+    if (textarea === null) throw new Error('missing reply field');
+    const fiberKey = Object.keys(textarea).find(key => key.startsWith('__reactProps$'));
+    if (fiberKey === undefined) throw new Error('missing react props');
+    const onChange = (
+      textarea as unknown as Record<
+        string,
+        { onChange?: (event: { target: { value: string } }) => void }
+      >
+    )[fiberKey]?.onChange;
+    await act(async () => {
+      onChange?.({ target: { value: 'follow up' } });
+    });
+    await flush();
+    const webSend = [...host.querySelectorAll('button')].find(button =>
+      (button.textContent ?? '').includes('Send')
+    );
+    if (webSend === undefined) throw new Error('missing Send');
+    expect((webSend as unknown as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => {
+      (webSend as unknown as HTMLButtonElement).click();
+    });
+    await flushUntil('posted', () => messagePosts.length > 0);
+    expect(messagePosts[0]?.path).toContain('web%2Fparent-1');
+    expect(messagePosts[0]?.body).toEqual({ message: 'follow up' });
+    expect(conversationCreates).toEqual([]);
   });
 
   test('renders CAP-7 failure as error chrome without an awaiting pill', async () => {

@@ -10,6 +10,7 @@ export interface AskQuestion {
 
 export type AskDraftValue = string | string[];
 export type AskDraft = Record<string, AskDraftValue>;
+export type AskDraftByRequest = Record<string, AskDraft | undefined>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

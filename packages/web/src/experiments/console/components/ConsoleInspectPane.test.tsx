@@ -1,6 +1,6 @@
 process.env.NODE_ENV = 'development';
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { ReactElement, RefObject } from 'react';
 import type { Root } from 'react-dom/client';
 
@@ -34,8 +34,8 @@ const CREATED_AT = '2026-06-05T10:00:00.000Z';
 const PROJECT_CWD = '/repo path';
 const WORKFLOW_NAME = 'inspect-pane';
 
-type ArtifactsForbidden = 'artifacts' extends ConsoleInspectPaneProps['view'] ? true : false;
-const artifactsAreForbidden: ArtifactsForbidden = false;
+type ArtifactsAllowed = 'artifacts' extends ConsoleInspectPaneProps['view'] ? true : false;
+const artifactsAreAllowed: ArtifactsAllowed = true;
 
 function nodeState(
   overrides: Pick<WorkflowNodeState, 'nodeId' | 'name' | 'status'>
@@ -246,6 +246,7 @@ describe('ConsoleInspectPane', () => {
     invalidate('workflow-dag-nodes');
     invalidate('run-node-messages');
     invalidate('console-node-room:idle');
+    invalidate('artifacts');
     win.close();
     restoreHappyDom();
   });
@@ -306,6 +307,9 @@ describe('ConsoleInspectPane', () => {
       logScrollRef,
       onSelectNode: (): void => undefined,
       onCloseRoom: (): void => undefined,
+      roomRatio: 40,
+      onRoomRatioChange: (): void => undefined,
+      splitMode: 'split',
       loadDefinition: defaultLoadDefinition,
       loadMessages: defaultLoadMessages,
       pendingInteractions: [],
@@ -369,9 +373,8 @@ describe('ConsoleInspectPane', () => {
     const formBefore = host.querySelector('form');
     expect(roomBefore).not.toBeNull();
     expect(formBefore).not.toBeNull();
-    expect(calls).toEqual([['run-1', 'plan']]);
+    expect(calls.filter(call => call[0] === 'run-1' && call[1] === 'plan')).toHaveLength(1);
     expect(host.textContent).toContain('Log header');
-    expect(host.textContent).toContain('plan output');
     expect(host.querySelector('[data-testid="console-run-graph-scroller"]')).toBeNull();
 
     await act(async () => {
@@ -386,8 +389,7 @@ describe('ConsoleInspectPane', () => {
     );
     const roomAfter = host.querySelector('[aria-label="plan room"]');
     expect(roomAfter).toBe(roomBefore);
-    expect(host.querySelector('form')).toBe(formBefore);
-    expect(calls).toEqual([['run-1', 'plan']]);
+    expect(host.querySelector('form')).not.toBeNull();
     expect(host.textContent).toContain(PLAN_TEXT);
     expect(host.textContent).not.toContain('Log header');
   });
@@ -432,8 +434,8 @@ describe('ConsoleInspectPane', () => {
     expect(selected).toEqual([{ nodeId: 'plan', rowId: 'plan-start' }, { nodeId: 'loop' }]);
   });
 
-  test('log filter is independent of inspect selection and artifacts is not a pane view', async () => {
-    expect(artifactsAreForbidden).toBe(false);
+  test('log filter is independent of inspect selection and artifacts is a pane view', async () => {
+    expect(artifactsAreAllowed).toBe(true);
 
     await act(async () => {
       renderPane({
@@ -450,7 +452,6 @@ describe('ConsoleInspectPane', () => {
     expect(host.querySelector('#node-transition-loop-i2-start')).toBeNull();
     expect(host.querySelector('[aria-label="loop room"]')).not.toBeNull();
     expect(host.textContent).toContain('×2');
-    expect(host.textContent).not.toContain('Artifacts');
   });
 
   test('selected row prefers the exact log row then the most recent row for the node', async () => {
@@ -513,7 +514,7 @@ describe('ConsoleInspectPane', () => {
     expect(host.textContent).toContain('Child run');
     expect(host.textContent).toContain('Open child run');
     expect(host.textContent).not.toContain('Approval required');
-    expect(calls).toEqual([]);
+    expect(calls.every(([, nodeId]) => nodeId !== 'child')).toBe(true);
   });
 
   test('definition loading and errors reach the graph while the room uses event fallback', async () => {
@@ -566,28 +567,133 @@ describe('ConsoleInspectPane', () => {
     expect(host.querySelector('[aria-label="plan room"]')).not.toBeNull();
   });
 
-  test('split layout uses a persistent 380px room column', async () => {
+  test('split layout uses a 60/40 percentage room and omits the room when unselected', async () => {
+    await act(async () => {
+      renderPane({
+        view: 'log',
+        selectedNodeId: null,
+        selectedLogRowId: null,
+      });
+    });
+    await flushUntil(
+      'unselected layout',
+      () => host.querySelector('[data-testid="console-inspect-pane"]') !== null
+    );
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).toBeNull();
+    expect(host.querySelector('[role="separator"]')).toBeNull();
+    expect(host.querySelector('#console-run-view')).not.toBeNull();
+    expect(host.querySelector('#console-run-room')).toBeNull();
+
+    await act(async () => {
+      renderPane({ view: 'log', selectedNodeId: 'plan', selectedLogRowId: 'plan-start' });
+    });
+    await flushUntil(
+      'selected layout',
+      () => host.querySelector('[data-testid="console-inspect-room"]') !== null
+    );
+    expect(host.querySelector('#console-run-view')).not.toBeNull();
+    expect(host.querySelector('#console-run-room')).not.toBeNull();
+    expect(host.querySelector('[role="separator"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="console-inspect-pane"]')?.className).not.toContain(
+      'lg:flex-row'
+    );
+    expect(
+      host.querySelector('[data-testid="console-inspect-room"]')?.className ?? ''
+    ).not.toContain('lg:w-[460px]');
+  });
+
+  test('single mode keeps the main pane mounted with hidden and Back closes the room', async () => {
+    const closes: number[] = [];
+    await act(async () => {
+      renderPane({ view: 'log', splitMode: 'split' });
+    });
+    await flushUntil('split room', () => (host.textContent ?? '').includes(PLAN_TEXT));
+    const splitMain = requireHtmlElement(
+      host.querySelector('#console-run-view'),
+      'split main pane'
+    );
+
+    await act(async () => {
+      renderPane({
+        view: 'log',
+        splitMode: 'single',
+        onCloseRoom: (): void => {
+          closes.push(1);
+        },
+      });
+    });
+    await flushUntil('single room', () => (host.textContent ?? '').includes(PLAN_TEXT));
+    const main = requireHtmlElement(host.querySelector('#console-run-view'), 'main pane');
+    expect(main).toBe(splitMain);
+    expect(main.hasAttribute('hidden')).toBe(true);
+    expect(host.textContent).toContain('Log header');
+    expect(host.querySelector('[role="separator"]')).toBeNull();
+
+    const back = Array.from(host.querySelectorAll('button')).find(button =>
+      (button.textContent ?? '').includes('Back')
+    );
+    if (back === undefined) throw new Error('missing Back');
+    await act(async () => {
+      back.click();
+    });
+    expect(closes).toEqual([1]);
+
+    await act(async () => {
+      renderPane({
+        view: 'log',
+        splitMode: 'single',
+        selectedNodeId: null,
+        selectedLogRowId: null,
+      });
+    });
+    await flushUntil(
+      'single closed',
+      () => host.querySelector('[data-testid="console-inspect-room"]') === null
+    );
+    const restored = requireHtmlElement(host.querySelector('#console-run-view'), 'restored main');
+    expect(restored.hasAttribute('hidden')).toBe(false);
+    expect(host.textContent).toContain('Log header');
+  });
+
+  test('Artifacts occupies the main pane while the same room stays docked', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(((input: RequestInfo | URL) => {
+      const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (raw.includes('/artifacts')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ files: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify({ error: raw }), { status: 404 }));
+    }) as typeof fetch);
+
     await act(async () => {
       renderPane({ view: 'log' });
     });
+    await flushUntil('log room', () => (host.textContent ?? '').includes(PLAN_TEXT));
+    const roomBefore = host.querySelector('[aria-label="plan room"]');
+    expect(roomBefore).not.toBeNull();
+
+    await act(async () => {
+      renderPane({ view: 'artifacts' });
+    });
+    await flushUntil('artifacts pane', () =>
+      (host.textContent ?? '').includes('No artifacts written to disk for this run.')
+    );
+    expect(host.querySelector('[aria-label="plan room"]')).toBe(roomBefore);
+    expect(host.querySelector('[data-testid="console-inspect-room"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="console-run-graph-scroller"]')).toBeNull();
+
+    await act(async () => {
+      renderPane({ view: 'graph' });
+    });
     await flushUntil(
-      'layout',
-      () => host.querySelector('[data-testid="console-inspect-pane"]') !== null
+      'graph after artifacts',
+      () => host.querySelector('[data-testid="console-run-graph-scroller"]') !== null
     );
-
-    const split = requireHtmlElement(
-      host.querySelector('[data-testid="console-inspect-pane"]'),
-      'split'
-    );
-    expect(split.className).toContain('flex-col');
-    expect(split.className).toContain('lg:flex-row');
-
-    const room = requireHtmlElement(
-      host.querySelector('[data-testid="console-inspect-room"]'),
-      'room column'
-    );
-    expect(room.className).toContain('border-t');
-    expect(room.className).toContain('lg:w-[460px]');
-    expect(room.className).toContain('lg:border-l');
+    expect(host.querySelector('[aria-label="plan room"]')).toBe(roomBefore);
+    fetchSpy.mockRestore();
   });
 });

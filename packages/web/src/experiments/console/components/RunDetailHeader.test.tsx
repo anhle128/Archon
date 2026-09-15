@@ -1,10 +1,14 @@
-import { createElement } from 'react';
+process.env.NODE_ENV = 'development';
+
 import { describe, expect, test } from 'bun:test';
+import { createElement } from 'react';
+import type { Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { RunDetailHeader } from './RunDetailHeader';
 import type { Run } from '../primitives/run';
 import type { UsageReport } from '../skills/usage';
+import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
 
 function emptyMetrics(overrides: Partial<UsageReport['totals']> = {}): UsageReport['totals'] {
   return {
@@ -71,6 +75,7 @@ function renderHeader(props: {
   usage: UsageReport | null;
   runOverrides?: Partial<Run>;
   askAwaiting?: boolean;
+  onAwaitingInput?: () => void;
 }): string {
   return renderToStaticMarkup(
     createElement(
@@ -82,6 +87,7 @@ function renderHeader(props: {
         projectId: 'proj-1',
         usage: props.usage,
         askAwaiting: props.askAwaiting,
+        onAwaitingInput: props.onAwaitingInput,
       })
     )
   );
@@ -236,6 +242,76 @@ describe('RunDetailHeader Ask pause copy', () => {
     });
     expect(gate).toContain('Waiting for approval');
     expect(gate).not.toContain('Awaiting input');
+  });
+
+  test('renders Awaiting input as a button that invokes onAwaitingInput', async () => {
+    const react = await import('react');
+    const reactDomClient = await import('react-dom/client');
+    const act = react.act;
+    const createRoot = reactDomClient.createRoot;
+    const win = installHappyDom();
+    const el = win.document.createElement('div');
+    win.document.body.appendChild(el);
+    const host = el as unknown as Element;
+    const root: Root = createRoot(host);
+    const clicks: number[] = [];
+    await act(async () => {
+      root.render(
+        createElement(
+          MemoryRouter,
+          null,
+          createElement(RunDetailHeader, {
+            run: run({ status: 'paused' }),
+            projectName: 'demo',
+            projectId: 'proj-1',
+            usage: usage(),
+            askAwaiting: true,
+            onAwaitingInput: (): void => {
+              clicks.push(1);
+            },
+          })
+        )
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const awaiting = [...host.querySelectorAll('button')].find(
+      button => (button.textContent ?? '').trim() === 'Awaiting input'
+    );
+    expect(awaiting).not.toBeUndefined();
+    await act(async () => {
+      (awaiting as unknown as HTMLButtonElement).click();
+    });
+    expect(clicks).toEqual([1]);
+    await act(async () => {
+      root.unmount();
+    });
+    win.close();
+    restoreHappyDom();
+  });
+
+  test('paused approval status is not an Ask button', () => {
+    const gate = renderHeader({
+      usage: usage(),
+      runOverrides: { status: 'paused' },
+      askAwaiting: false,
+      onAwaitingInput: (): void => undefined,
+    });
+    expect(gate).toContain('>Waiting for approval</span>');
+    expect(gate).not.toContain('Awaiting input');
+    expect(gate).not.toContain('>Waiting for approval</button>');
+  });
+
+  test('completed status is not a button', () => {
+    const markup = renderHeader({
+      usage: usage(),
+      runOverrides: { status: 'completed' },
+      onAwaitingInput: (): void => undefined,
+    });
+    expect(markup).toContain('>Completed</span>');
+    expect(markup).not.toContain('>Completed</button>');
   });
 });
 

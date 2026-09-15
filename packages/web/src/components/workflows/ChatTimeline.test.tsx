@@ -48,6 +48,8 @@ function renderTimeline(overrides: Partial<ChatTimelineProps> = {}): string {
       onSelectNodeStatus={overrides.onSelectNodeStatus ?? NOOP}
       loading={overrides.loading ?? false}
       error={overrides.error ?? null}
+      renderAsk={overrides.renderAsk}
+      renderGate={overrides.renderGate}
     />
   );
 }
@@ -183,5 +185,46 @@ describe('ChatTimeline', () => {
       });
       expect(firstButton(markup)).toContain(glyph);
     }
+  });
+
+  test('renders Ask and gate entries with unscoped limitation copy', () => {
+    const markup = renderTimeline({
+      entries: [
+        {
+          kind: 'ask',
+          id: 'ask-1',
+          createdAt: '2026-09-06T00:00:02.000Z',
+          interaction: {
+            id: 'ask-1',
+            workflow_run_id: 'run-1',
+            node_id: 'review',
+            tool_use_id: 'tool-ask',
+            kind: 'ask',
+            status: 'pending',
+            envelope: {},
+            answer: null,
+            provider_session_id: 'sess-1',
+            created_at: '2026-09-06T00:00:02.000Z',
+            resolved_at: null,
+            resolved_by: null,
+          },
+          rowId: 'row-2',
+          scopeLimitation: 'Execution scope was not recorded for this interaction.',
+        },
+        {
+          kind: 'gate',
+          id: 'gate-1',
+          createdAt: '2026-09-06T00:00:03.000Z',
+          nodeId: 'review',
+          rowId: 'row-2',
+          scopeLimitation: 'Execution scope was not recorded for this interaction.',
+        },
+      ],
+      renderAsk: (): string => 'ask-slot',
+      renderGate: (): string => 'gate-slot',
+    });
+    expect(markup).toContain('Execution scope was not recorded for this interaction.');
+    expect(markup).toContain('ask-slot');
+    expect(markup).toContain('gate-slot');
   });
 });

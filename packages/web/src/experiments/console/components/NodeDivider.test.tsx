@@ -3,6 +3,8 @@ process.env.NODE_ENV = 'development';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import type { Root } from 'react-dom/client';
 
+import { roomOpenerId } from '@/lib/execution-room-model';
+
 import { StreamContextProvider } from '../lib/stream-context';
 import type { UsageMetrics, UsageReport, UsageReportGroup } from '../skills/usage';
 import { installHappyDom, restoreHappyDom } from '../test/install-happy-dom';
@@ -147,6 +149,8 @@ describe('NodeDivider', () => {
 
     const row = requireHtmlElement(host.querySelector('#node-transition-plan-start'), 'row root');
     const identity = requireButton(row.querySelector('button'), 'identity');
+    expect(identity.id).toBe(roomOpenerId('console', 'log', 'plan-start'));
+    expect(row.id).toBe('node-transition-plan-start');
     await act(async () => {
       identity.click();
     });

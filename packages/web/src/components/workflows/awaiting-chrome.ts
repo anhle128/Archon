@@ -29,6 +29,23 @@ export function firstAwaitingNodeId(nodes: readonly WorkflowNodeStateResponse[])
   return null;
 }
 
+export function firstPendingAskAwaitingInteraction(input: {
+  pending: readonly PendingInteraction[];
+  nodes: readonly WorkflowNodeStateResponse[];
+}): PendingInteraction | null {
+  const awaitingNodeIds = new Set(
+    input.nodes.filter(node => node.status === 'awaiting').map(node => node.nodeId)
+  );
+  return (
+    input.pending.find(
+      interaction =>
+        interaction.kind === 'ask' &&
+        interaction.status === 'pending' &&
+        awaitingNodeIds.has(interaction.node_id)
+    ) ?? null
+  );
+}
+
 export function isAskHumanUnsupportedError(error: string | null | undefined): boolean {
   return typeof error === 'string' && error.startsWith(ASK_HUMAN_UNSUPPORTED_PREFIX);
 }

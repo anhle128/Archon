@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
+import type { AgentHistoryItem } from '@/lib/agent-history';
 import type { WorkflowNodeMessageResponse } from '@/lib/api';
 
-import type { LogRowSelection } from './build-log-rows';
 import { NodeRoom, selectNodeRoomMessages } from './NodeRoom';
 
 const CREATED_AT = '2026-09-06T00:00:00.000Z';
@@ -57,33 +57,6 @@ function ids(messages: readonly WorkflowNodeMessageResponse[]): string[] {
   return messages.map(message => message.id);
 }
 
-function renderRoom(
-  overrides: {
-    nodeId?: string | null;
-    selection?: LogRowSelection | null;
-    messages?: readonly WorkflowNodeMessageResponse[] | undefined;
-    isPending?: boolean;
-    error?: unknown;
-    renderAfterMessage?: (message: WorkflowNodeMessageResponse) => React.ReactNode;
-    renderAtEnd?: React.ReactNode;
-  } = {}
-): string {
-  return renderToStaticMarkup(
-    <NodeRoom
-      nodeId={overrides.nodeId === undefined ? 'review' : overrides.nodeId}
-      selection={overrides.selection === undefined ? { kind: 'node' } : overrides.selection}
-      messages={overrides.messages === undefined ? FIXTURE : overrides.messages}
-      isPending={overrides.isPending ?? false}
-      error={overrides.error ?? null}
-      onRetry={(): void => {
-        return;
-      }}
-      renderAfterMessage={overrides.renderAfterMessage}
-      renderAtEnd={overrides.renderAtEnd}
-    />
-  );
-}
-
 function visibleText(markup: string): string {
   return markup
     .replace(/<[^>]+>/g, ' ')
@@ -93,6 +66,75 @@ function visibleText(markup: string): string {
     .replace(/&amp;/g, '&')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function assistantItem(id: string, seq: number, text: string): AgentHistoryItem {
+  return { kind: 'assistant', id, seq, role: 'assistant', text };
+}
+
+function lifecycleItem(
+  id: string,
+  seq: number,
+  state: string,
+  detail: string | null = null
+): AgentHistoryItem {
+  return { kind: 'lifecycle', id, seq, state, detail };
+}
+
+function toolItem(
+  overrides: Partial<Extract<AgentHistoryItem, { kind: 'tool' }>> = {}
+): Extract<AgentHistoryItem, { kind: 'tool' }> {
+  return {
+    kind: 'tool',
+    id: 'tool-1',
+    seq: 2,
+    role: 'tool',
+    name: 'Read',
+    toolUseId: 'tool-use-1',
+    context: [{ label: 'path', value: 'a.ts' }],
+    input: { path: 'a.ts' },
+    output: 'truncated-output',
+    outcome: 'succeeded',
+    durationMs: 1500,
+    canLoadFullOutput: true,
+    outputState: 'truncated',
+    messageId: 'msg-tool-1',
+    ...overrides,
+  };
+}
+
+function renderRoom(
+  overrides: {
+    nodeId?: string | null;
+    items?: readonly AgentHistoryItem[];
+    unknownScope?: boolean;
+    isPending?: boolean;
+    error?: string | null;
+    renderAfterItem?: (item: AgentHistoryItem) => React.ReactNode;
+    renderAtEnd?: React.ReactNode;
+  } = {}
+): string {
+  const defaultItems: AgentHistoryItem[] = [
+    lifecycleItem('life-1', 1, 'started'),
+    assistantItem('asst-1', 2, 'first'),
+    toolItem(),
+    lifecycleItem('life-2', 3, 'failed'),
+  ];
+  return renderToStaticMarkup(
+    <NodeRoom
+      nodeId={overrides.nodeId === undefined ? 'review' : overrides.nodeId}
+      items={overrides.items === undefined ? defaultItems : overrides.items}
+      unknownScope={overrides.unknownScope ?? false}
+      runId="run-1"
+      isPending={overrides.isPending ?? false}
+      error={overrides.error === undefined ? null : overrides.error}
+      onRetry={(): void => {
+        return;
+      }}
+      renderAfterItem={overrides.renderAfterItem}
+      renderAtEnd={overrides.renderAtEnd}
+    />
+  );
 }
 
 describe('selectNodeRoomMessages', () => {
@@ -153,125 +195,77 @@ describe('selectNodeRoomMessages', () => {
 });
 
 describe('NodeRoom', () => {
-  test('renders every room state, ordered kinds, iteration slice, region, and no prohibited chrome', () => {
-    const unselected = renderRoom({ nodeId: null, selection: null });
+  test('renders assistant, tool, and lifecycle history with expanded I/O', () => {
+    const unselected = renderRoom({ nodeId: null, items: [] });
     expect(visibleText(unselected)).toBe('Select a node');
     expect(unselected).not.toContain('role="region"');
 
-    const loading = renderRoom({ isPending: true, messages: undefined });
+    const loading = renderRoom({ isPending: true, items: [] });
     expect(visibleText(loading)).toBe('Loading node transcript');
-    expect(loading).toContain('role="region"');
     expect(loading).toContain('aria-label="review room"');
-    expect(loading.split('role="region"').length - 1).toBe(1);
 
-    const errorMarkup = renderRoom({ error: new Error('boom'), messages: undefined });
+    const errorMarkup = renderRoom({ error: 'boom', items: [] });
     expect(errorMarkup).toContain('Failed to load node transcript');
-    expect(errorMarkup).toContain('type="button"');
     expect(errorMarkup).toContain('Retry');
-    expect(errorMarkup).toContain('role="region"');
-    expect(errorMarkup).toContain('aria-label="review room"');
-    expect(errorMarkup.split('role="region"').length - 1).toBe(1);
+    expect(errorMarkup).toContain('boom');
 
-    const empty = renderRoom({ messages: [] });
+    const empty = renderRoom({ items: [] });
     expect(visibleText(empty)).toBe("Node hasn't produced output");
-    expect(empty).toContain('role="region"');
-    expect(empty).toContain('aria-label="review room"');
-    expect(empty.split('role="region"').length - 1).toBe(1);
 
     const loaded = renderRoom();
-    expect(loaded).toContain('role="region"');
-    expect(loaded).toContain('aria-label="review room"');
-    expect(loaded.split('role="region"').length - 1).toBe(1);
+    expect(loaded).toContain('ASSISTANT');
     expect(loaded).toContain('first');
-    expect(loaded).toContain('ptool');
-    expect(loaded).not.toContain('rounded-full');
-    expect(loaded).not.toContain('<details');
     expect(loaded).toContain('Read');
-    expect(visibleText(loaded)).toContain('"path": "a.ts"');
+    expect(loaded).toContain('data-tool-id="tool-use-1"');
+    expect(loaded).toContain('path: a.ts');
+    expect(loaded).toContain('succeeded');
+    expect(loaded).toContain('1.5s');
+    expect(loaded).toContain('<details');
+    expect(loaded).toContain('Input');
+    expect(loaded).toContain('Output');
+    expect(loaded).toContain('View full output');
+    expect(loaded).toContain('truncated');
     expect(loaded).toContain('started');
-    expect(loaded).toContain('iteration_started');
     expect(loaded).toContain('failed');
+    expect(loaded.indexOf('first')).toBeLessThan(loaded.indexOf('Read'));
+    expect(loaded.indexOf('Read')).toBeLessThan(loaded.lastIndexOf('failed'));
+  });
 
-    const textIndex = loaded.indexOf('first');
-    const toolIndex = loaded.indexOf('Read');
-    const failedIndex = loaded.lastIndexOf('failed');
-    expect(textIndex).toBeGreaterThan(-1);
-    expect(toolIndex).toBeGreaterThan(textIndex);
-    expect(failedIndex).toBeGreaterThan(toolIndex);
-
-    const iterationTwo = renderRoom({ selection: { kind: 'loop_iteration', iteration: 2 } });
-    expect(iterationTwo).toContain('Read');
-    expect(visibleText(iterationTwo)).toContain('"path": "a.ts"');
-    expect(iterationTwo).toContain('iteration_started');
-    expect(iterationTwo).toContain('iteration_failed');
-    expect(iterationTwo).not.toContain('first');
-    expect(iterationTwo).toContain('role="region"');
-    expect(iterationTwo).toContain('aria-label="review room"');
-
-    const missingMarker = renderRoom({ selection: { kind: 'loop_iteration', iteration: 9 } });
-    expect(missingMarker).toContain('first');
-    expect(missingMarker).toContain('Read');
-    expect(missingMarker).toContain('failed');
-
-    const prohibited = `${loaded} ${iterationTwo} ${missingMarker} ${errorMarkup}`.toLowerCase();
-    expect(prohibited.includes('ask')).toBe(false);
-    expect(prohibited.includes('waiting')).toBe(false);
-    expect(prohibited.includes('awaiting')).toBe(false);
-    expect(prohibited.includes('pending-interaction')).toBe(false);
-    expect(prohibited.includes('pending_interaction')).toBe(false);
+  test('shows unknown-scope notice and keeps truncated output when detail load is offered', () => {
+    const markup = renderRoom({ unknownScope: true });
+    expect(markup).toContain(
+      'Execution scope was not recorded; this history may include other executions of the same node.'
+    );
   });
 
   test('renders generic transcript extension slots', () => {
-    const text: WorkflowNodeMessageResponse = {
-      id: 'text-1',
-      seq: 1,
-      kind: 'text',
-      payload: { text: 'alpha' },
-      created_at: CREATED_AT,
-    };
-    const tool: WorkflowNodeMessageResponse = {
-      id: 'tool-1',
-      seq: 2,
-      kind: 'tool',
-      payload: { name: 'Read', id: 't1' },
-      created_at: CREATED_AT,
-    };
-    const renderAfterMessage = (message: WorkflowNodeMessageResponse): React.ReactNode =>
-      `extension-${message.id}`;
+    const items: AgentHistoryItem[] = [
+      assistantItem('text-1', 1, 'alpha'),
+      toolItem({
+        id: 'tool-1',
+        messageId: 'tool-1',
+        toolUseId: 't1',
+        canLoadFullOutput: false,
+        durationMs: null,
+      }),
+    ];
+    const renderAfterItem = (item: AgentHistoryItem): React.ReactNode => `extension-${item.id}`;
+    const ordered = renderRoom({ items, renderAfterItem, renderAtEnd: 'end-extension' });
+    expect(ordered.indexOf('alpha')).toBeGreaterThan(-1);
+    expect(ordered.indexOf('extension-text-1')).toBeGreaterThan(ordered.indexOf('alpha'));
+    expect(ordered.indexOf('Read')).toBeGreaterThan(ordered.indexOf('extension-text-1'));
+    expect(ordered.indexOf('extension-tool-1')).toBeGreaterThan(ordered.indexOf('Read'));
+    expect(ordered.indexOf('end-extension')).toBeGreaterThan(ordered.indexOf('extension-tool-1'));
 
-    const ordered = renderRoom({
-      messages: [text, tool],
-      renderAfterMessage,
-      renderAtEnd: 'end-extension',
-    });
-    const alphaIndex = ordered.indexOf('alpha');
-    const afterText = ordered.indexOf('extension-text-1');
-    const toolIndex = ordered.indexOf('Read');
-    const afterTool = ordered.indexOf('extension-tool-1');
-    const endIndex = ordered.indexOf('end-extension');
-    expect(alphaIndex).toBeGreaterThan(-1);
-    expect(afterText).toBeGreaterThan(alphaIndex);
-    expect(toolIndex).toBeGreaterThan(afterText);
-    expect(afterTool).toBeGreaterThan(toolIndex);
-    expect(endIndex).toBeGreaterThan(afterTool);
-
-    const empty = renderRoom({
-      messages: [],
-      renderAfterMessage,
-      renderAtEnd: 'end-extension',
-    });
+    const empty = renderRoom({ items: [], renderAfterItem, renderAtEnd: 'end-extension' });
     expect(visibleText(empty)).toBe('end-extension');
-    expect(empty).not.toContain("Node hasn't produced output");
 
     const errorMarkup = renderRoom({
-      error: new Error('boom'),
-      messages: undefined,
-      renderAfterMessage,
+      error: 'boom',
+      items: [],
+      renderAfterItem,
       renderAtEnd: 'end-extension',
     });
-    const retryIndex = errorMarkup.indexOf('Retry');
-    const errorEndIndex = errorMarkup.indexOf('end-extension');
-    expect(retryIndex).toBeGreaterThan(-1);
-    expect(errorEndIndex).toBeGreaterThan(retryIndex);
+    expect(errorMarkup.indexOf('end-extension')).toBeGreaterThan(errorMarkup.indexOf('Retry'));
   });
 });

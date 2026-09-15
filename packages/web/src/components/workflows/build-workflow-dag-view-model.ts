@@ -1,6 +1,7 @@
 import { MarkerType } from '@xyflow/react';
 import type { DagNode } from '@/lib/api';
 import { resolveExecutionNodeDisplay } from '@/lib/dag-layout';
+import { roomOpenerId } from '@/lib/execution-room-model';
 import type { Point } from '@/lib/run-graph';
 import type { DagNodeState } from '@/lib/types';
 import { layoutRunGraph } from './build-run-graph-input';
@@ -57,6 +58,7 @@ export function buildWorkflowDagViewModel(input: {
         modelReasoningEffort: live?.modelReasoningEffort,
         effort: live?.effort,
         thinking: live?.thinking,
+        openerId: roomOpenerId('legacy', 'graph', dagNode.id),
       },
     };
   });
