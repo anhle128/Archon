@@ -33,6 +33,7 @@ import {
   registerBuiltinProviders,
   registerOmpProvider,
   registerDeepseekProvider,
+  registerDevinProvider,
   clearRegistry,
 } from '@archon/providers';
 clearRegistry();
@@ -665,6 +666,26 @@ nodes:
 `);
         expect(workflow.provider).toBe('deepseek');
         expect(workflow.nodes[0].provider).toBe('deepseek');
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+        registerOmpProvider();
+      }
+    });
+
+    it('should accept provider: devin when the community provider is registered', () => {
+      registerDevinProvider();
+      try {
+        const { workflow } = parseWorkflowYaml(`name: devin-provider
+description: Devin provider selection
+provider: devin
+nodes:
+  - id: run
+    provider: devin
+    prompt: hello
+`);
+        expect(workflow.provider).toBe('devin');
+        expect(workflow.nodes[0].provider).toBe('devin');
       } finally {
         clearRegistry();
         registerBuiltinProviders();

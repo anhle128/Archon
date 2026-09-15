@@ -314,7 +314,7 @@ What stands in the way, precisely:
 
 **[SPEC]** ACP explicitly sanctions private extensions:
 
-> _"The protocol reserves any method name starting with an underscore (`_`) for custom extensions."_
+> _"The protocol reserves any method name starting with an underscore (`_`) for custom extensions."\_
 
 plus a `_meta` field on every protocol type, with the documented convention that implementations
 advertise custom capabilities via `_meta` on the capability objects at `initialize` so clients can

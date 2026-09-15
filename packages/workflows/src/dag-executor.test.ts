@@ -75,6 +75,8 @@ import {
   registerOpencodeProvider,
   registerPiProvider,
   registerQoderCliProvider,
+  registerDevinProvider,
+  DEVIN_CAPABILITIES,
   clearRegistry,
 } from '@archon/providers';
 clearRegistry();
@@ -85,6 +87,7 @@ registerOpencodeProvider();
 // reask-loop tests can resolve `getProviderCapabilities('pi')` to 'best-effort'.
 // deps.getAgentProvider is mocked, so the real Pi SDK is never loaded.
 registerPiProvider();
+registerDevinProvider();
 registerQoderCliProvider();
 
 // --- Imports (after mocks) ---
@@ -25276,6 +25279,97 @@ describe('executeDagWorkflow -- AskHuman pause', () => {
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('injects AskHuman for a devin node (askHuman true, nativeTools false) and pauses on the control error', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'devin',
+      getCapabilities: () => DEVIN_CAPABILITIES,
+    }));
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resume?: string,
+      options?: SendQueryOptions
+    ) {
+      expect(options?.nativeTools?.map(tool => tool.name)).toEqual(['AskHuman']);
+      await invokeInjectedAskHuman(options, 'call_ask_1', 'peach-country');
+    });
+
+    const store = createMockStore();
+    wireAskPause(store);
+    const workflowRun = makeWorkflowRun('devin-ask-pause-run');
+    const live: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if ('runId' in event && event.runId === workflowRun.id) live.push(event);
+    });
+    try {
+      await executeDagWorkflow(
+        createMockDeps(store),
+        createMockPlatform(),
+        'conv-dag',
+        testDir,
+        { name: 'devin-ask-pause', nodes: [{ id: 'review', prompt: 'ask the starter' }] },
+        workflowRun,
+        'devin',
+        undefined,
+        join(testDir, 'artifacts'),
+        join(testDir, 'state'),
+        join(testDir, 'logs'),
+        'main',
+        'docs/',
+        {
+          ...minimalConfig,
+          assistant: 'devin' as const,
+          assistants: { ...minimalConfig.assistants, devin: {} },
+        }
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(store.insertPendingInteraction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workflow_run_id: workflowRun.id,
+        node_id: 'review',
+        tool_use_id: 'call_ask_1',
+        kind: 'ask',
+        envelope: { questions: askQuestions },
+        provider_session_id: 'peach-country',
+        execution_scope: expect.objectContaining({
+          occurrence_id: expect.any(String),
+          attempt_id: expect.any(String),
+          retry_epoch: 0,
+        }),
+      })
+    );
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect((store.pauseWorkflowRun as ReturnType<typeof mock>).mock.calls[0]).toEqual([
+      workflowRun.id,
+    ]);
+
+    const rows = await store.listNodeMessages(workflowRun.id, 'review');
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'awaiting')).toBe(true);
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'completed')).toBe(
+      false
+    );
+    expect(rows.some(row => row.kind === 'status' && row.payload.state === 'failed')).toBe(false);
+
+    expect(live.filter(event => event.type === 'node_awaiting')).toEqual([
+      { type: 'node_awaiting', runId: workflowRun.id, nodeId: 'review' },
+    ]);
+    expect(live.some(event => event.type === 'node_completed')).toBe(false);
+    expect(live.some(event => event.type === 'node_failed')).toBe(false);
+    expect(live.some(event => event.type === 'approval_pending')).toBe(false);
+
+    const types = storedEventTypes(store);
+    expect(types).not.toContain('node_completed');
+    expect(types).not.toContain('node_failed');
+    expect(types).not.toContain('approval_requested');
+    expect(types).not.toContain('approval_pending');
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('does not advance downstream when an answer races the pause cleanup', async () => {
     let calls = 0;
     mockSendQueryDag.mockImplementation(async function* (
@@ -25984,7 +26078,7 @@ describe('executeDagWorkflow -- AskHuman resume re-entry', () => {
     store: IWorkflowStore,
     nodes: DagNode[],
     workflowRun = makeWorkflowRun('ask-resume-run'),
-    assistant: 'claude' | 'pi' = 'claude'
+    assistant: 'claude' | 'pi' | 'devin' = 'claude'
   ): Promise<void> {
     const config =
       assistant === 'pi'
@@ -25993,7 +26087,13 @@ describe('executeDagWorkflow -- AskHuman resume re-entry', () => {
             assistant: 'pi' as const,
             assistants: { ...minimalConfig.assistants, pi: {} },
           }
-        : minimalConfig;
+        : assistant === 'devin'
+          ? {
+              ...minimalConfig,
+              assistant: 'devin' as const,
+              assistants: { ...minimalConfig.assistants, devin: {} },
+            }
+          : minimalConfig;
     await executeDagWorkflow(
       createMockDeps(store),
       createMockPlatform(),
@@ -26063,6 +26163,56 @@ describe('executeDagWorkflow -- AskHuman resume re-entry', () => {
     expect(options.resumeInteractions).toEqual([
       { tool_use_id: 'toolu_declined', payload: 'declined', declined: true },
     ]);
+  });
+
+  it('re-enters a devin node with the stored Devin session id and mapped answers, without forking', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'devin',
+      getCapabilities: () => DEVIN_CAPABILITIES,
+    }));
+    const calls: { prompt: string; resume?: string; options?: SendQueryOptions }[] = [];
+    mockSendQueryDag.mockImplementation(async function* (
+      prompt: string,
+      _cwd: string,
+      resume?: string,
+      options?: SendQueryOptions
+    ) {
+      calls.push({ prompt, resume, options });
+      yield { type: 'assistant', content: 'CHOSEN=blue' };
+      yield { type: 'result', sessionId: resume, resumed: true };
+    });
+
+    const store = createMockStore();
+    wireAnsweredAsks(store, [
+      makeAnsweredAsk({
+        workflow_run_id: 'devin-ask-resume-run',
+        node_id: 'review',
+        tool_use_id: 'call_ask_1',
+        provider_session_id: 'peach-country',
+        answer: { answers: [{ questionId: 'q0', value: 'blue' }] },
+      }),
+    ]);
+
+    await invokeDag(
+      store,
+      [{ id: 'review', prompt: 'original prompt' }],
+      makeWorkflowRun('devin-ask-resume-run'),
+      'devin'
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toBe('original prompt');
+    expect(calls[0]?.resume).toBe('peach-country');
+    expect(calls[0]?.options?.forkSession).toBe(false);
+    expect(calls[0]?.options?.resumeInteractions).toEqual([
+      {
+        tool_use_id: 'call_ask_1',
+        payload: [{ questionId: 'q0', value: 'blue' }],
+        declined: false,
+      },
+    ]);
+    expect(calls[0]?.options?.nativeTools?.map(tool => tool.name)).toEqual(['AskHuman']);
   });
 
   it('orders two rows by created_at then id', async () => {

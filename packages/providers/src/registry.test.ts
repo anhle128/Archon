@@ -18,6 +18,8 @@ import { registerQoderCliProvider } from './community/qodercli/registration';
 import { registerOmpProvider } from './community/omp/registration';
 import { registerDeepseekProvider } from './community/deepseek/registration';
 import { DEEPSEEK_CAPABILITIES } from './community/deepseek/capabilities';
+import { registerDevinProvider } from './community/devin/registration';
+import { DEVIN_CAPABILITIES } from './community/devin/capabilities';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider, ProviderCapabilities } from './types';
 
@@ -175,13 +177,13 @@ describe('registry', () => {
       expect(staticCaps).toEqual(runtimeCaps);
     });
 
-    test('only Claude and Pi advertise AskHuman', () => {
+    test('only Claude, Devin, and Pi advertise AskHuman', () => {
       registerCommunityProviders();
       const capable = getProviderInfoList()
         .filter(info => info.capabilities.askHuman)
         .map(info => info.id)
         .sort();
-      expect(capable).toEqual(['claude', 'pi']);
+      expect(capable).toEqual(['claude', 'devin', 'pi']);
     });
 
     test('throws UnknownProviderError for unknown type', () => {
@@ -584,6 +586,30 @@ describe('registry', () => {
       expect(getRegisteredProviders().filter(provider => provider.id === 'deepseek')).toHaveLength(
         1
       );
+    });
+  });
+
+  describe('registerDevinProvider (community provider)', () => {
+    test('registers devin with community metadata, an ambient-only credential, and capabilities', () => {
+      registerDevinProvider();
+      expect(getRegistration('devin')).toMatchObject({
+        id: 'devin',
+        displayName: 'Devin CLI (community)',
+        builtIn: false,
+        credentials: {
+          kind: 'static',
+          specs: [{ vendor: 'devin', displayName: 'Devin', kinds: ['ambient'] }],
+        },
+      });
+      expect(getProviderCapabilities('devin')).toEqual(DEVIN_CAPABILITIES);
+    });
+
+    test('is idempotent and part of registerCommunityProviders', () => {
+      registerDevinProvider();
+      expect(() => registerDevinProvider()).not.toThrow();
+      clearRegistry();
+      registerCommunityProviders();
+      expect(getRegisteredProviders().filter(provider => provider.id === 'devin')).toHaveLength(1);
     });
   });
 });

@@ -107,6 +107,20 @@ const CAVEATS: readonly { provider: string; key: keyof ProviderCapabilities; not
       'Pinned DeepSeek Harness ACP supports stdio and Streamable HTTP MCP servers; ' +
       'SSE declarations fail fast instead of being ignored.',
   },
+  {
+    provider: 'devin',
+    key: 'askHuman',
+    note:
+      "Delivered through ACP elicitation of Devin's native ask_user_question tool; single- and " +
+      'multi-select questions only. Devin pauses by cancelling the turn and re-enters via session/load.',
+  },
+  {
+    provider: 'devin',
+    key: 'sessionResume',
+    note:
+      'ACP session/load in a fresh devin process; a stored id that no longer exists fails the turn ' +
+      'instead of starting a new session.',
+  },
 ];
 
 const SUPERSCRIPT_DIGITS = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'] as const;

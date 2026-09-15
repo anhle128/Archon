@@ -40,6 +40,7 @@ const READINESS_TEXT: Record<AgentReadinessState, string> = {
 function ambientSource(vendor: string): string {
   if (vendor === 'amazon-bedrock') return 'AWS env';
   if (vendor === 'google-vertex') return 'gcloud env';
+  if (vendor === 'devin') return 'devin auth login';
   return 'env';
 }
 
@@ -263,6 +264,15 @@ function CredentialRow({
             <span className="rounded-full border border-border px-2 py-px font-mono text-[10px] text-text-tertiary">
               using install env
             </span>
+          ) : null}
+          {cred.kinds.includes('ambient') && cred.connected === null && !cred.installEnv ? (
+            cred.ambientConfigured === true ? (
+              <span className="font-mono text-[10.5px] text-success">
+                configured via {ambientSource(cred.vendor)}
+              </span>
+            ) : (
+              <span className="font-mono text-[10.5px] text-text-tertiary">not detected</span>
+            )
           ) : null}
           {modelCount !== undefined ? (
             <span className="font-mono text-[10px] text-text-tertiary">

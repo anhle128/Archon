@@ -1,4 +1,7 @@
 import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 import {
   getVendorCatalog,
@@ -145,6 +148,44 @@ describe('credentials/catalog', () => {
         .find(a => a.id === 'pi')!
         .credentials.find(s => s.vendor === 'amazon-bedrock')!;
       expect(bedrock.ambientConfigured).toBe(true);
+    });
+
+    test('ambient detection reports devin from the local CLI plus shared login', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'archon-devin-catalog-'));
+      const fakeBin = join(dir, 'devin');
+      writeFileSync(fakeBin, '#!/bin/sh\nexit 0\n');
+      if (process.platform !== 'win32') chmodSync(fakeBin, 0o755);
+      const dataHome = join(dir, 'data');
+      mkdirSync(join(dataHome, 'devin'), { recursive: true });
+      const saved = { bin: process.env.DEVIN_BIN_PATH, xdg: process.env.XDG_DATA_HOME };
+      try {
+        process.env.DEVIN_BIN_PATH = fakeBin;
+        process.env.XDG_DATA_HOME = dataHome;
+        let devin = buildAgentCredentialMatrix([]).find(a => a.id === 'devin')!;
+        expect(devin.credentials).toEqual([
+          {
+            vendor: 'devin',
+            displayName: 'Devin',
+            kinds: ['ambient'],
+            connected: null,
+            subscriptionAvailable: false,
+            installEnv: false,
+            ambientConfigured: false,
+          },
+        ]);
+        expect(devin.ready).toBe(false);
+
+        writeFileSync(join(dataHome, 'devin', 'credentials.toml'), '');
+        devin = buildAgentCredentialMatrix([]).find(a => a.id === 'devin')!;
+        expect(devin.credentials[0]?.ambientConfigured).toBe(true);
+        expect(devin.ready).toBe(true);
+      } finally {
+        if (saved.bin === undefined) delete process.env.DEVIN_BIN_PATH;
+        else process.env.DEVIN_BIN_PATH = saved.bin;
+        if (saved.xdg === undefined) delete process.env.XDG_DATA_HOME;
+        else process.env.XDG_DATA_HOME = saved.xdg;
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     test('opencode is dynamic: empty credentials, never ready from the matrix', () => {
