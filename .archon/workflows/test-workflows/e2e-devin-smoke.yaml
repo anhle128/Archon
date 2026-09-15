@@ -1,0 +1,50 @@
+name: e2e-devin-smoke
+description: 'Smoke test for the Devin CLI community provider. Verifies plain and structured responses.'
+provider: devin
+model: gpt-5-6-sol-low
+mutates_checkout: false
+
+nodes:
+  - id: simple
+    prompt: 'Reply with exactly PONG and nothing else. Do not use tools.'
+    idle_timeout: 120000
+
+  - id: structured
+    depends_on: [simple]
+    prompt: |
+      Return JSON only.
+      Set status to "devin-ok" and provider to "devin".
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: ['devin-ok']
+        provider:
+          type: string
+          enum: ['devin']
+      required: [status, provider]
+      additionalProperties: false
+    idle_timeout: 120000
+
+  - id: assert
+    depends_on: [simple, structured]
+    bash: |
+      simple_out=$simple.output
+      status=$structured.output.status
+      provider=$structured.output.provider
+
+      if [ "$simple_out" != "PONG" ]; then
+        echo "FAIL: simple output was '$simple_out'"
+        exit 1
+      fi
+      if [ "$status" != "devin-ok" ]; then
+        echo "FAIL: structured status was '$status'"
+        exit 1
+      fi
+      if [ "$provider" != "devin" ]; then
+        echo "FAIL: structured provider was '$provider'"
+        exit 1
+      fi
+
+      echo "PASS: simple=$simple_out status=$status provider=$provider"
