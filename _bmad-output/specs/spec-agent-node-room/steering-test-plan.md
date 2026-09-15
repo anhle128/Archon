@@ -1,0 +1,82 @@
+# Steering test plan
+
+Coverage that decides whether the write half (CAP-8…13) is met.
+The read half is covered by `test-plan.md` (CAP-1…7); this companion covers everything steering changes — engine turn loop, provider interrupt, routes, registry, timer, reconciliation, and the dock on both shells.
+`bun run validate` is the pre-PR gate; do not run root `bun test`.
+
+## Fixtures and rule
+
+Build provider fixtures from the SDK type declarations and the measured payloads in `findings.md`, as the read plan does.
+**Every applicable table below carries at least one Claude fixture and one non-Claude (omp or codex) fixture** — the providers disagree on interrupt mechanism and on soft-inject transport, so a single-provider table would pass while the other renders or behaves wrong.
+Timer tests use fake timers; never a real 30-minute wait.
+Process-boundary tests exercise both in-process (web dispatch) and detached (no live handle).
+
+## Engine — the per-node turn loop
+
+- a steering interrupt aborts a **fresh per-turn** signal (`AbortSignal.any` with the node-level one), never the one-shot `nodeAbortController`; the `:3124` Cancel check is not tripped and the node stays `running`
+- `operatorInterrupt` placement: `canReask` (`:3032`) also stops on it; validation is skipped on the interrupted turn; the branch sits after the `:3124` Cancel check so a co-firing Cancel wins by position; the flag resets at turn N+1 (a stale flag never mis-routes a later turn)
+- the **end-cause five-case rule** (`:2533`, not result-presence alone): (1) `result` with no abort marker → **natural**, spent (no idle-await, no partial validated); (2) `result` with an abort marker (DeepSeek `deepseek_aborted`) + `operatorInterrupt` → **interrupted** → idle-await; (3) a thrown abort (OMP `Query aborted`) caught at `:3332` + `operatorInterrupt` → **interrupted** → idle-await, never `dag_node_failed`; (4) a throw with the flag unset → real `node_failed`; (5) Cancel dominates. Assert the adapter does not suppress the abort `result`
+- natural end auto-drains (queued message → turn N+1; empty queue → node completes); interrupted end enters idle-await and drains only on `Send now`
+- multi-turn on one session: turn N+1 runs via `attemptResumeId` (`:2290`) with the flushed queue in written order
+- the executor writes a single `interrupted` status row at idle-await entry, on every provider
+- the sub-state projection emits **exactly two** values (`generating` | `idle-after-interrupt`); `interrupting` never appears in the projected field
+- **every engine turn-loop assertion above also runs against `executeLoopNode`** (AI loop nodes are steerable in v1): registry key, per-turn signal, the end-cause rule, sub-state projection, idle-await; plus the loop-only case — `Send now` continues the **interrupted iteration** on the same session before the normal loop-completion check
+
+## Engine — idle-await lifecycle (fake timers)
+
+- 30-minute inactivity expiry takes the explicit fail branch (`interrupted by operator, no redirect received`), never the completing idle timeout
+- the timer re-arms on composer keepalive activity (keystroke / focus / keepalive route — **not** `Send now`, which resolves idle-await) and fails only after 30 minutes of genuine inactivity
+- the idle-await cancel-poll lets `/workflow cancel` reach the node while no stream exists
+- idle-await resolves exactly once — the first of `Send now`, cancel-poll, or timer wins; the other two tear down
+- rerunning a 30-minute-failed node via `workflow retry-node` re-runs it with a fresh session
+
+## Providers — interrupt conformance
+
+One fixture per in-use provider; each proves the turn ends and the session survives for a follow-up run.
+
+- claude — native `interrupt()` (in the pinned SDK); the abort yields no terminal `result`
+- codex — stream-abort → `resumeThread` re-runs the resumed thread; fixture pins its abort terminal shape (result vs throw vs clean end)
+- omp — stream-abort: its abort **throws** `Query aborted` (`provider.ts:317,450`) → fixture asserts the executor routes the throw (with `operatorInterrupt` set) to idle-await, not `dag_node_failed` (its RPC soft-inject is G2, not tested here)
+- grok — stream-abort (`interject` unreachable; hooks are G3); fixture pins its abort terminal shape
+- deepseek — cancel-and-continue, partial retained: its abort emits a terminal `result` (`stopReason:'aborted'` / `errorSubtype:'deepseek_aborted'`, `acp-client.ts:105`) → fixture asserts the executor classifies it as an **interrupted** end, not natural completion
+
+## Registry and routes
+
+Per `steering-api-contract.md`.
+
+- register `(runId, nodeId) → handle + queue` on node start; tear down on any terminal; a node with no handle is not steerable
+- send / interrupt / keepalive match the typed schemas; identity resolves via `resolveAuthContext`
+- **actor grant (any authenticated user):** starter → allow, other authenticated member → allow, admin → allow, unauthenticated → 401, identity-less run (`user_id` NULL) → allow — asserted on send AND interrupt AND keepalive
+- **interrupt-response race:** a mid-turn interrupt → `sub_state:'idle-after-interrupt'`; a turn that ended naturally with a queued message → `sub_state:'generating'` (auto-drained turn N+1); a natural end with an empty queue → 409 `node_finished`
+- 409 `node_finished` (draft stays in the browser); 422 `not_steerable_here` for a detached run (Cancel and `/workflow resume` still work)
+- Send during an interrupt in flight waits in the queue for `Send now` — no 409, nothing lost
+- invalid run/node id → 404; unauthenticated → 401/403; malformed payload → 400; duplicate `message_id` → idempotent receipt replay; repeated interrupt while idle → idempotent no-op; node goes terminal mid-request → 409
+- **withdraw route** (`DELETE …/queue/:messageId`): removes a still-queued message from the registry queue; withdraw of an already-drained or unknown `message_id` → idempotent success no-op; unknown run/node → 404
+- every rejected request leaves the node, queue, and transcript unchanged (assert all three)
+
+## Operator row and reconciliation
+
+- the executor is the sole writer; the row is a `text` row with `metadata` `{ origin='operator', operator_user_id, message_id }`; no new table, no widened `kind`; placed by `seq` between the turn it redirected and the turn it caused
+- the message stays `sent` on every provider (v1 floor); nothing advances past `sent`
+- terminal reconciliation runs **only** on the node's terminal event: each `sent` id matches a written `message_id`; an unmatched id returns as `NEVER SENT`; assert it never runs on a live refetch (a Cancel mid-flight must not mis-mark a delivered message)
+- display-name projection (AD-12): the served operator row carries `operator_display_name` from the read-time join; a join miss yields `null` and the core renders the short id
+
+## Concurrent operators
+
+- two docks on one node interleave in the registry's server-side receipt order (no per-node lock); each row is attributed by `operator_user_id`; per-operator written order holds within each sender's stream
+
+## Steering UI — end-to-end, both shells
+
+Extend the node-room E2E on **Legacy and Console**.
+
+- dock states across `generating` (`Stop` / `Queue`), the `interrupting` transient (`Stopping…` `aria-disabled`, never native disabled), `idle-after-interrupt` (`Send now`, `WILL SEND`), `generating again`, finished (`NEVER SENT` read-only), and the detached-run disclosure (state 8)
+- **the queue dispatches at `Queue`-press:** pressing `Queue` fires the send route (`intent:'queue'`) and the message is server-side at once; a later `x` fires the **withdraw route** for that `message_id`; a withdraw after the message has drained is a success no-op
+- interrupt → `Send now` → the agent continues on the same session against the redirected work
+- the interrupted tool call renders `⚠ interrupted`, not `✕ failed`, on a non-Claude provider (proves the reader fold)
+- accessibility: colour-free status glyph, per-transition polite live-region announcement, assertive delivery-failure `role="alert"`, focus transfer on dock change (never `<body>`), `Enter` inserts a newline and never sends, `prefers-reduced-motion`, `aria-describedby` on the ask-blocked Send
+- visual checks at **460px** (Legacy) and the Console panel width
+
+## Boundary checks
+
+- `@archon/web` imports nothing from `@archon/workflows`; wire types come from `api.generated`
+- Console imports nothing from `@/components/`; the dock JSX is written twice, thin

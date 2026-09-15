@@ -154,20 +154,22 @@ graph TD
 - **Prevents:** the full path being destroyed before it reaches the DOM, so assistive technology and copy-paste get the truncated form. The builder has in-module precedent for doing exactly this — the resolver already truncates at Tier 4 (80 characters) and Tier 3 (first line) — so the prohibition has to be explicit.
 - **Rule:** `headline` leaves the core complete and un-elided; `headlineKind` says _how_ a shell must shorten it visually, and the shell does so with CSS or a presentational transform that leaves the full string in the accessible name and the DOM text. Tier 3's first-line rule and Tier 4's 80-character cap are _content selection_, not elision — they choose which text is the headline, and what they choose then travels whole.
 
-### AD-12 — The shells own five behaviours, written twice, and they are enumerated
+### AD-12 — The shells own seven behaviours, written twice, and they are enumerated
 
 - **Binds:** both shells; the State Patterns, Interaction Primitives, and Accessibility Floor sections of `EXPERIENCE.md`.
 - **Prevents:** the honest gap in "one core, two shells" — a handful of behaviours genuinely cannot live in the core because they are DOM and interaction state, so they _are_ written twice, and nothing otherwise obliges the two copies to agree. Console already ships stick-to-bottom (`ConsoleNodeRoom.tsx:550-572`) and Legacy does not, so the two surfaces are divergent on this list **today**.
-- **Rule:** exactly these five are shell-owned, and both shells implement all five identically. Anything not on this list belongs to the core.
+- **Rule:** exactly these seven are shell-owned, and both shells implement all seven identically. Anything not on this list belongs to the core.
   1. A row renders collapsed when the outcome is `succeeded`, open when `failed`, and **collapsed for `running`, `interrupted` and `unknown`** — the three the UX spine leaves unstated; only `failed` earns an automatic open. The `<details>` element is **uncontrolled**, seeded once per row from the outcome at first render. A controlled `open={outcome === 'failed'}` is forbidden: under the 1000 ms poll it re-asserts itself and snaps shut a row the reader opened.
   2. A reader's manual open or close outranks every automatic rule and survives live re-renders, including on a row the transcript auto-opened (`:158`). A row that _becomes_ `failed` while the reader has not touched it opens then; one the reader has touched never moves again.
   3. One polite `role="status"` region announces node transitions and failures only — never one per row (`:181`).
   4. The transcript pins to the bottom only while the reader is already at the bottom, otherwise holds position; an append never moves focus (`:175`).
-  5. The checklist renders once, anchored at the last todo call; earlier todo calls collapse to a one-line row (CAP-3).
+  5. Every todo call collapses to a one-line row; the current checklist renders **only in the pinned todo strip** (#6), not inline in the transcript (CAP-3).
+  6. A **pinned todo strip** at the top of the transcript panel mirrors the current `TodoPhase[]`, stays visible while the transcript scrolls, and is absent when the node has no todos (CAP-3). It renders from the core-supplied `TodoPhase[]` — no new core mechanism.
+  7. A **loop-iteration selector** navigates directly between occurrence groups (the per-group headers are its anchors) and is absent on a single-occurrence node (CAP-6). It renders from the core-supplied occurrence groups — no new core mechanism.
 
   Console's existing `showToolCalls` toggle (`ConsoleInspectPane.tsx:68`), which Legacy has no equivalent of, hides **tool rows only**. The todo checklist is node state, not a tool call, so it survives the toggle being off — otherwise turning it off would delete CAP-3 on one surface and not the other.
 
-  A sixth behaviour added later is an amendment to this AD, not a local choice. Each of the five gets the same assertion in both `NodeRoom.test.tsx` and `ConsoleNodeRoom.test.tsx`, which is what makes "identically" checkable rather than aspirational.
+  An eighth behaviour added later is an amendment to this AD, not a local choice. Each of the seven gets the same assertion in both `NodeRoom.test.tsx` and `ConsoleNodeRoom.test.tsx`, which is what makes "identically" checkable rather than aspirational.
 
 ### AD-13 — The glyph is a pure function of `outcome`; output state is a badge
 
@@ -195,7 +197,7 @@ graph TD
 | Data & formats          | Wire types come from `api.generated.d.ts` only. Tool identity is duck-typed over alias sets on the normalized name — case-folded, `_` and `-` stripped, matched as whole tokens, never substrings.                                 |
 | Provider differences    | Normalized at the edge in `lib/`, never branched on in a shell. A shared key name is not evidence of a shared shape.                                                                                                               |
 | Errors                  | The core returns degraded values instead of throwing (AD-3). Shells render whatever they are given.                                                                                                                                |
-| Logging                 | Tool name and error message only. Never a payload, an input, or an output — they can carry user content.                                                                                                                           |
+| Logging                 | Resolved family + tool-use id + error message only. Never the tool name (a Codex name is the whole shell command — AD-3), never a payload, input, or output.                                                                       |
 | Comments and test names | No plan, phase, section, or finding references. A comment states the invariant.                                                                                                                                                    |
 | Gate                    | `bun run validate`. Never root `bun test`.                                                                                                                                                                                         |
 

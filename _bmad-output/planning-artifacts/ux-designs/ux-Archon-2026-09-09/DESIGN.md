@@ -1,7 +1,7 @@
 ---
 name: Archon
 description: The node room on both web surfaces — the readable agent transcript that is read, and the steering dock it is written from. shadcn/Radix on Tailwind v4, dark-only; this DESIGN.md specifies both deltas over two inherited token sets and forks neither palette.
-status: final # one open question: --node-prompt contrast (Colors)
+status: final
 updated: 2026-09-13
 sources:
   - ../../../specs/spec-readable-agent-transcript/SPEC.md
@@ -123,7 +123,7 @@ spacing:
   dock-gap: 6px
   draft-item-pad: 4px 8px
   composer-min-h: 56px
-  control-min-h: 32px # clears SC 2.5.8 by 8px, unlike the 22px tool row
+  control-min-h: 32px # clears SC 2.5.8 by 8px; the tool row clears it at 24px (grown via padding)
 components:
   tool-row:
     font: '{typography.mono}'
@@ -362,8 +362,8 @@ components:
   draft-box:
     padding: '{spacing.dock-pad}'
     radius: '{rounded.md}'
-    background-legacy: '{colors.surface-inset-legacy}'
-    background-console: '{colors.surface-inset-console}'
+    background-legacy: '{colors.surface-elevated-legacy}' # full-bleed queue band (adopted band); the composer field is the only surface-inset well
+    background-console: '{colors.surface-elevated-console}'
     label: '{typography.phase-label}'
     label-legacy: '{colors.text-secondary-legacy}'
     label-console: '{colors.text-secondary-console}'
@@ -427,7 +427,7 @@ If Console ever replaces Legacy, `--node-script` is present by definition and sp
 **Status** — glyph colour reinforces the character, never replaces it.
 ✓ `{colors.success-legacy}` / `{colors.success-console}`; ✕ `{colors.error-legacy}` / `{colors.error-console}`; ◐ `{colors.running-legacy}` / `{colors.running-console}`; ⚠ `{colors.warning-legacy}` / `{colors.warning-console}`; – `{colors.text-secondary-legacy}` / `{colors.text-secondary-console}`.
 Legacy has no `--running`; the ◐ glyph uses `--accent-bright`, the surface's only bright blue.
-A folded-away todo call keeps the ✓ glyph at **full strength**, and the – glyph stays reserved for a genuinely unknown outcome or missing output.
+A folded-away todo call keeps the ✓ glyph at **full strength**, and the – glyph stays reserved for a genuinely unknown outcome — never for missing output, which is a badge (Components → Status glyph; read-spine AD-13).
 Dimming the glyph was measured and dropped: `--success` at 55% over `--surface` gives 2.69:1 on Legacy and 3.56:1 on Console, and a 12px bold character is not large text, so both fail 4.5:1 and Legacy also falls under the 3:1 floor this document invokes for glyphs elsewhere.
 The row is already subordinate through its secondary `todo updated` headline and its `op: <op>` badge, so the dimming bought redundant emphasis with the one budget the glyph could not spare. Full strength also restores the user's own choice of glyph treatment, in which colour reinforces the character and never carries state alone.
 
@@ -488,7 +488,7 @@ Diff lines use success for `+` and error for `−`; `FAILED`/`ok` markers use er
 | stop/send border-bright edge on surface-elevated (SC 1.4.11)              | **1.5:1** | **1.6:1** |
 | send control REJECTED: primary-foreground on primary fill (11.5px)        | **3.1:1** | n/a       |
 
-Every bold cell has a disposition. `--node-prompt` on both backgrounds is the open question above; the Legacy `--error` badge is an accepted shortfall, recorded below; the two focus rows are the departure this spine makes deliberately, explained next.
+Every bold cell has a disposition. `--node-prompt` on both backgrounds is resolved above — brightened via `color-mix` to clear 4.5:1 (owner override, 2026-09-15); the Legacy `--error` badge is likewise **brightened to clear 4.5:1** (owner decision, 2026-09-15), recorded below; the two focus rows are the departure this spine makes deliberately, explained next.
 
 The dock's three bold cells: the **border edge at 1.5:1 / 1.6:1** takes the same disposition the Raw toggle's border already takes below — SC 1.4.11 asks for the information _required to identify_ the control, and the label at 14.1:1 / 16.7:1 does that, so the border is redundant reinforcement rather than the affordance. The **3.1:1 row is a rejected option, not a shipped one**: it is what Legacy's send control would have measured had it inherited the shipped filled ask-card `Button`, and it is recorded because the measurement is the reason the design changed. That shipped button is still out there — the Legacy ask card's own Submit reads 3.1:1 today — which is a production finding this run surfaces and does not own; it is recorded with the accepted shortfalls at the end of this file. The last two rows are the exception to "used exactly as the mocks use them", and the difference matters:
 
@@ -640,6 +640,8 @@ Reads `Stop`, then — if the sub-second `Stopping…` transient is shown — `S
 **`Stopping…` is `aria-disabled`, never the `disabled` attribute, and dims no further than text-secondary.** Both halves of that are one decision. The native attribute blurs the element that carries it, so a keyboard operator who presses `Stop` is returned to `<body>` — and then to the _top_ of the document, with the whole transcript between them and the dock, however brief the interrupt is. Keeping it focusable also means the SC 1.4.3 inactive-component exemption is no longer being leaned on, which is why the dim floor is `--text-secondary` (**5.33:1 / 7.90:1**) rather than tertiary (**2.31:1 / 3.88:1**). The requirement was always "it may not disappear"; secondary does not make it disappear.
 
 **Draft box** (`{components.draft-box}`) — a `surface-inset` panel above the composer field, rendered only when it holds something — never an empty shell.
+
+**Adopted (delta 3, 2026-09-15): the queue is a full-bleed band, not a well.** The draft box leaves the dock's padded column and becomes a **full-width `surface-elevated` band** with a 1px top rule, directly above the composer dock and directly below the todo strip, sharing that strip's header idiom and item geometry. Rationale: you do not type into the queue — it is a readout of already-committed messages with per-item actions, structurally the same object as the todo strip, so it takes the strip's elevation, not a well's. The composer field remains the only `surface-inset` well in the dock.
 Its header is a `{typography.phase-label}` uppercase text-secondary word plus a count: `QUEUED · 2` while the agent generates, `WILL SEND · 2` while the agent is idle-after-interrupt. That one word is the whole signal that the control below has changed meaning, so it is a heading, not a caption.
 Scrolls internally past `33vh`; the dock never grows to swallow the transcript.
 
@@ -682,17 +684,17 @@ Two ways out, both inside the no-new-token rule:
 
 This one was carried into the finalize pass by mistake: it was folded into a renumbering and marked resolved when nothing had resolved it. Recorded as open rather than quietly accepted.
 
-**Recommendation: accept and record.** Three things point that way. Neither place carries a fact alone — the chip is the most redundant element on the row — the tool name sits inside it, and since the family also travels in the body bar, the accessible name and the `title`, a reader who cannot resolve the violet loses a scanning aid rather than a fact. It would join three shortfalls already accepted on the same footing (the 22px row, the Legacy `--error` badge, the chip borders), so accepting is the consistent answer rather than a new exception. And brightening produces a colour that appears in neither token file, which the brand rule treats as an ad-hoc value.
+**Resolved (owner override, 2026-09-15): brighten.** The owner directed the fix over the "accept and record" recommendation this document had reached, because NFR8 declares WCAG 2.2 AA as the floor and a sub-4.5:1 text role contradicts it. Both text placements — the `search`/`glob` chip text and the `code`-body keywords — take `color-mix(in oklch, var(--node-prompt) 70%, var(--text-primary))`; the pure `--node-prompt` stays on the chip border so the violet identity survives. This clears 4.5:1 on both backgrounds and touches nothing else. **Disposition:** an inline derived value composed from two existing tokens — NOT a new named token, so the no-new-token/brand rule holds. Do not promote it to a named `--node-prompt-text` token: that would re-trigger the brand-guide update rule and reverse this decision. (The counter below already noted `color-mix` is how every chip border is drawn, so the derivation precedent exists.)
 
 The honest counter, so the choice is a real one: `color-mix` is **already** how this design draws every chip border, five times in the states sheet alone, so the precedent for deriving a value from tokens exists and the third argument above is the weakest of the three. If the transcript ever has to pass an audit rather than serve a developer, brightening is the answer that survives it.
 
-One question is open, above. Everything else this run opened is answered, and what follows is the record.
+This question is now resolved, above (owner override, 2026-09-15). Everything else this run opened is answered, and what follows is the record.
 
 **Resolved during finalize**, from the accessibility review, from live code, and from three user decisions:
 
 - **Every transcript fact moved from `--text-tertiary` to `--text-secondary`, on both surfaces** — a user decision, taken with the measurements in hand. `--text-tertiary` carried every badge, body bar, occurrence header and key name at 10–11.5px, where 4.5:1 applies without argument, and it measured 2.53:1 on Legacy and 4.07:1 on Console resting, worse on hover. The headline beside a failing badge passes at 15.3:1, so the effect was exact: a reader with low contrast sensitivity got the command and not the result. `--text-secondary` clears the floor everywhere (5.82:1 / 8.37:1) and is an existing token, so the no-new-token constraint holds. `--text-tertiary` now has exactly one use, the chevron, which is decoration hidden from assistive technology. The third tonal step is replaced by the primary-to-secondary headline drop and by the `·` rhythm.
-- The old question about the `exit 101` badge is folded into the accepted shortfalls: the word `exit` and the duration moved to `--text-secondary` with the tier decision, and the digits keep `--error` at **4.3:1** on Legacy. That 0.2 shortfall is accepted, not cleared — it rides on the surface being replaced, and the `✕` glyph carries the same fact beside it.
-- **The Raw toggle carries `min-height: 24px`; the tool row keeps its 22px** — a user decision. Raw was the target that genuinely missed SC 2.5.8: about 15–17px, at the far right of the body bar, near the panel's drag-to-resize edge. It grows through padding, so the painted box does not change. The row's 2px shortfall is accepted deliberately, because density is the feature the transcript exists to deliver and the audience reaches it with a pointer — recorded here so a later audit inherits a reason rather than a surprise. Revisit if the surface is ever targeted at touch.
+- The `exit 101` badge is brought to the WCAG 2.2 AA floor (owner decision, 2026-09-15, reversing the earlier accept): the word `exit` and the duration moved to `--text-secondary` with the tier decision, and the digits' `--error` on Legacy is **brightened to clear 4.5:1** via a token-derived `color-mix` (mirroring the `--node-prompt` fix; no new named token). The implementer measures the mix on both backgrounds and records the cell; the prior 4.3:1 Legacy value is superseded. The `✕` glyph continues to carry the same fact beside it.
+- **The Raw toggle and the interactive tool row both clear SC 2.5.8 at `min-height: 24px`** — the row is grown from 22px to 24px (owner decision, 2026-09-15, reversing the earlier accept). Both grow through **padding**, so the painted box does not change and transcript density is preserved. Raw was always the target that genuinely missed SC 2.5.8 (about 15–17px, at the far right of the body bar, near the panel's drag-to-resize edge); the row's former 2px shortfall is now closed rather than accepted.
 - **The family reaches a colour-blind reader through the body bar and a tooltip, not a chip prefix** — a user decision. A prefix would have cost row width on the one line that must never wrap, and at 460px the path headline pays first. See **Components → Tool body**.
 - **The shipped Legacy ask-card `Submit` measures 3.1:1 and this run does not own it.** Surfaced by measuring the send control: `--primary-foreground` on `--primary` is 3.1:1 on a small label, and `AskCard.tsx:377` ships exactly that pairing today. The dock avoided it by specifying a bordered control instead. The ask card is outside this spine's scope, so the finding is recorded here rather than fixed — someone should carry it to whoever owns that component.
 - `interrupted` takes `⚠` in `--warning` — see **Colors → Status**.

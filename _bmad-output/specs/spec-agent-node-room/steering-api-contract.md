@@ -1,0 +1,70 @@
+# Steering API contract
+
+The typed wire contract for the write half — the Send, Interrupt, and keepalive routes the composer dock calls.
+It closes the readiness gap where the routes were named (`engine-integration.md` §3, steering AD-11) but had no request, response, or error schema, which forced implementation to invent a public API during coding and blocked generated web types.
+
+All routes register through `registerOpenApiRoute(createRoute({...}), handler)` so the OpenAPI spec, runtime validation, and `api.generated.d.ts` stay aligned.
+Identity resolves through `resolveAuthContext`. Steering carries its own actor grant (owner-ratified 2026-09-15, AD-11): any **authenticated** identity may call these routes, attributed by `operator_user_id`; unauthenticated → 401; a run with no `user_id` (solo / identity-less install) → allowed. This broadens HITL/AD-7 for the steering routes only — the retry / cancel / approve rules are unchanged.
+Schemas live in `packages/server/src/routes/schemas/`; derive types with `z.infer`.
+
+## Routes
+
+| Method + path                                                      | Purpose                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/workflows/runs/:runId/nodes/:nodeId/send`               | **Dispatch** the operator's message onto the live node's registry queue — called at `Queue`-press (`intent: 'queue'`) and on `Send now` (`intent: 'send_now'`), not at the drain moment. The pre-`Queue` draft (text still being composed) is the per-tab client draft; a queued message is server-side. |
+| `POST /api/workflows/runs/:runId/nodes/:nodeId/interrupt`          | End the agent's current turn; the session stays alive.                                                                                                                                                                                                                                                   |
+| `POST /api/workflows/runs/:runId/nodes/:nodeId/keepalive`          | Re-arm the idle-await inactivity timer without delivering a message.                                                                                                                                                                                                                                     |
+| `DELETE /api/workflows/runs/:runId/nodes/:nodeId/queue/:messageId` | **Withdraw** a queued message from the registry queue before it drains — this is the delete of a queued item. Idempotent.                                                                                                                                                                                |
+
+## Request schemas
+
+- **send** — `{ message: string (non-empty), message_id: string (caller-stamped uuid), intent: 'queue' | 'send_now' }`.
+  `message_id` is the correlation key for terminal reconciliation (CAP-11 / AD-11) and, post-G1, for `delivered`.
+- **interrupt** — `{}` (no body); the target is the live turn on the registry handle.
+- **keepalive** — `{}` (no body); it only re-arms the timer (AD-4 inactivity timer, SC 2.2.1). This is AD-4's composing keepalive, within AD-11's Send/Interrupt route family — not a new grant.
+- **withdraw** — `{}` (no body); `message_id` is the path parameter. Removes that message from the registry queue if it is still present.
+
+## Response schemas
+
+- **send** — `{ success: true, message_id: string, state: 'queued' | 'awaiting_send_now' }`.
+  `queued` when accepted onto the registry queue at `Queue`-press, to drain at the next natural boundary (turn N+1); `awaiting_send_now` when accepted into an `idle-after-interrupt` node's registry queue to await `Send now`.
+  Delivery itself — the drain into turn N+1 — is the executor's, reported via the node sub-state stream, not the send response.
+- **withdraw** — `{ success: true, message_id: string }`; idempotent — success whether the message was still queued (now removed) or had already drained (nothing to remove).
+- **interrupt** — `{ success: true, sub_state: 'idle-after-interrupt' | 'generating' }`.
+  `idle-after-interrupt` when the interrupt landed mid-turn; **`generating`** when the turn already ended naturally before the interrupt landed (interrupt spent, AD-2) and a queued message auto-drained into turn N+1. If the turn ended naturally with an **empty** queue the node has completed — the route then returns 409 `node_finished` (below), not a success shape.
+- **keepalive** — `{ success: true }`.
+
+Every message stays `sent` in the UI at the v1 floor; no response reports `delivered` (that is G1, claude-only, post-SDK-bump).
+
+## Error schema and status codes
+
+One error shape across all routes: `{ success: false, error: { code: string, message: string } }`, so a consumer classifies by `code`, never by prose.
+
+| Condition                                     | HTTP      | `error.code`                    |
+| --------------------------------------------- | --------- | ------------------------------- |
+| No resolved identity                          | 401 / 403 | `unauthenticated` / `forbidden` |
+| Unknown `runId` / `nodeId`                    | 404       | `not_found`                     |
+| Malformed or schema-invalid payload           | 400       | `invalid_request`               |
+| Node no longer running                        | 409       | `node_finished`                 |
+| No live handle in this process (detached run) | **422**   | `not_steerable_here`            |
+
+**Decision — detached-run status code.**
+409 is already the terminal-state conflict (`node_finished`), where the draft stays in the browser and re-running is `workflow retry-node`.
+The detached case is different: the run exists and is **non-terminal**, but its live session is in another process, so it is unreachable from here — a capability limit, not a terminal conflict.
+Reusing 409 for both would conflate two conditions a machine consumer must tell apart.
+**This contract uses 422 `not_steerable_here`.** (Alternative considered: 409 with a discriminated `error.code`; rejected because the two conditions have different client behavior — `node_finished` keeps the draft as a finished-node read-only box, `not_steerable_here` keeps the dock but discloses steering is unavailable, EXPERIENCE.md state 8.)
+
+## Idempotency and races
+
+- **Duplicate `message_id`** — the send is idempotent: it replays the original receipt (same `state`), never a second queue entry.
+- **Repeated interrupt while already `idle-after-interrupt`** — an idempotent no-op returning the current `sub_state`; no second interrupt fires.
+- **Withdraw of an already-drained or unknown `message_id`** — an idempotent success no-op; there is no message-level 404 (404 is only an unknown `runId`/`nodeId`).
+- **Send while an interrupt is in flight** — the message lands in the registry queue and waits for `Send now`; the queue absorbs the race with no 409 (AD-11).
+- **Node goes terminal mid-request** — the route returns 409 `node_finished`; the teardown queue check is the last gate (AD-11).
+- **Every rejected request leaves the node, queue, and transcript unchanged** — a refusal is never a partial mutation.
+
+## Boundary notes
+
+- `@archon/web` consumes these types through `api.generated.d.ts` / `lib/api.ts`; it never imports server or workflow packages.
+- The keepalive route carries no message and writes no row; it only touches the in-process idle-await timer.
+- No route is a delivery vehicle for the record — the executor writes the operator row (AD-6); these routes drive the live session and the registry queue.

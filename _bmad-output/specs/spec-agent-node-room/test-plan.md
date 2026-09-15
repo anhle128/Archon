@@ -34,6 +34,15 @@ Table-driven over the resolver tiers.
 - a diff is produced only when both sides are present, and never fabricated from one
 - the exit code reaches the row: a `bash` call recording `exit_code: 1` carries an `exit 1` badge on the **collapsed** row. This is CAP-1's own success signal and it is currently unreachable, the code discarding the value after deriving the outcome
 
+## Generic-fallback corpus audit — CAP-2 / Story 1.2 (the < 2% bound)
+
+The < 2% generic-fallback bound is measured against the deployment corpus (22,867 rows, 2,369 distinct names), **not** reproducible from a CI fixture. So it is a **release-time deployment audit**, not a unit test:
+
+- a **read-only replay script** queries the deployment DB for the distinct tool names + their row counts, runs the resolver over them, and reports the generic-fallback **numerator** (rows resolving to `generic`) and **denominator** (total rows), plus the fraction
+- the script records its result to a known location (the release audit log) with the corpus snapshot date; the release gate reads the recorded fraction and fails release if it is ≥ 2%
+- **no numerator/denominator is frozen in this document** — the corpus is live data; the number is produced by the replay, not asserted here
+- the table-driven alias cases above stay as CI regression tests for named aliases (they cannot prove the corpus-wide bound)
+
 ## `diff-hunks.test.ts` — CAP-5
 
 The module is the only caller of `structuredPatch`, so its traps are tested here rather than through a renderer.
@@ -78,6 +87,7 @@ Extending `NodeRoom.test.tsx` and `ConsoleNodeRoom.test.tsx`, on **both** surfac
 - a long path headline elides in the middle — **assert the filename is still present**
 - status is rendered as a glyph character, not colour alone. This is the accessibility guarantee and it is easy to regress in a restyle, so it gets its own assertion rather than riding along in a snapshot
 - the Raw toggle is present and closed by default, and reveals the original payload when opened
+- an `interrupted` status row folds into the **preceding** tool call so it shows `⚠ interrupted`, not `✕ failed` — asserted on a non-Claude fixture; this is the cross-provider reader fold the write half depends on, tested here in the read half where the fold lives
 
 ## Boundary checks
 

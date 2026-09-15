@@ -57,7 +57,9 @@ contract updated.
 
 Six places where these mockups deviate from the contracts. Each is a product decision, not drift.
 
-> **Update (2026-09-13):** deltas **1** (pinned todo strip) and **6** (loop iteration selector) are **owner-confirmed in scope** and folded into CAP-3 and CAP-6 success in `spec-agent-node-room`. Their design detail below still stands as the build reference; deltas **2–5** remain open decisions.
+> **Update (2026-09-13):** deltas **1** (pinned todo strip) and **6** (loop iteration selector) are **owner-confirmed in scope** and folded into CAP-3 and CAP-6 success in `spec-agent-node-room`. Their design detail below still stands as the build reference.
+>
+> **Reconciled (2026-09-15, sprint change proposal):** deltas **2–5** are resolved. **Delta 2** (per-item `Send now`) → **post-v1 G2** (soft-inject-gated; the v1 floor has no per-item send, per `control-states.md`). **Delta 3** (queue full-bleed band) → **adopted** into `DESIGN.md` (Components → Draft box + Elevation). **Delta 4** (detached-run dock state 8) → **adopted** into `EXPERIENCE.md` State Patterns. **Delta 5** (bordered Legacy send) → **already resolved** (`DESIGN.md` — bordered on both shells); the stale filled-button mockup note is superseded.
 
 ### 1. The todo checklist is pinned, not anchored
 
@@ -350,8 +352,9 @@ provider echoes, so `delivered` is unreachable today — do not render it.
 - **Both strips** — `<button aria-expanded>` headers, caret rotates 180° over 120ms.
 - **Execution select** — `onChange` selects the row; the log stream's `implement ×N` rows select the
   same thing. Defaults to the running iteration.
-- **`Stop`** → agent sub-state `interrupting` (sub-second, in-process; not a status poll) →
-  `idle-after-interrupt`. The **node stays `running` throughout** and the rest of the run is
+- **`Stop`** → the dock's UI-local `interrupting` transient (sub-second, in-process; not a status
+  poll; **not** a core-projected value — AD-9) → `idle-after-interrupt`. The **node stays `running`
+  throughout** and the rest of the run is
   unaffected: independent siblings and later layers keep going. The interface must not imply the run
   stopped.
 - **`Send now`** (dock level) → delivers every queued message plus the one just typed, **in written
@@ -375,8 +378,9 @@ provider echoes, so `delivered` is unreachable today — do not render it.
 
 ## State
 
-Agent sub-state inside `node = running` — `generating` | `interrupting` | `idle-after-interrupt` —
-projected by the core as a typed field. Plus node lifecycle (`running` | `completed` | `failed`),
+Agent sub-state inside `node = running` — the core projects **exactly two** typed values,
+`generating` | `idle-after-interrupt` (AD-9); `interrupting` is a **UI-local optimistic transient**,
+not a projected value. Plus node lifecycle (`running` | `completed` | `failed`),
 the per-tab draft queue, the selected execution, and two local disclosure booleans for the strips.
 
 The eight states the mockups render: `generating`, `interrupting`, `idle-after-interrupt`,
