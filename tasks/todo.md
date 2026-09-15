@@ -38,3 +38,39 @@ then co-locate the PRD with the plan.
 - `packages/workflows/src/defaults/bundled-defaults.generated.ts` — regenerated.
 - `packages/workflows/src/defaults/bundled-defaults.test.ts` — 7 resolve-plan regression tests.
 - `ARCHON_RALPH_RUST_DAG_PLAN.md` — rewritten to final state.
+
+---
+
+# DeepSeek V4 Flash E2E smoke workflow
+
+## Directive
+
+Create a read-only Archon E2E smoke workflow for the `deepseek` provider using the corrected
+`qwen-token-plan/deepseek-v4-flash` model reference. Validate the workflow and run it only after
+the effective DSH model pair and credential availability are confirmed.
+
+## Checklist
+
+- [x] Inspect the DeepSeek provider contract, model routing, credentials, and adjacent smoke workflows.
+- [x] Preserve the corrected literal model string `qwen-token-plan/deepseek-v4-flash`;
+      provider-internal routing remains the DeepSeek provider's responsibility.
+- [x] Rename and update the smoke workflow under `.archon/workflows/test-workflows/`.
+- [x] Validate it with `bun run cli validate workflows e2e-deepseek-v4-flash-smoke`.
+- [x] RED: update env/provider tests to require harness-managed credentials and provider-qualified model refs.
+- [x] GREEN: remove the API-key-only preflight and translate the literal model ref into DSH's route/model pair.
+- [x] Run focused DeepSeek tests, then the full validation suite.
+- [x] Run the E2E in default worktree isolation through the authenticated DSH profile.
+- [ ] Verify plain output, structured output, and assertion output after the Token Plan account gains model entitlement.
+
+## Review
+
+- Workflow preserves `provider: deepseek` and the corrected literal model string
+  `qwen-token-plan/deepseek-v4-flash`.
+- `bun run cli validate workflows e2e-deepseek-v4-flash-smoke` passed: 1 valid, 0 errors.
+- RED run `d82ad4f42fbcd95bd94b193f5ac8984b` failed before DSH startup with
+  `deepseek_missing_api_key`; focused RED tests reproduced both the auth preflight and model-routing defects.
+- The provider now allows DSH-managed credentials and converts the literal reference to
+  `["qwen-token-plan", "deepseek-v4-flash"]`; focused env/provider/ACP tests and `bun run validate` pass.
+- Live run `5c6fd7964df23abbaae6201beb1b18a7` reached the Alibaba backend, proving the credential
+  store and route are active, but failed with `403 AccessDenied.Unpurchased`; downstream nodes were skipped.
+- No secret contents were read.
