@@ -1,0 +1,50 @@
+name: e2e-deepseek-v4-flash-smoke
+description: 'Smoke test for the DeepSeek community provider with alibaba/deepseek-v4.1-flash. Verifies plain and structured responses.'
+provider: deepseek
+model: alibaba/deepseek-v4.1-flash
+mutates_checkout: false
+
+nodes:
+  - id: simple
+    prompt: 'Reply with exactly PONG and nothing else. Do not use tools.'
+    idle_timeout: 120000
+
+  - id: structured
+    depends_on: [simple]
+    prompt: |
+      Return JSON only.
+      Set status to "deepseek-ok" and provider to "deepseek".
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: ['deepseek-ok']
+        provider:
+          type: string
+          enum: ['deepseek']
+      required: [status, provider]
+      additionalProperties: false
+    idle_timeout: 120000
+
+  - id: assert
+    depends_on: [simple, structured]
+    bash: |
+      simple_out=$simple.output
+      status=$structured.output.status
+      provider=$structured.output.provider
+
+      if [ "$simple_out" != "PONG" ]; then
+        echo "FAIL: simple output was '$simple_out'"
+        exit 1
+      fi
+      if [ "$status" != "deepseek-ok" ]; then
+        echo "FAIL: structured status was '$status'"
+        exit 1
+      fi
+      if [ "$provider" != "deepseek" ]; then
+        echo "FAIL: structured provider was '$provider'"
+        exit 1
+      fi
+
+      echo "PASS: simple=$simple_out status=$status provider=$provider"

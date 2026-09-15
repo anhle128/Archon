@@ -881,12 +881,12 @@ DEFAULT_AI_ASSISTANT=copilot
 **Drive DeepSeek models through the pinned DeepSeek Harness (DSH) runtime over ACP.**
 The provider id is `deepseek`. It is registered as `builtIn: false` — a bundled community provider, not a core built-in.
 
-Supply a DashScope token as vendor `deepseek` (per-user API key) or set `DEEPSEEK_API_KEY` in the environment. `assistants.deepseek.baseUrl` overrides request and ambient `DEEPSEEK_BASE_URL`.
+DSH may authenticate through its own credential store, including subscription or token-plan routes. Archon also forwards a per-user vendor `deepseek` API key or ambient `DEEPSEEK_API_KEY` when present; it does not require that specific variable before DSH starts. `assistants.deepseek.baseUrl` overrides request and ambient `DEEPSEEK_BASE_URL`.
 
 Supported config keys: `model`, `baseUrl`, `providerRoute`, `profile`, `permissionMode`, `effort`, and `nodeBin`.
 `providerRoute` defaults to `deepseek-official`. `profile` is fixed to `acp` (other DSH profiles speak a different protocol). Permission defaults to `workspace-write`, and every DSH permission request is auto-cancelled. `danger-full-access` is explicit — it removes that safe permission posture.
 
-A configured model is sent as the exact DSH model option pair `[providerRoute, model]`. There are no built-in tier defaults: DashScope model IDs vary by account and region. Do not treat `deepseek-v3` as a confirmed model id. Use a model advertised by your pinned DSH/DashScope setup, and add `model` only after you confirm that exact account/region id.
+A provider-qualified model reference such as `qwen-token-plan/deepseek-v4-flash` is split at the first slash and sent as the exact DSH model option pair `["qwen-token-plan", "deepseek-v4-flash"]`. An unqualified model is paired with `providerRoute`, which defaults to `deepseek-official`. There are no built-in tier defaults: model IDs vary by account and region. Use a model advertised by the installed DSH setup.
 
 `maxTokens` is rejected (`deepseek_unsupported_config`) because pinned DSH ACP exposes only `model` and `reasoning_effort`.
 

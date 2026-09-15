@@ -1,5 +1,3 @@
-import { DeepseekProviderError } from './errors';
-
 export interface DeepseekChildEnvInput {
   ambient: Record<string, string | undefined>;
   request?: Record<string, string>;
@@ -24,13 +22,5 @@ export function buildDeepseekChildEnv(input: DeepseekChildEnvInput): Record<stri
     env.DEEPSEEK_BASE_URL = input.baseUrl;
   }
   env.DSH_PERMISSION_MODE = input.permissionMode;
-
-  const apiKey = env.DEEPSEEK_API_KEY;
-  if (apiKey === undefined || apiKey === '') {
-    throw new DeepseekProviderError(
-      'deepseek_missing_api_key',
-      'DEEPSEEK_API_KEY is missing. Connect a DeepSeek API key for the acting user or set DEEPSEEK_API_KEY in the environment.'
-    );
-  }
   return env;
 }

@@ -105,6 +105,22 @@ function requireModelForCustomRoute(
   );
 }
 
+function resolveModelSelection(
+  providerRoute: string | undefined,
+  model: string | undefined
+): { providerRoute: string; model?: string } {
+  const fallbackRoute = providerRoute ?? DEFAULT_DEEPSEEK_PROVIDER_ROUTE;
+  if (model === undefined) return { providerRoute: fallbackRoute };
+  const separator = model.indexOf('/');
+  if (separator <= 0 || separator === model.length - 1) {
+    return { providerRoute: fallbackRoute, model };
+  }
+  return {
+    providerRoute: model.slice(0, separator),
+    model: model.slice(separator + 1),
+  };
+}
+
 /**
  * DeepSeek Harness community provider. Preflight and error-as-result live here;
  * ACP SDK values load only when `sendQuery()` dynamically imports `./acp-client`.
@@ -137,8 +153,9 @@ export class DeepseekProvider implements IAgentProvider {
     const secrets: string[] = [];
     try {
       const config = parseDeepseekConfig(requestOptions?.assistantConfig ?? {});
-      const model = requestOptions?.model ?? config.model;
-      requireModelForCustomRoute(config, model);
+      const requestedModel = requestOptions?.model ?? config.model;
+      requireModelForCustomRoute(config, requestedModel);
+      const selection = resolveModelSelection(config.providerRoute, requestedModel);
 
       const childEnv = buildDeepseekChildEnv({
         ambient: process.env,
@@ -186,8 +203,8 @@ export class DeepseekProvider implements IAgentProvider {
         cwd,
         prompt,
         resumeSessionId,
-        model,
-        providerRoute: config.providerRoute ?? DEFAULT_DEEPSEEK_PROVIDER_ROUTE,
+        model: selection.model,
+        providerRoute: selection.providerRoute,
         effort,
         mcpServers,
         outputSchema,
